@@ -39,4 +39,14 @@ enum IntrinsicsGroup : std::uint8_t {
 // Group of parameter `index` of a model.
 IntrinsicsGroup intrinsics_group(CameraModel model, int index);
 
+// Host-side camera geometry for track building and triangulation (not the solver's
+// residual, which is generated). Same formulas as COLMAP.
+//
+// project: camera coordinates to pixels. Returns false behind the camera (z <= 0).
+bool project(CameraModel model, const double* intrinsics, const double* p_cam, double* x, double* y);
+// unproject: pixels to a unit bearing vector in camera coordinates, inverting the
+// distortion iteratively. Returns false if the inversion does not converge (pixel
+// outside the model's valid range).
+bool unproject(CameraModel model, const double* intrinsics, double x, double y, double* bearing);
+
 }  // namespace jba

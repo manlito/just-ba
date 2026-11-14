@@ -11,6 +11,11 @@ jba_test(test_problem_io)
 jba_test(test_bal)
 jba_test(test_solver)
 jba_test(test_prior_jacobians)
+jba_test(test_geometry)
+
+# End to end on synthetic scenes (document 05; generator in scene.cpp).
+jba_test(test_refine)
+target_sources(test_refine PRIVATE scene.cpp)
 
 if(JBA_WITH_METAL)
   jba_test(test_metal_reprojection jba_metal)
