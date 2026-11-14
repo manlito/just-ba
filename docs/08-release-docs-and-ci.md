@@ -74,7 +74,9 @@ Docstring examples are executed in CI so the documentation cannot go stale.
   Enterprise). The current offering is a single NVIDIA T4. The exact per-minute price
   was not confirmed; sources disagreed.
 - Whether Metal compute works reliably on the hosted Apple Silicon runners is not
-  verified. Some projects use their own Macs for Metal testing.
+  yet established. It worked in the first run (2026-11-14, macos-15): the Metal
+  test ran on the device and passed. Some projects use their own Macs for Metal
+  testing.
 
 ### Plan
 

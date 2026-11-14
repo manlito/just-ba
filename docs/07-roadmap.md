@@ -17,9 +17,9 @@ Exit: language chosen, one generated residual verified, Ceres runs in CI.
 
 Results (2026-11-14, measured on the owner's M5 Pro):
 
-- Build: C++23 (D52), CMake, Ninja or the platform default. Built and tested on
-  macOS only so far. The CI workflow covers Linux, macOS and Windows, but is
-  manual-trigger only while the repository is private (D49) and has not run yet.
+- Build: C++23 (D52), CMake, Ninja or the platform default. First CI run
+  (2026-11-14, manual trigger, D49) passed on Ubuntu 24.04 (GCC), macOS 15
+  (Apple clang) and Windows Server 2025 (MSVC 14.51), with no compiler warnings.
 - Symbolic tool: wrenfold (D45). Reprojection residual for SIMPLE_PINHOLE,
   PINHOLE, SIMPLE_RADIAL and RADIAL, emitted for the CPU and for Metal. Jacobians
   match central finite differences on 864 cases including edge cases (worst
@@ -36,8 +36,12 @@ Results (2026-11-14, measured on the owner's M5 Pro):
   the residual against an independent Ceres functor.
 - Problem file format: document 11 (D48).
 
-Not done: the exit condition "Ceres runs in CI" is met by the workflow, not by a
-completed run; that needs a remote and one manual run.
+- Ceres in CI: the Linux job builds Ceres 2.2.0 (about 8 minutes, cached
+  afterwards) and solves ladybug-49. Exit condition met.
+- The Metal test also passed on the hosted macOS 15 Apple Silicon runner. One run is
+  not yet proof of reliability (document 08), so it stays informational for now.
+- One full CI run used about 24 minutes of the private-repository quota (macOS
+  counts 10x, Windows 2x); with the Ceres cache warm, about 15.
 
 ## Milestone 1: CPU reference, plain bundle adjustment
 
