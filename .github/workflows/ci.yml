@@ -1,12 +1,26 @@
 # Free hosted runners only (decision D39). No schedules, no GPU runners.
 #
 # Manual trigger only while the repository is private (decision D49): on private
-# repositories hosted minutes count against a quota, with macOS at 10x. When the
-# repository goes public (after milestone 2), uncomment push and pull_request.
+# repositories hosted minutes count against a quota, macOS at 10x and Windows at 2x.
+# When the repository goes public (after milestone 2), uncomment push and
+# pull_request.
+#
+# Two modes (decision D61):
+#   quick (default): Linux and Windows build and test, Ceres parity without the
+#                    slow tests. macOS is tested on the owner's Mac instead.
+#   full:            adds macOS and the slow tests (venice-52 parity).
+#
+#   gh workflow run ci                      # quick
+#   gh workflow run ci -f full=true         # full
 name: ci
 
 on:
   workflow_dispatch:
+    inputs:
+      full:
+        description: "Full run: add macOS (10x minutes) and slow tests"
+        type: boolean
+        default: false
   # push:
   #   branches: [main]
   # pull_request:
@@ -22,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: ${{ fromJSON(inputs.full && '["ubuntu-24.04", "windows-2025", "macos-15"]' || '["ubuntu-24.04", "windows-2025"]') }}
     steps:
       - uses: actions/checkout@v4
       - name: Configure
@@ -30,9 +44,9 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure -LE gpu
-      # Whether Metal compute works on hosted Apple Silicon runners is unverified
-      # (document 08). Informational until it proves reliable; skips without a device.
+        run: ctest --test-dir build -C Release --output-on-failure -LE "gpu|slow"
+      # Whether Metal compute is reliable on hosted Apple Silicon runners is not yet
+      # established (document 08). Informational; skips without a device.
       - name: Metal tests (informational)
         if: runner.os == 'macOS'
         continue-on-error: true
@@ -47,6 +61,8 @@ jobs:
         os: [ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
+      # The Ceres build takes about 8 minutes; the cache makes it seconds until
+      # third_party/ceres/build.cmake changes.
       - name: Cache Ceres build
         uses: actions/cache@v4
         with:
@@ -68,7 +84,7 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure -LE gpu
+        run: ctest --test-dir build -C Release --output-on-failure -j 4 -LE "${{ inputs.full && 'gpu' || 'gpu|slow' }}"
 
   generated-code:
     name: generated code is current
