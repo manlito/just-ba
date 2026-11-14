@@ -11,6 +11,7 @@ Status: planning only. No code has been written.
 
 | # | Document | What it settles |
 |---|---|---|
+| 00 | [Decision log](00-decisions.md) | Every decision made so far, with reasons and rejected options. Read first. |
 | 01 | [Requirements and scope](01-requirements.md) | Use cases, features, non-goals |
 | 02 | [Problem formulation](02-problem-formulation.md) | Variables, the closed residual list, camera models, priors, depth |
 | 03 | [Architecture](03-architecture.md) | Layers, solver, precision, backends, repository layout |
