@@ -114,6 +114,49 @@ ground truth within tolerance.
 This is the proof of concept. The repository goes public after it, with the licence
 and contribution files in place and hosted CI switched on (document 08).
 
+Results so far (2026-11-14, M5 Pro):
+
+- Built: relative and global pose priors with identity, rigid and similarity set
+  transforms (D62, D63, D65); the gauge chosen per group of connected images (D64);
+  OPENCV and OPENCV_FISHEYE (D66); unprojection for every model; triangulation on
+  rays (D70); track building with an epipolar check of matches, stage 1 and stage 2
+  (D67); starting poses from priors with groups reported (D68); the per-residual
+  report with down-weighted priors; `refine`, the main use case end to end (D69); the
+  synthetic generator (D71).
+- Level 1: prior residuals agree with finite differences to 6e-10 and with Ceres's
+  automatic differentiation to 2e-15; OPENCV and OPENCV_FISHEYE with Ceres to 2e-14.
+- Level 2: 17 new synthetic cases against Ceres (relative priors, outliers in them,
+  Huber and Cauchy and no loss on priors, global priors of each relation, both kinds
+  together, a pose graph without points, fixed blocks, the new models with and
+  without free distortion). Final costs and parameters agree to about 1e-15 with
+  identical iteration counts, except with all eight parameters of one shared OPENCV
+  or fisheye block free: there the minimum is a flat valley, costs agree to 1e-11
+  and parameters to a few 1e-6, about as much as Ceres's own end point moves
+  between runs.
+- Synthetic scenes through `refine`, median camera centre and rotation error after
+  alignment to the truth, against the starting poses built from the priors:
+
+  | Scene | Start | Refined |
+  |---|---|---|
+  | Room, tracker drift | 4.6 cm, 0.71 deg | 5.1 mm, 0.090 deg |
+  | Room, accurate priors (must not get worse) | 5.4 mm, 0.071 deg | 1.3 mm, 0.023 deg |
+  | Room, 10% wrong matches | 2.4 cm, 0.31 deg | 2.5 mm, 0.041 deg |
+  | Room, 5% wrong relative priors left in | 1.6 cm, 0.39 deg | 4.1 mm, 0.042 deg; all 8 reported, none wrongly |
+  | Room, tracking break, priors across it removed | | two groups, 5.2 and 4.6 mm |
+  | Room, relative priors plus network priors in a similarity frame, 5% outliers | 2.6 cm, 0.71 deg | 3.5 mm, 0.053 deg; scale within 2.1%; all 4 outliers reported |
+  | Room, network priors only | 4.8 cm, 0.87 deg | 2.2 mm, 0.029 deg |
+  | Room, frames shuffled | 2.5 cm, 1.1 deg | 4.5 mm, 0.063 deg |
+  | Two rooms joined by a doorway | 2.7 cm, 0.41 deg | 5.8 mm, 0.25 deg |
+  | Building walked around outside, loop not closed | 16 cm, 1.0 deg | 3.1 mm, 0.010 deg |
+  | Room, OPENCV / OPENCV_FISHEYE | 2.3 / 1.5 cm | 3.1 / 1.3 mm |
+
+  Keypoint noise is 0.5 px. With noise-free keypoints the images alone recover the
+  truth exactly, so these figures are the scenes' own information limit, not a
+  bias. The whole set runs in about 7 seconds.
+- Not done yet: the Python bindings (nanobind is not installed on the development
+  machine yet), and the real-session part of the exit, which needs an exported
+  ARKit or ARCore session (open question 6 below).
+
 ## Milestone 3: Manhattan prior and depth
 
 - Manhattan prior from line detections: line input, axis assignment, heading

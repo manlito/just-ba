@@ -179,6 +179,11 @@ The library builds its own starting point from whatever priors it has:
   priors outward from a reference frame along the most trusted links.
 - **Both:** global priors place their frames; relative priors fill in the frames
   that have none.
+- As built (D68): a group of images linked by relative priors is moved as a whole
+  onto its global priors by a robust rigid fit, rather than each image being
+  placed at its own global prior, so a few wrong global priors cannot pull single
+  images away from their neighbours. Chaining prefers priors that agree with the
+  triangles of priors they close.
 - Optionally a quick pose-only refinement over all priors follows, before points
   are triangulated.
 

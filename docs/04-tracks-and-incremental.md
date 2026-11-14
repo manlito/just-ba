@@ -85,11 +85,15 @@ well in all views). Not in the first version.
 Track building is CPU code. It runs once, is not the bottleneck, and has no GPU
 version.
 
-### Open questions
+### As built (milestone 2)
 
-- Should stage 2 run again after the first optimization, with the improved poses and a
-  tighter threshold? Likely yes; measure before committing.
-- How to pick `max_angle_error_deg` when the caller gives no prior covariance.
+- With poses, every match is first checked against them: the two keypoint rays must
+  meet in front of both cameras within the stage 2 angle of the epipolar plane
+  (D67). Without this, 10% wrong matches fused most keypoints into one component.
+- Stage 2 runs on clean components too by default (`check_clean`).
+- Stage 2 runs again after each solve, inside `refine`, from the improved poses with
+  the threshold halved (2 degrees first, then 1, never below 0.25; D67, D69).
+- Triangulation is least squares on rays rather than DLT (D70).
 
 ## Part B: triangulation
 

@@ -2,8 +2,9 @@
 
 A minimal, high-performance bundle adjustment library in C++ with Python bindings,
 for refining reconstructions that come with noisy camera poses from ARKit, ARCore
-or another tracker. Early development: milestone 1, plain bundle adjustment on the
-CPU, checked against Ceres. The plan is in [docs/](docs/README.md).
+or another tracker. Early development: milestone 2, pose priors and the main use
+case on the CPU (`jba::refine`), checked against Ceres and synthetic ground truth.
+The plan is in [docs/](docs/README.md).
 
 ## Build
 
