@@ -25,8 +25,9 @@ struct RawSection {
 struct Problem {
   CameraModel model = CameraModel::Pinhole;
 
-  // One block of num_params(model) values per intrinsics block. Normally one block
-  // per session (decision D11); the BAL harness uses one per image.
+  // One block of num_params(model) values per intrinsics block, all of the same
+  // model. Normally one block per session (D11); several are accepted, for example
+  // one per image for BAL (D53).
   std::vector<double> intrinsics;
   // Per block: IntrinsicsGroup mask of freed groups. Empty means all fixed.
   std::vector<std::uint8_t> intrinsics_free;

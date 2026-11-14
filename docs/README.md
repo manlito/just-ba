@@ -38,7 +38,8 @@ Decided so far:
 - The Manhattan prior is a first-class feature, built from caller-supplied line
   detections with no line matching.
 
-- One camera per session. Frames are an unordered set. Processing is offline batch.
+- One camera per session normally; several intrinsics blocks of one model are
+  accepted, for BAL (D53). Frames are an unordered set. Processing is offline batch.
 - Pose priors come in two forms, both supported: relative (for trackers such as
   ARKit and ARCore) and global (for drift-free sources such as a pose-predicting
   network). The caller chooses the pairs and removes priors that are completely
@@ -49,8 +50,6 @@ Decided so far:
 Still open (full list in [00-decisions.md](00-decisions.md)):
 
 1. **Default prior weights.** The values need real captures to set.
-2. **BAL parity with one camera per session.** BAL has one camera per image; how
-   milestone 1 parity handles that is not decided.
 
 ## Reference material
 

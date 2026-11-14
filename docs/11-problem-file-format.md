@@ -67,9 +67,9 @@ per block for the camera model.
 Validation: index ranges, array lengths, positive sigmas, and quaternion norms
 within 1e-9 of one.
 
-Normally a session has one intrinsics block (D11). Several blocks exist in the
-format so that BAL problems, which have one camera per image, convert without
-loss. Whether the solver accepts them is an open item in the decision log.
+Normally a session has one intrinsics block (D11). Several blocks, all of the
+model in `camera.model`, are allowed so that BAL problems, which have one camera
+per image, convert without loss; the solver accepts them too (D53).
 
 ## Planned sections
 

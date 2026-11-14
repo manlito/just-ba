@@ -43,6 +43,8 @@ completed run; that needs a remote and one manual run.
 
 - Problem data structures, block fixing, ordering.
 - Reprojection residual; camera models SIMPLE_PINHOLE, PINHOLE, SIMPLE_RADIAL, RADIAL.
+- Several intrinsics blocks of one model, one per image at most (D53), so BAL runs
+  as-is; one block stays the fast path.
 - Levenberg-Marquardt loop, implicit Schur with conjugate gradients, block-Jacobi
   preconditioner.
 - Robust losses.

@@ -87,7 +87,7 @@ that supersedes the old one; do not silently edit history.
 ## Milestone 0 (2026-11-14)
 
 Settled during the milestone 0 work. D45 to D51 were made in the work and recorded
-for the owner to review; D52 is the owner's.
+for the owner to review; D52 and D53 are the owner's.
 
 | # | Decision | Why | Rejected or ruled out |
 |---|---|---|---|
@@ -99,12 +99,12 @@ for the owner to review; D52 is the owner's.
 | D50 | Metal kernels are compiled at run time from source embedded in the library. | Needs no Metal offline compiler (a separate Xcode download). Revisit in milestone 4 if compile time matters; pipelines can be cached. | Precompiled `.metallib` files for now. |
 | D51 | Ceres for tests is built from the 2.2.0 tag archive on GitHub, with a pinned hash, by `third_party/ceres/build.cmake`. | ceres-solver.org did not resolve on 2026-11-14; the tag archive is the same release. | Package managers (versions and options vary by platform). |
 | D52 | C++ standard: C++23 everywhere, CUDA sources included. Requires CUDA 13.3 or later. | The owner chose "whatever CUDA supports". nvcc accepts `-std=c++23` from CUDA 13.3 (13.5 documentation checked on 2026-11-14). Brings `std::expected` for the C-level API and `std::mdspan` for Jacobian blocks. | C++20 (the suggestion in document 06; no reason to stay). C++26 (compiler support still partial). |
+| D53 | The solver accepts several intrinsics blocks, one per image at most, all of the same camera model. One block per session stays the normal case and the fast path. Refines D11. | BAL has one camera per image, and milestone 1 parity with Ceres runs on BAL. The file format already holds several blocks (D48). One model per problem keeps kernels free of per-observation branching. | BAL parity only after averaging or fixing intrinsics (changes the problem, so not a parity test). Several camera models in one problem. |
 
 ## Still open
 
 | Item | When it gets decided |
 |---|---|
-| BAL parity under D11: BAL has one camera per image. Either the solver accepts several intrinsics blocks (the file format already does), or BAL parity runs another way | Before milestone 1 parity work |
 | Default prior weight values (D21) | Milestone 2, from real captures |
 | Which linear solver is the default at each problem size | From the benchmark |
 | Whether the caller's system or the library joins groups of frames left unconnected after a tracking break | When real broken sessions are available |

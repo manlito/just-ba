@@ -51,7 +51,7 @@ Structure-of-arrays, contiguous, fixed-size blocks.
 | Block | Size | Notes |
 |---|---|---|
 | Camera pose | 7 stored (quaternion + translation), 6 in the tangent space | One per image |
-| Intrinsics | Depends on the model (document 02) | One block per session (one camera per session); usually fixed. The camera model is therefore a per-solve constant, so each kernel runs one model with no per-observation branching. |
+| Intrinsics | Depends on the model (document 02) | One block per session (one camera per session) normally; several blocks of the same model are accepted, mainly for BAL (D53). Usually fixed. The camera model is therefore a per-solve constant, so each kernel runs one model with no per-observation branching. |
 | Point | 3 | One per track |
 | Depth correction | 2 per image (scale, offset) when used | See document 02 |
 | Ground control point | 3 | Fixed, or free with a prior |
