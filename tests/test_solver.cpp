@@ -183,17 +183,13 @@ int main() {
     EXPECT_THROWS(jba::solve(q));
   }
 
-  // A start with no finite cost (a point in the camera's principal plane) ends in
-  // Failure, with the parameters untouched.
+  // A start with no finite cost ends in Failure, with the parameters untouched.
+  // An image with zero translation sees a point at the origin at depth exactly
+  // zero, whatever its rotation and however the platform rounds.
   {
     auto p = jba_test::random_problem(CameraModel::Pinhole, 4, 40, 37);
     const std::size_t i = static_cast<std::size_t>(p.obs_image[0]), j = static_cast<std::size_t>(p.obs_point[0]);
-    // Move the point to the camera centre C = -R^T t, where its depth is zero.
-    const double* pose = &p.poses[7 * i];
-    const double conj[4] = {pose[0], -pose[1], -pose[2], -pose[3]};
-    double C[3];
-    jba::quat_rotate(conj, pose + 4, C);
-    for (int a = 0; a < 3; ++a) p.points[3 * j + static_cast<std::size_t>(a)] = -C[a];
+    for (std::size_t a = 0; a < 3; ++a) p.poses[7 * i + 4 + a] = p.points[3 * j + a] = 0.0;
     const auto before = p;
     const auto s = jba::solve(p);
     EXPECT(s.termination == jba::Termination::Failure);

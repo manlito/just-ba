@@ -177,3 +177,9 @@ Two things learned while checking:
   already describes; the practical rule is to compare histories with the previous
   commit after any change to arithmetic in the backend, which is what the stored
   baseline of item 2 is for.
+- **A new test passed on the Mac and failed on Linux and Windows.** The first
+  quick CI run of this work failed in one place: the test for a start with no
+  finite cost put a point at a camera centre, which gives a depth of exactly zero
+  only with fused multiply-add. The test now uses a zero translation and a point at
+  the origin, which is exact everywhere. A local build with `-ffp-contract=off`
+  reproduces what the other platforms compute and is worth running before CI.
