@@ -84,10 +84,27 @@ that supersedes the old one; do not silently edit history.
 | D43 | A desktop app for Windows and Mac, for non-developers, is planned for later. UI details are not decided now. | One more way to try the library. | Deciding UI technology during planning. |
 | D44 | A mobile app is a further stretch goal, in a separate repository that links this library. Eventually Gaussian splats; no meshes. | The owner's direction. | Building anything for mobile inside this project. |
 
+## Milestone 0 (2026-11-14)
+
+Settled during the milestone 0 work. D45 to D51 were made in the work and recorded
+for the owner to review; D52 is the owner's.
+
+| # | Decision | Why | Rejected or ruled out |
+|---|---|---|---|
+| D45 | Symbolic tool: wrenfold, pinned (0.6.0), with small custom emitters for C++ (templated, raw pointers) and Metal. Generated files are checked in; CI checks they are current. | Its output can be reshaped by overriding formatters, so both emitters are about 100 lines and the generated code needs no header. Output was identical across runs. | SymForce: its C++ output uses Eigen and its own runtime types, against "no Eigen in the shipped library"; its CUDA output is experimental. Hand derivation: not needed. |
+| D46 | Pose tangent: rotation and translation updated separately. R <- Exp(dtheta) R with dtheta a rotation vector in radians (left perturbation), t <- t + dt. Order (dtheta, dt). | Simple Jacobians; covariances in radians and metres; a matching Ceres manifold makes parity direct. | The SE(3) exponential: couples rotation and translation for no gain in bundle adjustment. |
+| D47 | Quaternions are stored (w, x, y, z), Hamilton convention. | Same as COLMAP's text files and Ceres's rotation functions. | Eigen's (x, y, z, w) memory order. |
+| D48 | Problem file format: a binary container of named, typed little-endian arrays (document 11). Unknown sections are kept, so new optional sections need no version change. | Fast for 10^6 observations, readable from NumPy in a few lines, no dependency in C++. | NPZ (needs zip and zlib in C++). Text (slow and large). HDF5 (a dependency). COLMAP's model format (cannot hold priors, weights or fixed flags; it stays the interchange format). |
+| D49 | The CI workflow is manual-trigger only while the repository is private. Push and pull request triggers are switched on when it goes public. | Hosted minutes on private repositories count against a quota, macOS at 10x. Follows D39. | Running CI on every push now. |
+| D50 | Metal kernels are compiled at run time from source embedded in the library. | Needs no Metal offline compiler (a separate Xcode download). Revisit in milestone 4 if compile time matters; pipelines can be cached. | Precompiled `.metallib` files for now. |
+| D51 | Ceres for tests is built from the 2.2.0 tag archive on GitHub, with a pinned hash, by `third_party/ceres/build.cmake`. | ceres-solver.org did not resolve on 2026-11-14; the tag archive is the same release. | Package managers (versions and options vary by platform). |
+| D52 | C++ standard: C++23 everywhere, CUDA sources included. Requires CUDA 13.3 or later. | The owner chose "whatever CUDA supports". nvcc accepts `-std=c++23` from CUDA 13.3 (13.5 documentation checked on 2026-11-14). Brings `std::expected` for the C-level API and `std::mdspan` for Jacobian blocks. | C++20 (the suggestion in document 06; no reason to stay). C++26 (compiler support still partial). |
+
 ## Still open
 
 | Item | When it gets decided |
 |---|---|
+| BAL parity under D11: BAL has one camera per image. Either the solver accepts several intrinsics blocks (the file format already does), or BAL parity runs another way | Before milestone 1 parity work |
 | Default prior weight values (D21) | Milestone 2, from real captures |
 | Which linear solver is the default at each problem size | From the benchmark |
 | Whether the caller's system or the library joins groups of frames left unconnected after a tracking break | When real broken sessions are available |

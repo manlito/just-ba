@@ -581,6 +581,6 @@ the result is mapped back afterwards. This matters for single precision
 |---|---|
 | Whether to build photometric refinement (4b) at all | Decided: 4a first; 4b is optional and low priority. Revisit after seeing 4a on real data. |
 | Default prior mix | Decided: relative and global priors both supported; the caller chooses per solve |
-| Pose step parameterization | Decide in the first spike |
+| Pose step parameterization | Decided: rotation and translation separately, left rotation-vector step (D46) |
 | Graduated non-convexity on by default for priors | Decide from the synthetic jump tests |
 | Per-keypoint depth along the ray instead of free 3D points | Research item, not in the first release |

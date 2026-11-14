@@ -5,7 +5,8 @@ adjustment library with Python bindings and a sample command-line binary. Its ma
 job is refining reconstructions that come with noisy camera poses from ARKit, ARCore
 or another tracker.
 
-Status: planning only. No code has been written.
+Status: milestone 0 done apart from its first CI run (decisions and spikes); see the results in
+[07-roadmap.md](07-roadmap.md). Build instructions: [../README.md](../README.md).
 
 ## Documents
 
@@ -22,12 +23,13 @@ Status: planning only. No code has been written.
 | 08 | [Release, documentation and CI](08-release-docs-and-ci.md) | Open source, PyPI, docs site, CI and GPU testing |
 | 09 | [Desktop app](09-desktop-app.md) | The later Windows and Mac app, and what it requires of the library now |
 | 10 | [Mobile app as a consumer](10-mobile-consumer.md) | A separate-repository phone app that will link this library, and the constraints that keeps open |
+| 11 | [Problem file format](11-problem-file-format.md) | The on-disk format used by the CLI and tests |
 
 ## Decisions waiting on the owner
 
 Decided so far:
 
-- Language: C++.
+- Language: C++, standard C++23 (D52).
 - Correctness means agreeing with Ceres Solver.
 - The speed claim is made for 50 to 2,000 images; up to 10,000 is supported.
 - Depth starts as a term at keypoints; photometric refinement (as in PyPose `bae`)
@@ -44,9 +46,11 @@ Decided so far:
 - GPS is deferred; ground control points are a stretch.
 - Licence: Apache-2.0.
 
-Still open (full list in [07-roadmap.md](07-roadmap.md)):
+Still open (full list in [00-decisions.md](00-decisions.md)):
 
 1. **Default prior weights.** The values need real captures to set.
+2. **BAL parity with one camera per session.** BAL has one camera per image; how
+   milestone 1 parity handles that is not decided.
 
 ## Reference material
 

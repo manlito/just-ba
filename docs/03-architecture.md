@@ -295,6 +295,6 @@ third_party/     reference solver wiring (Ceres), test-only
 |---|---|
 | Default linear strategy (A, B or C) per problem size | Benchmark |
 | Preconditioner beyond block-Jacobi | Benchmark on ill-conditioned prior-heavy problems |
-| Symbolic tool | Spike on the reprojection residual |
+| Symbolic tool | Decided: wrenfold (D45) |
 | Whether CUDA double is worth shipping | Accuracy results in single precision |
 | Atomics fast mode on CUDA | Benchmark |

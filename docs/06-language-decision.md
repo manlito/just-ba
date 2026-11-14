@@ -82,7 +82,7 @@ Reasons, in order of weight:
 5. **The host language does not affect speed**, so Rust's safety advantage applies to
    a small, non-critical part of the code.
 
-Suggested specifics if C++ is chosen: C++20, CMake, nanobind, no Eigen in the shipped
+Suggested specifics if C++ is chosen: C++20 (since superseded: C++23, D52), CMake, nanobind, no Eigen in the shipped
 library (fixed-size block math is generated or hand-written), Ceres and Eigen as
 test-only dependencies.
 

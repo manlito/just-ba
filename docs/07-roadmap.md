@@ -15,6 +15,30 @@ milestone has an exit condition instead.
 
 Exit: language chosen, one generated residual verified, Ceres runs in CI.
 
+Results (2026-11-14, measured on the owner's M5 Pro):
+
+- Build: C++23 (D52), CMake, Ninja or the platform default. Built and tested on
+  macOS only so far. The CI workflow covers Linux, macOS and Windows, but is
+  manual-trigger only while the repository is private (D49) and has not run yet.
+- Symbolic tool: wrenfold (D45). Reprojection residual for SIMPLE_PINHOLE,
+  PINHOLE, SIMPLE_RADIAL and RADIAL, emitted for the CPU and for Metal. Jacobians
+  match central finite differences on 864 cases including edge cases (worst
+  relative error 6e-10). 119 to 241 operations per observation with all
+  Jacobians.
+- Metal: the kernels give bit-identical results to the CPU code instantiated in
+  float. Against double, Jacobians agree to about 3e-7 relative, residuals to
+  about 1e-4 px. Moving the principal point to the origin only lowers that to
+  about 0.8e-4 px: the floor is float rounding of pixel values of a few hundred.
+  Milestone 4 should not expect conditioning alone to fix residual precision.
+- Ceres 2.2.0 (minimal, Eigen only) solves BAL ladybug-49 (49 images, 31,843
+  observations) to convergence in 31 iterations, 0.48 s. Its initial cost agrees
+  with just-ba's CPU evaluation to 5e-15, which also checks the BAL conversion and
+  the residual against an independent Ceres functor.
+- Problem file format: document 11 (D48).
+
+Not done: the exit condition "Ceres runs in CI" is met by the workflow, not by a
+completed run; that needs a remote and one manual run.
+
 ## Milestone 1: CPU reference, plain bundle adjustment
 
 - Problem data structures, block fixing, ordering.

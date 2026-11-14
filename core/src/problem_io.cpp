@@ -1,0 +1,385 @@
+#include "jba/problem_io.h"
+
+#include <bit>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iterator>
+#include <sstream>
+#include <stdexcept>
+#include <string_view>
+
+#include "jba/geometry.h"
+
+static_assert(std::endian::native == std::endian::little,
+              "the problem file format is little-endian; big-endian hosts are not supported");
+
+namespace jba {
+namespace {
+
+// ---------------------------------------------------------------------------
+// Container layer: magic, version, then named typed arrays (document 11).
+
+constexpr char kMagic[8] = {'\x89', 'J', 'B', 'A', '\r', '\n', '\x1a', '\n'};
+constexpr std::uint32_t kVersion = 1;
+
+enum DType : std::uint8_t { kU8 = 1, kI32 = 2, kI64 = 3, kF32 = 4, kF64 = 5 };
+
+std::size_t dtype_size(std::uint8_t dtype) {
+  switch (dtype) {
+    case kU8: return 1;
+    case kI32: return 4;
+    case kF32: return 4;
+    case kI64: return 8;
+    case kF64: return 8;
+    default: return 0;
+  }
+}
+
+template <typename T> constexpr std::uint8_t dtype_of();
+template <> constexpr std::uint8_t dtype_of<std::uint8_t>() { return kU8; }
+template <> constexpr std::uint8_t dtype_of<std::int32_t>() { return kI32; }
+template <> constexpr std::uint8_t dtype_of<double>() { return kF64; }
+
+[[noreturn]] void fail(const std::string& path, const std::string& what) {
+  throw std::runtime_error(path + ": " + what);
+}
+
+class Writer {
+ public:
+  explicit Writer(std::vector<std::uint8_t>& out) : out_(out) {}
+
+  void raw(const void* data, std::size_t n) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    out_.insert(out_.end(), p, p + n);
+  }
+  template <typename T> void value(T v) { raw(&v, sizeof(T)); }
+  void pad() {
+    while (out_.size() % 8 != 0) out_.push_back(0);
+  }
+
+  void section(const std::string& name, std::uint8_t dtype, const std::vector<std::uint64_t>& shape,
+               const void* data, std::size_t bytes) {
+    value<std::uint32_t>(static_cast<std::uint32_t>(name.size()));
+    raw(name.data(), name.size());
+    value<std::uint8_t>(dtype);
+    value<std::uint8_t>(static_cast<std::uint8_t>(shape.size()));
+    value<std::uint16_t>(0);
+    for (auto d : shape) value<std::uint64_t>(d);
+    pad();
+    raw(data, bytes);
+    pad();
+    ++count_;
+  }
+
+  template <typename T>
+  void array(const std::string& name, const std::vector<T>& v, std::uint64_t cols) {
+    std::vector<std::uint64_t> shape;
+    if (cols == 1) {
+      shape = {v.size()};
+    } else {
+      shape = {v.size() / cols, cols};
+    }
+    section(name, dtype_of<T>(), shape, v.data(), v.size() * sizeof(T));
+  }
+
+  std::uint32_t count() const { return count_; }
+
+ private:
+  std::vector<std::uint8_t>& out_;
+  std::uint32_t count_ = 0;
+};
+
+class Reader {
+ public:
+  Reader(const std::string& path, const std::vector<std::uint8_t>& data) : path_(path), data_(data) {}
+
+  bool done() const { return pos_ >= data_.size(); }
+
+  void raw(void* dst, std::size_t n) {
+    if (n > data_.size() - pos_) fail(path_, "file is truncated");
+    std::memcpy(dst, data_.data() + pos_, n);
+    pos_ += n;
+  }
+  template <typename T> T value() {
+    T v;
+    raw(&v, sizeof(T));
+    return v;
+  }
+  void align() {
+    const std::size_t aligned = (pos_ + 7) / 8 * 8;
+    if (aligned > data_.size()) fail(path_, "file is truncated");
+    pos_ = aligned;
+  }
+
+  RawSection section() {
+    RawSection s;
+    const auto name_len = value<std::uint32_t>();
+    if (name_len > 256) fail(path_, "section name too long; file is corrupt");
+    s.name.resize(name_len);
+    raw(s.name.data(), name_len);
+    s.dtype = value<std::uint8_t>();
+    const auto ndim = value<std::uint8_t>();
+    value<std::uint16_t>();
+    const std::size_t elem = dtype_size(s.dtype);
+    if (elem == 0) fail(path_, "section '" + s.name + "' has unknown dtype " + std::to_string(s.dtype));
+    std::uint64_t count = 1;
+    for (int i = 0; i < ndim; ++i) {
+      const auto d = value<std::uint64_t>();
+      s.shape.push_back(d);
+      if (d != 0 && count > (std::uint64_t(1) << 40) / d) fail(path_, "section '" + s.name + "' is too large");
+      count *= d;
+    }
+    align();
+    const std::uint64_t bytes = count * elem;
+    if (bytes > data_.size() - pos_) fail(path_, "section '" + s.name + "' is truncated");
+    s.bytes.assign(data_.begin() + static_cast<std::ptrdiff_t>(pos_),
+                   data_.begin() + static_cast<std::ptrdiff_t>(pos_ + bytes));
+    pos_ += bytes;
+    align();
+    return s;
+  }
+
+ private:
+  const std::string& path_;
+  const std::vector<std::uint8_t>& data_;
+  std::size_t pos_ = 0;
+};
+
+template <typename T>
+void take(const std::string& path, const RawSection& s, std::uint64_t cols, std::vector<T>& out) {
+  if (s.dtype != dtype_of<T>()) fail(path, "section '" + s.name + "' has the wrong dtype");
+  const bool ok = cols == 1 ? (s.shape.size() == 1)
+                            : (s.shape.size() == 2 && s.shape[1] == cols);
+  if (!ok) fail(path, "section '" + s.name + "' has the wrong shape");
+  out.resize(s.bytes.size() / sizeof(T));
+  if (!out.empty()) std::memcpy(out.data(), s.bytes.data(), s.bytes.size());
+}
+
+std::vector<std::uint8_t> read_file(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) throw std::runtime_error(path + ": cannot open");
+  return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), {});
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+
+std::string validate(const Problem& p) {
+  const int np = num_params(p.model);
+  if (p.intrinsics.empty() || p.intrinsics.size() % static_cast<std::size_t>(np) != 0)
+    return "intrinsics must hold a positive multiple of " + std::to_string(np) + " values";
+  const std::size_t blocks = p.num_intrinsics_blocks();
+  if (p.poses.size() % 7 != 0) return "poses must hold 7 values per image";
+  if (p.points.size() % 3 != 0) return "points must hold 3 values per point";
+  const std::size_t n_img = p.num_images(), n_pts = p.num_points(), n_obs = p.num_observations();
+  if (!p.intrinsics_free.empty() && p.intrinsics_free.size() != blocks)
+    return "intrinsics_free must have one entry per intrinsics block";
+  if (!p.image_intrinsics.empty() && p.image_intrinsics.size() != n_img)
+    return "image_intrinsics must have one entry per image";
+  if (p.image_intrinsics.empty() && blocks != 1)
+    return "image_intrinsics is required when there is more than one intrinsics block";
+  if (!p.image_fixed.empty() && p.image_fixed.size() != n_img) return "image_fixed must have one entry per image";
+  if (!p.point_fixed.empty() && p.point_fixed.size() != n_pts) return "point_fixed must have one entry per point";
+  if (p.obs_point.size() != n_obs || p.obs_xy.size() != 2 * n_obs)
+    return "observation arrays have different lengths";
+  if (!p.obs_sigma.empty() && p.obs_sigma.size() != n_obs) return "obs_sigma must have one entry per observation";
+  for (std::size_t i = 0; i < p.image_intrinsics.size(); ++i) {
+    if (p.image_intrinsics[i] < 0 || static_cast<std::size_t>(p.image_intrinsics[i]) >= blocks)
+      return "image " + std::to_string(i) + " refers to a missing intrinsics block";
+  }
+  for (std::size_t i = 0; i < n_img; ++i) {
+    const double* q = &p.poses[7 * i];
+    const double n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (!(std::abs(n - 1.0) < 1e-9)) return "image " + std::to_string(i) + " has a non-unit quaternion";
+  }
+  for (std::size_t k = 0; k < n_obs; ++k) {
+    if (p.obs_image[k] < 0 || static_cast<std::size_t>(p.obs_image[k]) >= n_img)
+      return "observation " + std::to_string(k) + " refers to a missing image";
+    if (p.obs_point[k] < 0 || static_cast<std::size_t>(p.obs_point[k]) >= n_pts)
+      return "observation " + std::to_string(k) + " refers to a missing point";
+    if (!p.obs_sigma.empty() && !(p.obs_sigma[k] > 0))
+      return "observation " + std::to_string(k) + " has a non-positive sigma";
+  }
+  return {};
+}
+
+void write_problem(const std::string& path, const Problem& p) {
+  if (auto err = validate(p); !err.empty()) throw std::runtime_error(path + ": invalid problem: " + err);
+  const auto np = static_cast<std::uint64_t>(num_params(p.model));
+
+  std::vector<std::uint8_t> body;
+  Writer w(body);
+  const std::vector<std::int32_t> model = {static_cast<std::int32_t>(p.model)};
+  w.array("camera.model", model, 1);
+  w.array("intrinsics", p.intrinsics, np);
+  if (!p.intrinsics_free.empty()) w.array("intrinsics.free", p.intrinsics_free, 1);
+  w.array("image.pose", p.poses, 7);
+  if (!p.image_intrinsics.empty()) w.array("image.intrinsics", p.image_intrinsics, 1);
+  if (!p.image_fixed.empty()) w.array("image.fixed", p.image_fixed, 1);
+  w.array("point.xyz", p.points, 3);
+  if (!p.point_fixed.empty()) w.array("point.fixed", p.point_fixed, 1);
+  w.array("obs.image", p.obs_image, 1);
+  w.array("obs.point", p.obs_point, 1);
+  w.array("obs.xy", p.obs_xy, 2);
+  if (!p.obs_sigma.empty()) w.array("obs.sigma", p.obs_sigma, 1);
+  for (const auto& s : p.extra) w.section(s.name, s.dtype, s.shape, s.bytes.data(), s.bytes.size());
+
+  std::vector<std::uint8_t> file;
+  Writer h(file);
+  h.raw(kMagic, sizeof(kMagic));
+  h.value<std::uint32_t>(kVersion);
+  h.value<std::uint32_t>(w.count());
+  file.insert(file.end(), body.begin(), body.end());
+
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) throw std::runtime_error(path + ": cannot open for writing");
+  out.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
+  if (!out) throw std::runtime_error(path + ": write failed");
+}
+
+Problem read_problem(const std::string& path) {
+  const auto data = read_file(path);
+  Reader r(path, data);
+  char magic[8];
+  r.raw(magic, sizeof(magic));
+  if (std::memcmp(magic, kMagic, sizeof(kMagic)) != 0) fail(path, "not a just-ba problem file");
+  const auto version = r.value<std::uint32_t>();
+  if (version != kVersion)
+    fail(path, "unsupported format version " + std::to_string(version) + " (this build reads 1)");
+  const auto count = r.value<std::uint32_t>();
+
+  Problem p;
+  bool have_model = false, have_intr = false, have_pose = false, have_pts = false;
+  bool have_oi = false, have_op = false, have_oxy = false;
+  std::vector<RawSection> sections;
+  for (std::uint32_t i = 0; i < count; ++i) sections.push_back(r.section());
+  if (!r.done()) fail(path, "trailing data after the last section");
+
+  // The model decides the intrinsics width, so read it first.
+  for (const auto& s : sections) {
+    if (s.name != "camera.model") continue;
+    std::vector<std::int32_t> m;
+    take(path, s, 1, m);
+    if (m.size() != 1) fail(path, "camera.model must hold one value");
+    auto model = model_from_id(m[0]);
+    if (!model) fail(path, "unknown camera model id " + std::to_string(m[0]));
+    p.model = *model;
+    have_model = true;
+  }
+  if (!have_model) fail(path, "missing section 'camera.model'");
+  const auto np = static_cast<std::uint64_t>(num_params(p.model));
+
+  for (auto& s : sections) {
+    const std::string& n = s.name;
+    if (n == "camera.model") continue;
+    if (n == "intrinsics") { take(path, s, np, p.intrinsics); have_intr = true; }
+    else if (n == "intrinsics.free") take(path, s, 1, p.intrinsics_free);
+    else if (n == "image.pose") { take(path, s, 7, p.poses); have_pose = true; }
+    else if (n == "image.intrinsics") take(path, s, 1, p.image_intrinsics);
+    else if (n == "image.fixed") take(path, s, 1, p.image_fixed);
+    else if (n == "point.xyz") { take(path, s, 3, p.points); have_pts = true; }
+    else if (n == "point.fixed") take(path, s, 1, p.point_fixed);
+    else if (n == "obs.image") { take(path, s, 1, p.obs_image); have_oi = true; }
+    else if (n == "obs.point") { take(path, s, 1, p.obs_point); have_op = true; }
+    else if (n == "obs.xy") { take(path, s, 2, p.obs_xy); have_oxy = true; }
+    else if (n == "obs.sigma") take(path, s, 1, p.obs_sigma);
+    else p.extra.push_back(std::move(s));
+  }
+  if (!have_intr) fail(path, "missing section 'intrinsics'");
+  if (!have_pose) fail(path, "missing section 'image.pose'");
+  if (!have_pts) fail(path, "missing section 'point.xyz'");
+  if (!have_oi || !have_op || !have_oxy) fail(path, "missing observation sections");
+  if (auto err = validate(p); !err.empty()) fail(path, "invalid problem: " + err);
+  return p;
+}
+
+// ---------------------------------------------------------------------------
+// BAL reader.
+
+namespace {
+
+class Tokens {
+ public:
+  Tokens(const std::string& path, std::string text) : path_(path), text_(std::move(text)) {
+    cur_ = text_.c_str();
+  }
+  double real() {
+    char* end = nullptr;
+    const double v = std::strtod(cur_, &end);
+    if (end == cur_) fail(path_, "malformed BAL file");
+    cur_ = end;
+    return v;
+  }
+  long integer() {
+    char* end = nullptr;
+    const long v = std::strtol(cur_, &end, 10);
+    if (end == cur_) fail(path_, "malformed BAL file");
+    cur_ = end;
+    return v;
+  }
+
+ private:
+  const std::string& path_;
+  std::string text_;
+  const char* cur_;
+};
+
+}  // namespace
+
+Problem read_bal(const std::string& path) {
+  const auto bytes = read_file(path);
+  Tokens tok(path, std::string(bytes.begin(), bytes.end()));
+  const long n_cam = tok.integer(), n_pts = tok.integer(), n_obs = tok.integer();
+  if (n_cam <= 0 || n_pts < 0 || n_obs < 0) fail(path, "bad BAL header");
+
+  Problem p;
+  p.model = CameraModel::Radial;
+  p.obs_image.resize(static_cast<std::size_t>(n_obs));
+  p.obs_point.resize(static_cast<std::size_t>(n_obs));
+  p.obs_xy.resize(2 * static_cast<std::size_t>(n_obs));
+  // BAL image coordinates have y up; ours have y down.
+  for (long k = 0; k < n_obs; ++k) {
+    p.obs_image[k] = static_cast<std::int32_t>(tok.integer());
+    p.obs_point[k] = static_cast<std::int32_t>(tok.integer());
+    p.obs_xy[2 * k] = tok.real();
+    p.obs_xy[2 * k + 1] = -tok.real();
+  }
+
+  // BAL camera: angle-axis R, t, f, k1, k2, with P = R X + t and the camera looking
+  // down -z. Rotating the camera frame by pi about x gives our convention exactly:
+  // R' = F R, t' = F t, F = diag(1, -1, -1), whose quaternion is (0, 1, 0, 0).
+  const double q_flip[4] = {0, 1, 0, 0};
+  p.poses.resize(7 * static_cast<std::size_t>(n_cam));
+  p.intrinsics.resize(5 * static_cast<std::size_t>(n_cam));
+  p.intrinsics_free.assign(static_cast<std::size_t>(n_cam), kFocal | kDistortion);
+  p.image_intrinsics.resize(static_cast<std::size_t>(n_cam));
+  for (long i = 0; i < n_cam; ++i) {
+    double c[9];
+    for (double& v : c) v = tok.real();
+    double q_bal[4];
+    quat_exp(c, q_bal);
+    double* pose = &p.poses[7 * i];
+    quat_multiply(q_flip, q_bal, pose);
+    quat_normalize(pose);
+    pose[4] = c[3];
+    pose[5] = -c[4];
+    pose[6] = -c[5];
+    double* k = &p.intrinsics[5 * i];
+    k[0] = c[6];
+    k[1] = 0;
+    k[2] = 0;
+    k[3] = c[7];
+    k[4] = c[8];
+    p.image_intrinsics[i] = static_cast<std::int32_t>(i);
+  }
+  p.points.resize(3 * static_cast<std::size_t>(n_pts));
+  for (auto& v : p.points) v = tok.real();
+
+  if (auto err = validate(p); !err.empty()) fail(path, "invalid BAL problem: " + err);
+  return p;
+}
+
+}  // namespace jba

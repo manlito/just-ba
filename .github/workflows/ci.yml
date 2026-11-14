@@ -1,0 +1,84 @@
+# Free hosted runners only (decision D39). No schedules, no GPU runners.
+#
+# Manual trigger only while the repository is private (decision D49): on private
+# repositories hosted minutes count against a quota, with macOS at 10x. When the
+# repository goes public (after milestone 2), uncomment push and pull_request.
+name: ci
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure -LE gpu
+      # Whether Metal compute works on hosted Apple Silicon runners is unverified
+      # (document 08). Informational until it proves reliable; skips without a device.
+      - name: Metal tests (informational)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: ctest --test-dir build -C Release --output-on-failure -L gpu
+
+  ceres:
+    name: Ceres reference (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Ceres build
+        uses: actions/cache@v4
+        with:
+          path: ceres-prefix
+          key: ceres-2.2.0-${{ runner.os }}-${{ hashFiles('third_party/ceres/build.cmake') }}
+      - name: Cache BAL data
+        uses: actions/cache@v4
+        with:
+          path: tests/data/bal
+          key: bal-${{ hashFiles('tests/data/fetch_bal.py') }}
+      - name: Build Ceres 2.2.0 (minimal)
+        run: cmake -DPREFIX=${{ github.workspace }}/ceres-prefix -P third_party/ceres/build.cmake
+      - name: Fetch BAL problems
+        run: python3 tests/data/fetch_bal.py
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CERES=ON
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/ceres-prefix
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure -LE gpu
+
+  generated-code:
+    name: generated code is current
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install generator
+        run: python -m pip install -r residuals/symbolic/requirements.txt
+      - name: Check
+        run: python residuals/symbolic/generate.py --check
