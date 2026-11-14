@@ -255,8 +255,10 @@ Notes:
 ## Build order of backends
 
 1. CPU reference in double. Everything is validated against Ceres here first.
-2. CUDA, on Linux and Windows.
-3. Apple (Metal).
+2. Apple (Metal). Built first among the GPU backends because the main development
+   machine is Apple Silicon, and because Metal's single-precision-only constraint
+   tests the precision design early.
+3. CUDA, on Linux and Windows. The speed comparison with competitors happens here.
 4. WebGPU. Serves the browser, and run natively it also covers Windows machines
    with Intel or AMD GPUs (desktop app, document 09) and Android phones
    (document 10).

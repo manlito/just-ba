@@ -198,8 +198,9 @@ Ceres, DeepLM and MegBA on six BAL problems.
 - A fixed set of small and medium problems runs on every pull request on CPU.
   Fail if accuracy leaves tolerance, or if time per iteration regresses by more than
   a set percentage against the stored baseline for that machine class.
-- GPU runs happen on a schedule and before releases, on a self-hosted machine,
-  because hosted CI runners with GPUs are not assumed.
+- GPU runs are done by hand, before releases and after changes to GPU code, with
+  one command that runs the suite and writes the results. They are not CI jobs:
+  CI uses free hosted runners only, with nothing scheduled.
 - Results are stored as JSON per commit so trends can be plotted.
 - Every new residual type must add: Level 1 checks, a synthetic Level 2 problem, and
   a line in the speed benchmark showing existing problems did not slow down.

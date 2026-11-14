@@ -66,11 +66,32 @@ drift and is refused on non-Manhattan scenes; depth-assisted refinement beats
 pose-and-reprojection-only refinement on synthetic data with known truth; all match
 Ceres on the same formulation.
 
-## Milestone 4: CUDA backend
+## Milestone 4: Apple backend (Metal)
 
+- Developed on the owner's Apple Silicon machine, the main development machine, so
+  the first GPU backend has a fast edit-run-compare loop.
 - Backend interface frozen from the CPU experience.
-- All kernels in single precision; host-side double for decisions.
+- Metal kernels from the symbolic source, single precision; host-side double for
+  decisions. Metal has no double precision, so this milestone is where the
+  precision design is proven.
 - Deterministic gather-based accumulation.
+- Accelerate for the optional direct solve.
+- macOS wheels.
+
+Exit: same answers as the CPU reference within tolerance on an M1-class machine,
+faster than Ceres with Accelerate on the same machine.
+
+## Milestone 5: CUDA backend
+
+- Developed on the owner's laptop (NVIDIA GPU, 8 GB), which has both Linux and
+  Windows. Linux is the primary environment for CUDA work and for building the
+  competitors; Windows is used to confirm the native Windows build and tests.
+- A Google Cloud VM with an NVIDIA L4 (24 GB) can be started by the owner for
+  development sessions: interactive work and manual benchmark runs, including the
+  large size class. It is not used for CI.
+- Mostly a port: the kernels, precision handling and backend interface already work
+  on Metal.
+- All kernels in single precision by default; double as an option.
 - Speed benchmark against Ceres, Caspar and `bae`.
 - Explicit reduced system with a direct solver as an option; full-system conjugate
   gradients as an experiment.
@@ -80,15 +101,6 @@ than every competitor at equal accuracy on the small and medium size classes
 (50 to 2,000 images). If it is not faster there, this milestone is not finished.
 The large class (up to 10,000 images) must be correct and competitive.
 
-## Milestone 5: Apple backend
-
-- Metal kernels from the same symbolic source.
-- Accelerate for the optional direct solve.
-- macOS wheels.
-
-Exit: same answers as the CPU reference within tolerance on an M1-class machine,
-faster than Ceres with Accelerate on the same machine.
-
 ## Milestone 6: release to PyPI
 
 Details in document 08.
@@ -97,7 +109,8 @@ Details in document 08.
 - Benchmark results stored per commit; gates on accuracy and time per iteration.
 - Generated documentation site: user guide, Python API reference, residual and camera
   model reference, benchmark tables.
-- Nightly GPU test and benchmark job on self-hosted hardware.
+- A one-command GPU test and benchmark run, done by hand before each release. No
+  scheduled or paid CI jobs.
 
 Exit: `pip install` works on the three platforms, the documentation site is live, and
 CI blocks regressions.
@@ -123,6 +136,8 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 - Photometric depth-based pose refinement as an optional module (document 02,
   section 4b). Low priority. Built only if the keypoint depth term proves
   insufficient on real captures, and only as an add-on to the core.
+- Headline benchmark numbers on a datacenter GPU, since laptop timings are noisy
+  under thermal throttling. Run by hand on the development VM (NVIDIA L4).
 - Several Manhattan headings sharing one vertical, for buildings with angled wings.
 - Plane and 3D line constraints.
 - Stronger preconditioners.
@@ -136,11 +151,11 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 | 1 | Language | Decided: C++ | 06 |
 | 2 | Pose prior forms | Decided: relative and global priors both supported, supplied and pre-cleaned by the caller; robust loss in the library | 02 |
 | 3 | Depth formulation | Decided: per-point depth residual with per-image scale and offset first; photometric refinement optional and later | 02 |
-| 4 | Apple backend: Metal GPU, or CPU with Accelerate first | Metal, after CUDA | 03 |
+| 4 | Order of GPU backends | Decided: CPU, then Metal, then CUDA | 03 |
 | 5 | Is the incremental pipeline needed before the GPU backends | No | this document |
 | 6 | Can the existing system export real sessions for a private test set | Needed for milestone 2 | 05 |
 | 7 | Open source licence | Decided: Apache-2.0 | 08 |
-| 8 | GPU test hardware for CI | Self-hosted, nightly | 08 |
+| 8 | GPU test hardware | Decided: the owner's Mac for Metal; laptop (Linux and Windows) for CUDA development; a Google Cloud L4 VM for development sessions. All GPU testing is by hand; CI stays free, with no nightly jobs | 08 |
 
 ## Main risks
 
@@ -149,5 +164,5 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 | Single precision is not accurate enough on large or badly scaled scenes | GPU results miss tolerance | Local parameterization, compensated sums, host-side double decisions; double on CUDA as fallback |
 | Conjugate gradients converge slowly with very noisy priors | Slow or stalled solves | Direct solve option; better preconditioner |
 | Three kernel targets drift apart | Backend-specific bugs | One symbolic source, cross-backend equality tests on every commit |
-| "Fastest" is not reached against Caspar | Core promise missed | Profile against it early in milestone 4; adopt full-system conjugate gradients if it wins |
+| "Fastest" is not reached against Caspar | Core promise missed, and found late because CUDA now comes after Metal | Profile against it at the start of milestone 5; adopt full-system conjugate gradients if it wins |
 | Scope growth through new residual types | Core path slows down | The regression rule in document 05: no new residual without proof the existing benchmarks held |

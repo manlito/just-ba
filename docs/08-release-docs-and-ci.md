@@ -69,7 +69,7 @@ Docstring examples are executed in CI so the documentation cannot go stale.
 
 - **Standard GitHub-hosted runners are free for public repositories**: Linux, Windows
   and macOS, including Apple Silicon macOS runners.
-- **GPU runners are not free.** GitHub's GPU machines are "larger runners", which are
+- **GPU runners are not free, and are not used.** GitHub's GPU machines are "larger runners", which are
   billed per minute even on public repositories and require a paid plan (Team or
   Enterprise). The current offering is a single NVIDIA T4. The exact per-minute price
   was not confirmed; sources disagreed.
@@ -83,9 +83,9 @@ Docstring examples are executed in CI so the documentation cannot go stale.
 | Build, unit tests, Level 1 and Level 2 checks on CPU (document 05) | Hosted Linux and macOS | Every pull request | Free |
 | CUDA kernels compiled (not run) | Hosted Linux with the CUDA toolkit installed | Every pull request | Free |
 | Kernel logic on CPU: the generated kernels built as host code and compared with the reference | Hosted Linux | Every pull request | Free |
-| Metal backend tests | Hosted macOS arm64, if it proves reliable; otherwise self-hosted | Every pull request or nightly | Free or own hardware |
-| CUDA backend tests and speed benchmark | Self-hosted machine with an NVIDIA GPU | Nightly and before releases | Own hardware |
-| CPU speed regression gate | Hosted Linux, or self-hosted for stable timings | Every pull request | Free |
+| Metal backend tests | Hosted macOS arm64 if it proves reliable; otherwise run by hand on the owner's Mac | Every pull request if hosted; otherwise by hand before releases | Free |
+| CUDA backend tests and speed benchmark | Not a CI job. Run by hand on the owner's laptop, or on the development VM when it is up | Before releases and after GPU changes | None beyond development |
+| CPU speed regression gate | Hosted Linux | Every pull request | Free |
 | Wheels | Hosted, all platforms | On release tags | Free |
 | Documentation build and publish | Hosted Linux | Pull request preview; publish on release | Free |
 
@@ -95,16 +95,18 @@ Points to note:
   kernel is emitted from one symbolic source for several targets, the CPU emission
   exercises the same arithmetic. What still needs real hardware is the device
   plumbing, precision behaviour and speed.
-- **Self-hosted runners on a public repository are a security risk.** A pull request
-  from a fork can run arbitrary code on the machine. Run GPU jobs only on the main
-  branch and on a schedule, or require maintainer approval before they run on outside
-  contributions.
+- **CI must cost nothing (owner's rule).** Only free hosted runners are used. There
+  are no scheduled or nightly jobs, no paid GPU runners, no cloud machines started
+  by CI, and no self-hosted runners. Anything that needs a GPU is run by hand.
+- **GPU checks are a manual step with a script.** One command runs the GPU test
+  suite and the benchmark and writes the results file, so a manual run is quick and
+  repeatable. The release checklist requires it.
 - **Hosted runners give noisy timings.** The speed gate on hosted machines uses
   generous thresholds or deterministic counts (iterations, operator applications);
-  precise timing comparisons run on the self-hosted machine.
-- **Paid alternative.** If a self-hosted GPU machine is not wanted, GitHub's GPU
-  runner or a cloud GPU started on demand covers the nightly job for a small monthly
-  cost.
+  precise timing comparisons are done by hand on a GPU machine.
+- **Development VM.** The owner can start a Google Cloud VM with an NVIDIA L4
+  (24 GB) for development sessions. It is for interactive development and manual
+  benchmark runs only, and is never wired into CI.
 
 ## Open decisions
 
@@ -112,5 +114,5 @@ Points to note:
 |---|---|
 | Licence | Decided: Apache-2.0 |
 | One wheel with run-time CUDA loading, or separate CUDA wheels | Decide in milestone 6 after measuring wheel sizes |
-| GPU testing hardware | Self-hosted, nightly, main branch only |
+| GPU testing | Decided: by hand, never in CI. The owner's Mac for Metal; the owner's laptop (Linux and Windows) or the development VM for CUDA. |
 | Documentation host | GitHub Pages |
