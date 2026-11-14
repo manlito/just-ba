@@ -32,7 +32,7 @@ struct SolverOptions {
   double max_trust_region_radius = 1e16;
   double min_trust_region_radius = 1e-32;
   double min_relative_decrease = 1e-3;
-  int max_consecutive_invalid_steps = 5;
+  int max_consecutive_invalid_steps = 5;  // the solve fails on reaching this count
 
   // Linear solver: implicit Schur complement, preconditioned conjugate gradients,
   // preconditioner = camera blocks of the Schur complement.
@@ -53,7 +53,7 @@ struct IterationSummary {
   double cost = 0;              // after this iteration
   double cost_change = 0;       // of the candidate step, accepted or not
   double gradient_max_norm = 0;
-  double step_norm = 0;
+  double step_norm = 0;         // of candidate - current, in stored coordinates
   double relative_decrease = 0;  // actual over predicted decrease
   double trust_region_radius = 0;
   int linear_iterations = 0;

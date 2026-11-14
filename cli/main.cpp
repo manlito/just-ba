@@ -33,6 +33,29 @@ constexpr const char* kUsage =
     "  --gauge <auto|none>          default auto\n"
     "  --threads <n>                default 0 (all hardware threads)\n";
 
+// A string as a JSON string literal, quotes included.
+std::string json_string(std::string_view s) {
+  std::string out = "\"";
+  for (const char c : s) {
+    switch (c) {
+      case '"': out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buf[8];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+          out += buf;
+        } else {
+          out += c;
+        }
+    }
+  }
+  return out + "\"";
+}
+
 bool ends_with(std::string_view s, std::string_view suffix) {
   return s.size() >= suffix.size() && s.substr(s.size() - suffix.size()) == suffix;
 }
@@ -105,14 +128,14 @@ int solve(int argc, char** argv) {
   if (!output.empty()) jba::write_problem(output, p);
   if (!history.empty()) write_history(history, s);
   std::printf(
-      "{\"input\": \"%s\", \"model\": \"%s\", \"images\": %zu, \"points\": %zu, \"observations\": %zu, "
-      "\"loss\": \"%s\", \"loss_scale\": %g, \"gauge_reference_image\": %d, \"gauge_scale_image\": %d, "
+      "{\"input\": %s, \"model\": \"%s\", \"images\": %zu, \"points\": %zu, \"observations\": %zu, "
+      "\"loss\": \"%s\", \"loss_scale\": %g, \"gauge_reference_image\": %d, \"gauge_scale_image\": %d, \"gauge_scale_coordinate\": %d, "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
-      "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": \"%s\", \"time_seconds\": %.4f}\n",
-      input.c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
+      "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f}\n",
+      json_string(input).c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
       p.num_observations(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, s.gauge_reference_image,
-      s.gauge_scale_image, s.initial_cost, s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
-      std::string(jba::termination_name(s.termination)).c_str(), s.message.c_str(), s.time_seconds);
+      s.gauge_scale_image, s.gauge_scale_coordinate, s.initial_cost, s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
+      std::string(jba::termination_name(s.termination)).c_str(), json_string(s.message).c_str(), s.time_seconds);
   return s.termination == jba::Termination::Failure ? 1 : 0;
 }
 

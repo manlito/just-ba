@@ -76,7 +76,9 @@ per-iteration histories agree only until rounding changes a conjugate gradients
 stopping decision, typically after two or three iterations. On well-conditioned
 problems the end points still agree to 1e-8 or better. On venice-52 with the gauge
 held, rounding alone selects different basins, so BAL parity runs without gauge
-fixing (decision D60).
+fixing (decision D60). Ceres itself is not repeatable from run to run with several
+threads; on ladybug-49 that alone moves the final cost difference between 1e-9 and
+5e-7 (document 12).
 
 ### Problem sets
 

@@ -82,7 +82,9 @@ Results (2026-11-14, M5 Pro, 18 threads unless stated):
   | final-93 | 3.8e-10 | 6 / 6 | 1.77 s / 2.24 s |
   | venice-52 | 1.6e-4 at 300 iterations, 2.7e-7 at 2,000 | 232 / 190 at 300 | |
 
-  Times with 3 threads each, three runs in parallel; indicative only.
+  Times with 3 threads each, three runs in parallel; indicative only. The cost
+  differences are one run each: with several threads Ceres's end point varies from
+  run to run, on ladybug-49 between 1e-9 and 5e-7 (document 12).
 - Histories match to 12 digits until the first inner solve long enough for rounding
   to change its stopping iteration (iteration 3 on trafalgar). Our own solver built
   without fused multiply-add diverges from itself at the same point, so this is
@@ -104,11 +106,10 @@ Before the features, from the review of milestones 0 and 1 (document 12):
   histories on the parity suite before and after.
 - One loss per residual type, in the options and in the problem file (`loss.*`).
 - The automatic gauge made aware of priors (document 02, gauge table).
-- The two small differences from Ceres in the trust-region loop fixed or accepted.
 - The Python boundary decided (copy or view; quaternions normalised on the way in),
   and public headers separated from internal ones.
-- Small fixes: JSON escaping in the CLI, duplicate section names, non-finite
-  inputs, tests for failure paths.
+- Done already (D62, document 12): the two small differences from Ceres in the
+  trust-region loop, and the small input and output fixes.
 - Ceres harness: cost functors for both prior types and the two new camera models.
 
 Then:

@@ -165,9 +165,9 @@ int main(int argc, char** argv) {
     if (s.termination == jba::Termination::Failure) failures.push_back("just-ba failed: " + s.message);
     if (!c.usable) failures.push_back("Ceres failed");
 
-    std::printf("{\n  \"input\": \"%s\", \"loss\": \"%s\", \"loss_scale\": %g, \"gauge\": \"%s\", "
+    std::printf("{\n  \"input\": %s, \"loss\": \"%s\", \"loss_scale\": %g, \"gauge\": \"%s\", "
                 "\"linear_solver\": \"%s\",\n",
-                input.c_str(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale,
+                jba_ceres::json_string(input).c_str(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale,
                 o.gauge == jba::GaugeMode::Auto ? "auto" : "none", linear_name.c_str());
     std::printf("  \"images\": %zu, \"points\": %zu, \"observations\": %zu,\n", initial.num_images(),
                 initial.num_points(), initial.num_observations());

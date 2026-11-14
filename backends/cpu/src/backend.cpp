@@ -677,29 +677,37 @@ struct CpuBackend::Impl {
     c_poses = poses;
     c_points = points;
     c_intr = intr;
+    // The step norm is taken in stored coordinates (candidate minus current, the
+    // quaternion included), as Ceres does for its parameter tolerance.
     double sq = 0;
+    auto add_difference = [&sq](const double* a, const double* b, int n) {
+      for (int c = 0; c < n; ++c) sq += (a[c] - b[c]) * (a[c] - b[c]);
+    };
     for (const FBlock& fb : fblocks) {
       double delta[kMaxParams];
-      for (int c = 0; c < fb.size; ++c) {
-        delta[c] = f_scale[fb.offset + c] * dx_f[fb.offset + c];
-        sq += delta[c] * delta[c];
-      }
+      for (int c = 0; c < fb.size; ++c) delta[c] = f_scale[fb.offset + c] * dx_f[fb.offset + c];
       if (fb.is_pose) {
-        pose_retract(&poses[7 * static_cast<std::size_t>(fb.index)], delta,
-                     &c_poses[7 * static_cast<std::size_t>(fb.index)]);
+        const double* cur = &poses[7 * static_cast<std::size_t>(fb.index)];
+        double* cand = &c_poses[7 * static_cast<std::size_t>(fb.index)];
+        pose_retract(cur, delta, cand);
+        add_difference(cand, cur, 7);
       } else {
-        double* k = &c_intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(fb.index)];
+        const std::size_t at = static_cast<std::size_t>(np) * static_cast<std::size_t>(fb.index);
+        double* k = &c_intr[at];
         for (int c = 0; c < fb.size; ++c) k[c] += delta[c];
+        add_difference(k, &intr[at], fb.size);
       }
     }
     for (std::size_t j = 0; j < point_off.size(); ++j) {
       const int e = point_off[j];
       if (e < 0) continue;
       for (int c = 0; c < 3; ++c) {
+        // Two statements on purpose: one expression would let the compiler fuse the
+        // multiply and add, which changes rounding and with it the iteration history.
         const double d = e_scale[e + c] * dx_e[e + c];
         c_points[3 * j + c] += d;
-        sq += d * d;
       }
+      add_difference(&c_points[3 * j], &points[3 * j], 3);
     }
     out.step_norm = std::sqrt(sq);
     out.valid = std::isfinite(out.model_cost_change) && out.model_cost_change > 0 && std::isfinite(out.step_norm);

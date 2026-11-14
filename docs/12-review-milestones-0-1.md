@@ -2,7 +2,8 @@
 
 Review of the code and documents as of commit `96e9e54` (2026-11-14), before
 milestone 2 starts. It records what was checked, what was found, and what should
-change first. Nothing in the code was changed by this review.
+change first. The review itself changed no code. The owner then asked for the two
+differences from Ceres and the small fixes to be made; see "Follow-up" at the end.
 
 ## What was checked
 
@@ -41,8 +42,7 @@ Decision D54 says the loop follows Ceres exactly. Two details do not:
 | Step norm used by the parameter tolerance (`trust_region.cpp`, `backend.cpp` `compute_step`) | Norm of the tangent step | Norm of `x - candidate` in stored coordinates, so a rotation step counts about half (quaternion) | Our parameter-tolerance stop fires slightly later. No effect on the parity results, which stop on the function tolerance or run with a 1e-12 tolerance. |
 | Consecutive invalid steps before failure | Fails on the sixth (`>`) | Fails on the fifth (`>=`) | Only on numerically failing problems. |
 
-Either fix them or record them as accepted differences. Fixing is a few lines each;
-the parity suite must be rerun afterwards.
+Both were fixed in the follow-up (D62).
 
 ### Backend shape
 
@@ -121,10 +121,10 @@ all; item 3 should be done before any new residual is added.
 | 3 | Reshape the CPU backend for several residual types, with no change in behaviour. Pose priors are residuals on camera-side blocks only: a relative prior touches two poses, a global prior one pose and, when the set has its own transform, one shared block. The camera-side products, the preconditioner blocks, the gradient, the cost and the predicted decrease each need a second source of terms, and the list of camera-side block kinds needs a third entry. | Adding this inside the present class would double its size. Done first, the refactor can be checked exactly: iteration histories must stay bit-identical on the parity suite. |
 | 4 | One loss per residual type in `SolverOptions` (today one `loss` for reprojection), and the `loss.*` file sections. | Document 02 gives priors their own loss. |
 | 5 | Make the automatic gauge aware of priors, following the table in document 02: nothing held with global priors as the frame; the reference pose only, without the scale coordinate, with relative priors. | Today `choose_gauge` looks only at fixed images and points. |
-| 6 | Settle the two differences from Ceres above. | Cheap now; confusing later, once prior terms make histories harder to compare. |
+| 6 | Settle the two differences from Ceres above. Done (D62). | Cheap now; confusing later, once prior terms make histories harder to compare. |
 | 7 | Decide the Python boundary: copy arrays in and out, or view them. `Problem` owns its arrays and the backend copies them again, so "without copying" (document 03) is not what the code does. Recommendation: copy. For 10^6 observations it is about 30 MB and a few milliseconds, and it keeps ownership simple. Normalise quaternions at the same boundary. | Has to be settled before the bindings are written. |
 | 8 | Separate public headers from internal ones. | Before the bindings and the C-level API fix the surface. |
-| 9 | Small fixes: JSON escaping in the CLI and parity tool, duplicate section names rejected, non-finite inputs reported by `validate`, tests for the failure paths and for unobserved blocks. | An afternoon; easier before more code depends on them. |
+| 9 | Small fixes: JSON escaping in the CLI and parity tool, duplicate section names rejected, non-finite inputs reported by `validate`, tests for the failure paths and for unobserved blocks. Done in the follow-up. | Easier before more code depends on them. |
 | 10 | Extend the Ceres harness: cost functors for the two prior types, and the two remaining camera models. | Level 1 and Level 2 checks for milestone 2 need them. |
 
 Optional: add the sanitizer builds as a documented manual step, or to CI's full
@@ -134,5 +134,45 @@ hand.
 ## Questions for the owner
 
 1. Can real sessions be exported (item 1)?
-2. Fix the two differences from Ceres, or accept them (item 6)?
-3. Is copying at the Python boundary acceptable (item 7)?
+2. Is copying at the Python boundary acceptable (item 7)?
+3. Should the Ceres side of the parity tests run on one thread (see below)?
+
+## Follow-up (2026-11-14)
+
+Done at the owner's request after the review:
+
+- The step norm is now the norm of candidate minus current in stored coordinates,
+  and the solve fails on the fifth consecutive invalid step, both as in Ceres (D62).
+- `validate` names the first value that is not finite (intrinsics, poses, points,
+  observations) and refuses a sigma that is not finite.
+- The problem file reader refuses a section name that appears twice, and the writer
+  refuses to produce one.
+- The CLI, the parity tool and the Ceres tool escape strings in their JSON output.
+  The CLI summary also reports the gauge's scale coordinate.
+- New tests: a start with no finite cost ends in `Failure` with the parameters
+  untouched; an image and a point without observations are left alone; a point
+  observed twice in one image; a problem with no observations; the step norm
+  convention; the duplicate-section and non-finite cases.
+
+Checked afterwards: unit tests, the full parity set including venice-52 (38 of 38),
+and the three sanitizers. The iteration histories of all five BAL problems (cost,
+inner iterations and radius at every iteration) are bit-identical to those of the
+previous commit, so the fixes changed no result.
+
+Two things learned while checking:
+
+- **Ceres is not repeatable from run to run with several threads.** Three runs of
+  ladybug-49 with identical settings gave Ceres final costs of 13344.31821,
+  13344.31895 and 13344.32537 (the last in 33 iterations, not 35), against our
+  13344.31823 every time. The relative difference therefore moved between 1e-9 and
+  5e-7, and the test's limit is 1e-6. The figures in document 07's table are one
+  sample each. The test has not failed, but the margin is thinner than the table
+  suggests. Running the Ceres side on one thread would make the comparison
+  repeatable, at the price of a slower test; this is left to the owner.
+- **A harmless-looking edit changed our own results.** Writing the point update as
+  one expression let the compiler fuse the multiply and the add, and ladybug-49
+  ended at 13344.318211 where it had ended at 13344.318229. The statement was put
+  back in two parts, with a comment. This is the rounding sensitivity document 07
+  already describes; the practical rule is to compare histories with the previous
+  commit after any change to arithmetic in the backend, which is what the stored
+  baseline of item 2 is for.
