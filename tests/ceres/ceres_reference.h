@@ -9,13 +9,38 @@
 
 #include <ceres/ceres.h>
 
+#include <cstdio>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "jba/problem.h"
 #include "jba/solver.h"
 
 namespace jba_ceres {
+
+// A string as a JSON string literal, quotes included.
+inline std::string json_string(std::string_view s) {
+  std::string out = "\"";
+  for (const char c : s) {
+    switch (c) {
+      case '"': out += "\\\""; break;
+      case '\\': out += "\\\\"; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buf[8];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c)));
+          out += buf;
+        } else {
+          out += c;
+        }
+    }
+  }
+  return out + "\"";
+}
 
 // Unit quaternion (w, x, y, z) with the left rotation-vector tangent of D46.
 class LeftRotationVectorQuaternion final : public ceres::Manifold {

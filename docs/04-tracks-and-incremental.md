@@ -89,11 +89,11 @@ version.
 
 - With poses, every match is first checked against them: the two keypoint rays must
   meet in front of both cameras within the stage 2 angle of the epipolar plane
-  (D67). Without this, 10% wrong matches fused most keypoints into one component.
+  (D69). Without this, 10% wrong matches fused most keypoints into one component.
 - Stage 2 runs on clean components too by default (`check_clean`).
 - Stage 2 runs again after each solve, inside `refine`, from the improved poses with
-  the threshold halved (2 degrees first, then 1, never below 0.25; D67, D69).
-- Triangulation is least squares on rays rather than DLT (D70).
+  the threshold halved (2 degrees first, then 1, never below 0.25; D69, D71).
+- Triangulation is least squares on rays rather than DLT (D72).
 
 ## Part B: triangulation
 

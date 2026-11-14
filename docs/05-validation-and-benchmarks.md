@@ -42,14 +42,16 @@ library or the Python wheel.
 For every residual type and every camera model:
 
 - Residual values agree with an independent Ceres cost functor on random inputs.
-- Analytic Jacobians agree with central finite differences computed in extended
-  precision, and with Ceres automatic differentiation.
+- Analytic Jacobians agree with central finite differences, and with Ceres automatic
+  differentiation. (As built: the differences are taken in double, which gives
+  about 1e-9 relative; the comparison with Ceres, at 1e-14, is the tight one.)
 - Edge cases: point near the image centre (fisheye `r -> 0`), point near the
   principal plane, identity rotation, large rotations, fixed blocks.
 - Every backend (CPU, CUDA, Apple) produces the same residuals and Jacobians as the
   CPU reference within a stated tolerance per precision.
 
-These run on every commit. They need no dataset.
+These run on every commit once the repository is public; until then CI is started
+by hand (D49). They need no dataset.
 
 ## Level 2: solver parity with Ceres
 
@@ -74,7 +76,9 @@ per-iteration histories agree only until rounding changes a conjugate gradients
 stopping decision, typically after two or three iterations. On well-conditioned
 problems the end points still agree to 1e-8 or better. On venice-52 with the gauge
 held, rounding alone selects different basins, so BAL parity runs without gauge
-fixing (decision D60).
+fixing (decision D60). Ceres itself is not repeatable from run to run with several
+threads; on ladybug-49 that alone moves the final cost difference between 1e-9 and
+5e-7. The parity tool therefore runs Ceres on one thread (D63).
 
 ### Problem sets
 
@@ -209,6 +213,8 @@ Ceres, DeepLM and MegBA on six BAL problems.
   one command that runs the suite and writes the results. They are not CI jobs:
   CI uses free hosted runners only, with nothing scheduled.
 - Results are stored as JSON per commit so trends can be plotted.
+- Not built yet. The first baseline is taken before milestone 2 adds residuals
+  (document 12), so the rule below can be applied from the first new residual.
 - Every new residual type must add: Level 1 checks, a synthetic Level 2 problem, and
   a line in the speed benchmark showing existing problems did not slow down.
 

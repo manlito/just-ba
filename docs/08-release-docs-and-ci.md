@@ -80,9 +80,15 @@ Docstring examples are executed in CI so the documentation cannot go stale.
 
 ### Plan
 
+Current state (after milestone 1): the workflow is started by hand while the
+repository is private (D49), in a quick mode (Linux and Windows, Ceres parity
+without the slow test) or a full mode that adds macOS and venice-52 (D61). A third
+job checks that the generated residual code is current. The table below is the
+plan for the public repository.
+
 | Job | Runner | When | Cost |
 |---|---|---|---|
-| Build, unit tests, Level 1 and Level 2 checks on CPU (document 05) | Hosted Linux and macOS | Every pull request | Free |
+| Build, unit tests, Level 1 and Level 2 checks on CPU (document 05) | Hosted Linux, Windows and macOS | Every pull request | Free |
 | CUDA kernels compiled (not run) | Hosted Linux with the CUDA toolkit installed | Every pull request | Free |
 | Kernel logic on CPU: the generated kernels built as host code and compared with the reference | Hosted Linux | Every pull request | Free |
 | Metal backend tests | Hosted macOS arm64 if it proves reliable; otherwise run by hand on the owner's Mac | Every pull request if hosted; otherwise by hand before releases | Free |

@@ -1,5 +1,6 @@
 #include "jba/problem_io.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdlib>
@@ -222,6 +223,12 @@ std::string validate_priors(const Problem& p) {
   if (auto err = validate_weights("relative", n_rel, p.rel_sigma, p.rel_sqrt_info); !err.empty()) return err;
 
   if (p.glob_pose.size() != 7 * n_glob) return "glob_pose must hold 7 values per global prior";
+  for (std::size_t a = 0; a < p.rel_pose.size(); ++a)
+    if (!std::isfinite(p.rel_pose[a])) return "relative prior " + std::to_string(a / 7) + " has a value that is not finite";
+  for (std::size_t a = 0; a < p.glob_pose.size(); ++a)
+    if (!std::isfinite(p.glob_pose[a])) return "global prior " + std::to_string(a / 7) + " has a value that is not finite";
+  for (std::size_t a = 0; a < p.set_transform.size(); ++a)
+    if (!std::isfinite(p.set_transform[a])) return "prior set " + std::to_string(a / 8) + " has a value that is not finite";
   if (!p.glob_set.empty() && p.glob_set.size() != n_glob) return "glob_set must have one entry per global prior";
   const std::size_t n_sets = p.num_prior_sets();
   for (std::size_t k = 0; k < n_glob; ++k) {
@@ -276,6 +283,19 @@ std::string validate(const Problem& p) {
   if (p.obs_point.size() != n_obs || p.obs_xy.size() != 2 * n_obs)
     return "observation arrays have different lengths";
   if (!p.obs_sigma.empty() && p.obs_sigma.size() != n_obs) return "obs_sigma must have one entry per observation";
+  auto first_not_finite = [](const std::vector<double>& v) {
+    std::size_t i = 0;
+    while (i < v.size() && std::isfinite(v[i])) ++i;
+    return i;
+  };
+  if (const auto i = first_not_finite(p.intrinsics); i < p.intrinsics.size())
+    return "intrinsics block " + std::to_string(i / static_cast<std::size_t>(np)) + " has a value that is not finite";
+  if (const auto i = first_not_finite(p.poses); i < p.poses.size())
+    return "image " + std::to_string(i / 7) + " has a pose value that is not finite";
+  if (const auto i = first_not_finite(p.points); i < p.points.size())
+    return "point " + std::to_string(i / 3) + " has a coordinate that is not finite";
+  if (const auto i = first_not_finite(p.obs_xy); i < p.obs_xy.size())
+    return "observation " + std::to_string(i / 2) + " has a coordinate that is not finite";
   for (std::size_t i = 0; i < p.image_intrinsics.size(); ++i) {
     if (p.image_intrinsics[i] < 0 || static_cast<std::size_t>(p.image_intrinsics[i]) >= blocks)
       return "image " + std::to_string(i) + " refers to a missing intrinsics block";
@@ -289,8 +309,8 @@ std::string validate(const Problem& p) {
       return "observation " + std::to_string(k) + " refers to a missing image";
     if (p.obs_point[k] < 0 || static_cast<std::size_t>(p.obs_point[k]) >= n_pts)
       return "observation " + std::to_string(k) + " refers to a missing point";
-    if (!p.obs_sigma.empty() && !(p.obs_sigma[k] > 0))
-      return "observation " + std::to_string(k) + " has a non-positive sigma";
+    if (!p.obs_sigma.empty() && !(p.obs_sigma[k] > 0 && std::isfinite(p.obs_sigma[k])))
+      return "observation " + std::to_string(k) + " has a sigma that is not positive and finite";
   }
   return {};
 }
@@ -333,7 +353,21 @@ void write_problem(const std::string& path, const Problem& p) {
     w.array("prior.set.relation", rel, 1);
   }
   if (!p.set_transform.empty()) w.array("prior.set.transform", p.set_transform, 8);
-  for (const auto& s : p.extra) w.section(s.name, s.dtype, s.shape, s.bytes.data(), s.bytes.size());
+  // A name may appear once (document 11); the reader refuses anything else.
+  static constexpr std::string_view kKnown[] = {
+      "camera.model",          "intrinsics",          "intrinsics.free",       "image.pose",
+      "image.intrinsics",      "image.fixed",         "point.xyz",             "point.fixed",
+      "obs.image",             "obs.point",           "obs.xy",                "obs.sigma",
+      "prior.relative.images", "prior.relative.pose", "prior.relative.sigma",  "prior.relative.sqrt_info",
+      "prior.global.image",    "prior.global.set",    "prior.global.pose",     "prior.global.sigma",
+      "prior.global.sqrt_info", "prior.set.relation", "prior.set.transform"};
+  for (std::size_t i = 0; i < p.extra.size(); ++i) {
+    const auto& s = p.extra[i];
+    bool repeated = std::find(std::begin(kKnown), std::end(kKnown), s.name) != std::end(kKnown);
+    for (std::size_t j = 0; j < i && !repeated; ++j) repeated = p.extra[j].name == s.name;
+    if (repeated) throw std::runtime_error(path + ": section '" + s.name + "' appears more than once");
+    w.section(s.name, s.dtype, s.shape, s.bytes.data(), s.bytes.size());
+  }
 
   std::vector<std::uint8_t> file;
   Writer h(file);
@@ -365,6 +399,13 @@ Problem read_problem(const std::string& path) {
   std::vector<RawSection> sections;
   for (std::uint32_t i = 0; i < count; ++i) sections.push_back(r.section());
   if (!r.done()) fail(path, "trailing data after the last section");
+  {
+    std::vector<std::string_view> names;
+    for (const auto& s : sections) names.push_back(s.name);
+    std::sort(names.begin(), names.end());
+    const auto dup = std::adjacent_find(names.begin(), names.end());
+    if (dup != names.end()) fail(path, "section '" + std::string(*dup) + "' appears more than once");
+  }
 
   // The model decides the intrinsics width, so read it first.
   for (const auto& s : sections) {

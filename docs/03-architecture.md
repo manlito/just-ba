@@ -1,8 +1,9 @@
 # 03. Architecture
 
 How the library is laid out so that it can be the fastest option for its narrow job,
-on three kinds of hardware, with almost no dependencies. The language (C++ or Rust)
-is decided in document 06; nothing here depends on it.
+on three kinds of hardware, with almost no dependencies. The language is C++
+(document 06). Sections marked "as built" describe the code after milestone 1; the
+rest is still the plan.
 
 ## Design principles
 
@@ -42,7 +43,8 @@ is decided in document 06; nothing here depends on it.
 - **Backend interface** is a small set of operations (listed below). A backend is the
   implementation of those operations on one kind of device.
 - **Bindings** are thin. Python passes NumPy arrays without copying; results come back
-  the same way.
+  the same way. (As built: arrays are copied in and out, and quaternions normalised
+  on the way in, D74; the Problem owns its arrays and the backend copies them again.)
 
 ## Problem data
 
@@ -57,18 +59,27 @@ Structure-of-arrays, contiguous, fixed-size blocks.
 | Ground control point | 3 | Fixed, or free with a prior |
 
 Residual instances are stored as index arrays into those blocks, one array set per
-residual type. Observations are sorted twice at setup, once by camera and once by
-point, so every accumulation later is a reduction over a contiguous range.
+residual type. Every accumulation is a gather: each output block is written by one
+task that walks its own observations in a fixed order.
+
+As built (CPU): observations are sorted once, by point then image, so the
+observations of a point are a contiguous range. Per image and per intrinsics block
+there is an index list into that order; within a list the observations of one point
+are still consecutive, which the preconditioner uses.
 
 Any block can be marked fixed. Fixed blocks are removed from the system at setup, not
-masked at run time.
+masked at run time. As built: single fixed coordinates inside a free block (the
+scale coordinate held by the gauge, intrinsics groups that stay fixed) remain as
+unknowns with zero Jacobian columns; their step is exactly zero.
 
 ## The solver
 
 ### Outer loop
 
 Levenberg-Marquardt with a trust-region update of the damping term, on the host.
-Robust losses are applied by iterative reweighting. Per iteration:
+Robust losses are applied by iterative reweighting (as built: Ceres's residual and
+Jacobian correction, which is the same thing for the losses offered; D56). Per
+iteration:
 
 1. Linearize: residuals and Jacobian blocks (device).
 2. Build the blocks of the normal equations (device).
@@ -178,6 +189,23 @@ A backend implements roughly these, and nothing else:
 
 Keeping this list short is what makes a new backend affordable.
 
+As built after milestone 1 (`core/include/jba/backend.h`), the interface the host
+loop sees is coarser than the table: `cost`, `linearize`, `gradient_max_norm`,
+`parameter_norm`, `compute_step`, `candidate_cost`, `accept_candidate`. One call,
+`compute_step`, covers everything from the diagonal blocks to the retracted
+candidate, including the conjugate gradients loop. The operations in the table
+exist as private functions of the CPU backend, for the reprojection residual and
+the pose priors (D75).
+Two things follow, both to settle before the interface is frozen in milestone 4:
+
+- The conjugate gradients loop is backend code today. Either it moves to the core
+  over the fine-grained operations, or each backend keeps its own. On a GPU the
+  loop should not return to the host for every dot product, which argues for
+  keeping it in the backend and sharing only the stopping rule.
+- Milestone 2 extended the backend for several residual types (D75): pose priors
+  enter as camera-side terms next to reprojection. Depth and the Manhattan prior
+  (milestone 3) will follow the same pattern.
+
 ## Precision
 
 Confirmed constraints:
@@ -223,11 +251,9 @@ portable. If CUDA atomics prove faster, they can be an opt-in fast mode.
 - Generated code is checked into the repository. The generator is a development tool,
   not a build or run-time dependency.
 
-Candidates for the tool: SymForce (C++ and Python output are mature; CUDA and Rust
-output are marked experimental upstream), or wrenfold (C++, Rust, Python). Metal and
-WGSL emitters would be small custom templates in either case. The choice is made with
-the first residual; hand derivation checked against finite differences is the
-fallback.
+The tool is wrenfold, pinned, with small custom emitters for C++ and Metal (D45).
+SymForce was the other candidate; its C++ output depends on Eigen and its own
+runtime types. CI checks that the checked-in generated files are current.
 
 ## Backends
 
@@ -267,27 +293,29 @@ All backends are compiled into one binary where the platform allows and selected
 run time. Running out of device memory is a reported error with a CPU fallback; an
 8 GB GPU is the reference consumer device.
 
-## Proposed repository layout
+## Repository layout
+
+Directories marked `*` do not exist yet.
 
 ```
 docs/            this plan
-core/            problem data, LM loop, strategies, ordering
+core/            problem data, problem file, LM loop, gauge choice, priors, starting poses
 residuals/       symbolic definitions and generated code per target
 backends/
-  cpu/
-  cuda/
-  metal/
-  webgpu/
+  cpu/           the solver backend
+  metal/         milestone 0 spike: the reprojection kernel only
+  cuda/        *
+  webgpu/      *
 tracks/          track building, triangulation
-pipeline/        incremental reconstruction (test fixture)
+pipeline/      * incremental reconstruction (test fixture)
 bindings/
   python/
-  wasm/
-api/             public entry points (solve), later the C-level API
+  wasm/        *
+api/             public entry points (solve, evaluate, refine), later the C-level API
 cli/             sample binary and benchmark driver
-bench/           benchmark definitions, stored baselines
-tests/
-third_party/     reference solver wiring (Ceres), test-only
+bench/         * benchmark definitions, stored baselines
+tests/           unit tests; tests/ceres holds the reference harness
+third_party/     reference solver build (Ceres), test-only
 ```
 
 ## Open decisions

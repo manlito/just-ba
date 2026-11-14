@@ -6,7 +6,7 @@ milestone has an exit condition instead.
 
 ## Milestone 0: decisions and spikes
 
-- Language is decided: C++ (document 06). Set up the build (C++20, CMake) on Linux,
+- Language is decided: C++ (document 06). Set up the build (C++23, D52; CMake) on Linux,
   macOS and Windows.
 - Spike the symbolic tool on the reprojection residual: derive, emit for CPU and one
   GPU target, check against finite differences.
@@ -82,7 +82,11 @@ Results (2026-11-14, M5 Pro, 18 threads unless stated):
   | final-93 | 3.8e-10 | 6 / 6 | 1.77 s / 2.24 s |
   | venice-52 | 1.6e-4 at 300 iterations, 2.7e-7 at 2,000 | 232 / 190 at 300 | |
 
-  Times with 3 threads each, three runs in parallel; indicative only.
+  Times with 3 threads each, three runs in parallel; indicative only. The cost
+  differences are those with Ceres on one thread, which is how the parity tool now
+  runs it (D63); they were measured again on 2026-11-14 and are repeatable. With
+  several threads Ceres's end point varies from run to run, on ladybug-49 between
+  1e-9 and 5e-7 (document 12).
 - Histories match to 12 digits until the first inner solve long enough for rounding
   to change its stopping iteration (iteration 3 on trafalgar). Our own solver built
   without fused multiply-add diverges from itself at the same point, so this is
@@ -95,6 +99,26 @@ with the longer run (D60). Tested on macOS (owner's Mac) and, in a quick CI run
 warnings. A quick CI run takes about 1.5 minutes and bills about 6 minutes.
 
 ## Milestone 2: the main use case on CPU
+
+Before the features, from the review of milestones 0 and 1 (document 12). The
+review and the first features were done in parallel and merged on 2026-11-14; the
+status of each item after the merge:
+
+- Not done: a stored baseline of times and iteration counts, so the regression rule
+  of document 05 can be applied to every residual added here.
+- Done (D75): the CPU backend extended for several residual types. Iteration
+  histories of the four fast BAL problems are bit-identical to the review's code.
+- Half done: one loss per residual type in the options (D67 sets their defaults);
+  the `loss.*` file sections are not built.
+- Done (D66): the automatic gauge made aware of priors.
+- Done (D74): the Python boundary copies arrays and normalises quaternions on the
+  way in. Not done: public headers separated from internal ones.
+- Done (D62, document 12): the two small differences from Ceres in the trust-region
+  loop, and the small input and output fixes.
+- Done: Ceres harness cost functors for both prior types and the two new camera
+  models (Level 1 and Level 2 results below).
+
+Then:
 
 - Relative and global pose prior residuals; transform for a global prior set.
 - Starting poses built from the priors; reporting of unconnected groups.
@@ -117,12 +141,12 @@ and contribution files in place and hosted CI switched on (document 08).
 Results so far (2026-11-14, M5 Pro):
 
 - Built: relative and global pose priors with identity, rigid and similarity set
-  transforms (D62, D63, D65); the gauge chosen per group of connected images (D64);
-  OPENCV and OPENCV_FISHEYE (D66); unprojection for every model; triangulation on
-  rays (D70); track building with an epipolar check of matches, stage 1 and stage 2
-  (D67); starting poses from priors with groups reported (D68); the per-residual
-  report with down-weighted priors; `refine`, the main use case end to end (D69); the
-  synthetic generator (D71).
+  transforms (D64, D65, D67); the gauge chosen per group of connected images (D66);
+  OPENCV and OPENCV_FISHEYE (D68); unprojection for every model; triangulation on
+  rays (D72); track building with an epipolar check of matches, stage 1 and stage 2
+  (D69); starting poses from priors with groups reported (D70); the per-residual
+  report with down-weighted priors; `refine`, the main use case end to end (D71); the
+  synthetic generator (D73).
 - Level 1: prior residuals agree with finite differences to 6e-10 and with Ceres's
   automatic differentiation to 2e-15; OPENCV and OPENCV_FISHEYE with Ceres to 2e-14.
 - Level 2: 17 new synthetic cases against Ceres (relative priors, outliers in them,
@@ -153,7 +177,7 @@ Results so far (2026-11-14, M5 Pro):
   Keypoint noise is 0.5 px. With noise-free keypoints the images alone recover the
   truth exactly, so these figures are the scenes' own information limit, not a
   bias. The whole set runs in about 7 seconds.
-- Python bindings, first version (D72): problems, solve with callbacks, the report,
+- Python bindings, first version (D74): problems, solve with callbacks, the report,
   starting poses, track building and `refine`, plus conversion of ARKit and ARCore
   camera-to-world matrices. Tested from Python on a scene built in NumPy: through
   `refine`, a drifting tracker's 7.9 mm and 0.32 deg become 1.2 mm and 0.039 deg.
@@ -265,7 +289,7 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 | 3 | Depth formulation | Decided: per-point depth residual with per-image scale and offset first; photometric refinement optional and later | 02 |
 | 4 | Order of GPU backends | Decided: CPU, then Metal, then CUDA | 03 |
 | 5 | Is the incremental pipeline needed before the GPU backends | No | this document |
-| 6 | Can the existing system export real sessions for a private test set | Needed for milestone 2 | 05 |
+| 6 | Can the existing system export real sessions for a private test set | Still open. Needed before milestone 2 can finish: its exit condition is a real session | 05 |
 | 7 | Open source licence | Decided: Apache-2.0 | 08 |
 | 8 | GPU test hardware | Decided: the owner's Mac for Metal; laptop (Linux and Windows) for CUDA development; a Google Cloud L4 VM for development sessions. All GPU testing is by hand; CI stays free, with no nightly jobs | 08 |
 

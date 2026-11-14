@@ -12,6 +12,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <numeric>
 #include <stdexcept>
@@ -106,13 +107,32 @@ jba::LossType loss_type_of(const nb::handle& h) {
   return nb::cast<jba::LossType>(h);
 }
 
-// Problem array fields with a fixed row width.
+// Normalises the quaternion at the start of every row of `width` values. Poses
+// from single-precision sources (ARKit and ARCore matrices are float) are a few
+// 1e-8 off unit norm, beyond validate()'s 1e-9 (document 12). A zero quaternion is
+// left as it is, for validate() to refuse.
+void normalise_quaternions(std::vector<double>& v, std::size_t width) {
+  for (std::size_t r = 0; r + width <= v.size(); r += width) {
+    double* q = &v[r];
+    const double n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (n > 0 && std::isfinite(n))
+      for (int a = 0; a < 4; ++a) q[a] /= n;
+  }
+}
+
+// Problem array fields with a fixed row width. `quaternion_rows`: rows start with a
+// quaternion, normalised on the way in.
 template <typename T>
 void array_field(nb::class_<jba::Problem>& c, const char* name, std::vector<T> jba::Problem::*field,
-                 std::vector<std::size_t> tail, const char* doc) {
+                 std::vector<std::size_t> tail, const char* doc, bool quaternion_rows = false) {
   c.def_prop_rw(
       name, [field, tail](const jba::Problem& p) { return to_numpy(p.*field, tail); },
-      [field, tail, name](jba::Problem& p, nb::handle h) { p.*field = from_numpy(as_array<T>(h, name), tail, name); },
+      [field, tail, name, quaternion_rows](jba::Problem& p, nb::handle h) {
+        p.*field = from_numpy(as_array<T>(h, name), tail, name);
+        if constexpr (std::is_same_v<T, double>) {
+          if (quaternion_rows) normalise_quaternions(p.*field, tail.at(0));
+        }
+      },
       nb::for_getter(nb::rv_policy::move), doc);
 }
 
@@ -202,7 +222,8 @@ NB_MODULE(_core, m) {
            "Empty string when valid, otherwise the first problem found.");
   array_field(problem, "intrinsics_free", &jba::Problem::intrinsics_free, {},
               "Per intrinsics block: bit mask of freed groups (1 focal, 2 principal point, 4 distortion).");
-  array_field(problem, "poses", &jba::Problem::poses, {7}, "(N, 7) world-to-camera poses.");
+  array_field(problem, "poses", &jba::Problem::poses, {7},
+              "(N, 7) world-to-camera poses; quaternions are normalised on the way in.", true);
   array_field(problem, "image_intrinsics", &jba::Problem::image_intrinsics, {}, "(N,) intrinsics block per image.");
   array_field(problem, "image_fixed", &jba::Problem::image_fixed, {}, "(N,) 1 holds a pose fixed.");
   array_field(problem, "points", &jba::Problem::points, {3}, "(M, 3) world points.");
@@ -213,18 +234,19 @@ NB_MODULE(_core, m) {
   array_field(problem, "obs_sigma", &jba::Problem::obs_sigma, {}, "(K,) keypoint standard deviations, pixels.");
   array_field(problem, "rel_images", &jba::Problem::rel_images, {2}, "(R, 2) images i, j of each relative prior.");
   array_field(problem, "rel_pose", &jba::Problem::rel_pose, {7},
-              "(R, 7) relative priors: the motion T_j T_i^-1 (camera i to camera j coordinates).");
+              "(R, 7) relative priors: the motion T_j T_i^-1 (camera i to camera j coordinates).", true);
   array_field(problem, "rel_sigma", &jba::Problem::rel_sigma, {2},
               "(R, 2) rotation (rad) and translation (m) standard deviations; inf leaves a part out.");
   array_field(problem, "rel_sqrt_info", &jba::Problem::rel_sqrt_info, {6, 6}, "(R, 6, 6) whitening matrices.");
   array_field(problem, "glob_image", &jba::Problem::glob_image, {}, "(G,) image of each global prior.");
   array_field(problem, "glob_set", &jba::Problem::glob_set, {}, "(G,) prior set of each global prior.");
-  array_field(problem, "glob_pose", &jba::Problem::glob_pose, {7}, "(G, 7) world-to-camera poses in the set's frame.");
+  array_field(problem, "glob_pose", &jba::Problem::glob_pose, {7}, "(G, 7) world-to-camera poses in the set's frame.",
+              true);
   array_field(problem, "glob_sigma", &jba::Problem::glob_sigma, {2},
               "(G, 2) rotation (rad) and position (set units) standard deviations.");
   array_field(problem, "glob_sqrt_info", &jba::Problem::glob_sqrt_info, {6, 6}, "(G, 6, 6) whitening matrices.");
   array_field(problem, "set_transform", &jba::Problem::set_transform, {8},
-              "(S, 8) qw qx qy qz tx ty tz s per prior set: X_working = s R X_set + t.");
+              "(S, 8) qw qx qy qz tx ty tz s per prior set: X_working = s R X_set + t.", true);
   problem.def_prop_rw(
       "set_relation",
       [](const jba::Problem& p) {
@@ -248,8 +270,9 @@ NB_MODULE(_core, m) {
   m.def(
       "add_relative_priors_from_poses",
       [](jba::Problem& p, nb::handle poses, nb::handle pairs) {
-        jba::add_relative_priors_from_poses(p, from_numpy(as_array<double>(poses, "poses"), {7}, "poses"),
-                                            from_numpy(as_array<std::int32_t>(pairs, "pairs"), {2}, "pairs"));
+        auto pv = from_numpy(as_array<double>(poses, "poses"), {7}, "poses");
+        normalise_quaternions(pv, 7);
+        jba::add_relative_priors_from_poses(p, pv, from_numpy(as_array<std::int32_t>(pairs, "pairs"), {2}, "pairs"));
       },
       "problem"_a, "poses"_a, "pairs"_a,
       "Appends relative priors T_j T_i^-1 computed from per-image poses (N, 7) for each pair (i, j) in pairs (P, 2).");
@@ -265,7 +288,7 @@ NB_MODULE(_core, m) {
         return "Loss('" + std::string(jba::loss_name(l.type)) + "', " + std::to_string(l.scale) + ")";
       });
 
-  nb::class_<jba::PriorDefaults>(m, "PriorDefaults", "Weights for priors given without any (provisional, D65).")
+  nb::class_<jba::PriorDefaults>(m, "PriorDefaults", "Weights for priors given without any (provisional, D67).")
       .def(nb::init<>())
       .def_rw("relative_rotation_sigma", &jba::PriorDefaults::relative_rotation_sigma)
       .def_rw("relative_rotation_per_radian", &jba::PriorDefaults::relative_rotation_per_radian)
@@ -507,5 +530,5 @@ NB_MODULE(_core, m) {
       "scene"_a, "keypoints"_a, "matches"_a = nb::none(), "tracks"_a = nb::none(), "keypoint_sigma"_a = nb::none(),
       "options"_a = jba::RefineOptions{},
       "The main use case end to end: starting poses from the priors in `scene`, tracks from the matches, "
-      "triangulation, solve, outlier removal, repeated (D69).");
+      "triangulation, solve, outlier removal, repeated (D71).");
 }

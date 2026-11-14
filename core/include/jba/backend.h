@@ -9,7 +9,7 @@ namespace jba {
 struct StepResult {
   bool valid = false;            // the linear solve succeeded and predicts a decrease
   double model_cost_change = 0;  // predicted decrease, > 0 when valid
-  double step_norm = 0;          // norm of the (unscaled) tangent step
+  double step_norm = 0;          // norm of candidate - current, stored coordinates
   int linear_iterations = 0;
 };
 

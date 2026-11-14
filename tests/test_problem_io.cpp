@@ -114,7 +114,7 @@ int main() {
     p.point_fixed[3] = 1;
     p.obs_sigma.assign(p.num_observations(), 1.5);
     jba::RawSection future;
-    future.name = "lines.segments";
+    future.name = "prior.relative.pairs";  // not a section this version reads
     future.dtype = 2;  // int32
     future.shape = {2, 2};
     future.bytes.assign(16, 0);
@@ -150,6 +150,25 @@ int main() {
     trailing.insert(trailing.end(), 8, 0);
     spit(bad, trailing);
     EXPECT_THROWS(jba::read_problem(bad));
+    // A section name may appear once: a second copy is refused by the reader, and
+    // the writer refuses to produce one.
+    auto twice = bytes;
+    twice.insert(twice.end(), bytes.end() - 64, bytes.end());  // the unknown section again: 48 header, 16 data
+    ++twice[12];                                               // section count
+    spit(bad, twice);
+    std::string message;
+    try {
+      jba::read_problem(bad);
+    } catch (const std::exception& e) {
+      message = e.what();
+    }
+    EXPECT(message.find("'prior.relative.pairs' appears more than once") != std::string::npos);
+    auto repeated = p;
+    repeated.extra.push_back(future);
+    EXPECT_THROWS(jba::write_problem(bad, repeated));
+    auto shadow = p;
+    shadow.extra[0].name = "obs.xy";
+    EXPECT_THROWS(jba::write_problem(bad, shadow));
     for (const auto& f : {path, path2, bad}) fs::remove(f);
   }
 
@@ -167,6 +186,15 @@ int main() {
     two_blocks.intrinsics.insert(two_blocks.intrinsics.end(), p.intrinsics.begin(), p.intrinsics.end());
     EXPECT_THROWS(jba::write_problem(path, two_blocks));  // image_intrinsics missing
     EXPECT(!jba::validate(p).size());
+    // Values that are not finite are named, not left to fail the solve later.
+    for (auto member : {&jba::Problem::intrinsics, &jba::Problem::poses, &jba::Problem::points, &jba::Problem::obs_xy}) {
+      auto bad = p;
+      (bad.*member).back() = std::numeric_limits<double>::infinity();
+      EXPECT(jba::validate(bad).find("not finite") != std::string::npos);
+    }
+    auto bad_sigma = p;
+    bad_sigma.obs_sigma.assign(p.num_observations(), std::numeric_limits<double>::infinity());
+    EXPECT(!jba::validate(bad_sigma).empty());
     fs::remove(path);
   }
 

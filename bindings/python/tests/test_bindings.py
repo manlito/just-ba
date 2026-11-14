@@ -54,6 +54,13 @@ def test_arrays_round_trip_and_shapes():
     assert p.points[0, 0] != 99
     with pytest.raises(ValueError):
         p.poses = np.zeros((3, 6))
+    # Quaternions from single-precision sources are normalised on the way in.
+    q = p.poses
+    q[:, :4] = q[:, :4].astype(np.float32).astype(np.float64) * (1 + 3e-8)
+    assert np.abs(np.linalg.norm(q[:, :4], axis=1) - 1).max() > 1e-8
+    p.poses = q
+    np.testing.assert_allclose(np.linalg.norm(p.poses[:, :4], axis=1), 1, atol=1e-15)
+    assert p.validate() == ""
     p.model = jba.CameraModel.RADIAL
     assert p.model == jba.CameraModel.RADIAL and jba.num_params("RADIAL") == 5
     with pytest.raises(ValueError):

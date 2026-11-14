@@ -3,6 +3,10 @@
 //
 //   jba_parity <problem.jba | bal.txt> [options]
 //
+// Ceres runs on one thread unless --ceres-threads says otherwise (D63): with several
+// its end point varies from run to run, which just-ba's does not, and the comparison
+// would carry that noise. --threads sets just-ba's threads only.
+//
 // Checks: final cost (relative), iterations (ours <= ratio * Ceres's), and with
 // --check-parameters the median camera centre difference (relative to scene scale)
 // and median rotation difference. Prints JSON; exits non-zero on any failed check.
@@ -61,7 +65,7 @@ int main(int argc, char** argv) {
                            "[--global-prior-loss name:scale] [--gauge auto|none] [--max-iterations n] "
                            "[--function-tolerance x] [--linear-solver iterative_schur|sparse_schur|dense_schur] "
                            "[--check-parameters] [--max-cost-diff x] [--max-iteration-ratio x] "
-                           "[--max-centre-diff x] [--max-rotation-diff x] [--threads n]\n", argv[0]);
+                           "[--max-centre-diff x] [--max-rotation-diff x] [--threads n] [--ceres-threads n]\n", argv[0]);
       return 2;
     }
     const std::string input = argv[1];
@@ -69,6 +73,7 @@ int main(int argc, char** argv) {
     auto linear = jba_ceres::LinearSolver::IterativeSchur;
     std::string linear_name = "iterative_schur";
     bool check_parameters = false, verbose = false;
+    int ceres_threads = 1;
     double max_cost_diff = 1e-6, max_iteration_ratio = 1.5, max_centre_diff = 1e-6, max_rotation_diff = 1e-6;
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
@@ -119,6 +124,9 @@ int main(int argc, char** argv) {
         max_rotation_diff = std::stod(val);
       } else if (key == "--threads") {
         o.num_threads = std::stoi(val);
+      } else if (key == "--ceres-threads") {
+        ceres_threads = std::stoi(val);
+        if (ceres_threads < 1) throw std::invalid_argument("--ceres-threads must be at least 1");
       } else {
         throw std::invalid_argument("unknown option " + key);
       }
@@ -126,7 +134,8 @@ int main(int argc, char** argv) {
 
     const jba::Problem initial = ends_with(input, ".txt") ? jba::read_bal(input) : jba::read_problem(input);
     jba::Problem ours = initial, ref = initial;
-    const auto copts = jba_ceres::options_from(o, initial, linear);
+    auto copts = jba_ceres::options_from(o, initial, linear);
+    copts.num_threads = ceres_threads;
     const jba::SolverSummary s = jba::solve(ours, o);
     const jba_ceres::Result c = jba_ceres::solve(ref, copts);
 
@@ -177,10 +186,10 @@ int main(int argc, char** argv) {
     if (s.termination == jba::Termination::Failure) failures.push_back("just-ba failed: " + s.message);
     if (!c.usable) failures.push_back("Ceres failed");
 
-    std::printf("{\n  \"input\": \"%s\", \"loss\": \"%s\", \"loss_scale\": %g, \"gauge\": \"%s\", "
-                "\"linear_solver\": \"%s\",\n",
-                input.c_str(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale,
-                o.gauge == jba::GaugeMode::Auto ? "auto" : "none", linear_name.c_str());
+    std::printf("{\n  \"input\": %s, \"loss\": \"%s\", \"loss_scale\": %g, \"gauge\": \"%s\", "
+                "\"linear_solver\": \"%s\", \"ceres_threads\": %d,\n",
+                jba_ceres::json_string(input).c_str(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale,
+                o.gauge == jba::GaugeMode::Auto ? "auto" : "none", linear_name.c_str(), ceres_threads);
     std::printf("  \"images\": %zu, \"points\": %zu, \"observations\": %zu, \"relative_priors\": %zu, "
                 "\"global_priors\": %zu,\n", initial.num_images(), initial.num_points(), initial.num_observations(),
                 initial.num_relative_priors(), initial.num_global_priors());

@@ -95,7 +95,7 @@ foreach(_name IN LISTS _bal_set)
     add_test(NAME parity_bal_${_name} COMMAND jba_parity ${_file} --gauge none ${_bal_args_${_name}})
     set_tests_properties(parity_bal_${_name} PROPERTIES LABELS "parity;bal")
     if(_name STREQUAL "problem-52-64053-pre")
-      # About two minutes; CI runs it only in full mode.
+      # About four minutes with Ceres on one thread (D63); CI runs it only in full mode.
       set_tests_properties(parity_bal_${_name} PROPERTIES LABELS "parity;bal;slow")
     endif()
   else()

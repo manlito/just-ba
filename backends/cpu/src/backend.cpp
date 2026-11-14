@@ -1003,33 +1003,50 @@ struct CpuBackend::Impl {
     c_points = points;
     c_intr = intr;
     c_sets = sets;
+    // The step norm is taken in stored coordinates (candidate minus current, the
+    // quaternion included), as Ceres does for its parameter tolerance (D62).
     double sq = 0;
+    auto add_difference = [&sq](const double* a, const double* b, int n) {
+      for (int c = 0; c < n; ++c) sq += (a[c] - b[c]) * (a[c] - b[c]);
+    };
     for (const FBlock& fb : fblocks) {
       double delta[kMaxParams];
-      for (int c = 0; c < fb.size; ++c) {
-        delta[c] = f_scale[fb.offset + c] * dx_f[fb.offset + c];
-        sq += delta[c] * delta[c];
-      }
+      for (int c = 0; c < fb.size; ++c) delta[c] = f_scale[fb.offset + c] * dx_f[fb.offset + c];
       const auto idx = static_cast<std::size_t>(fb.index);
       switch (fb.kind) {
-        case BlockKind::Pose: pose_retract(&poses[7 * idx], delta, &c_poses[7 * idx]); break;
+        case BlockKind::Pose:
+          pose_retract(&poses[7 * idx], delta, &c_poses[7 * idx]);
+          add_difference(&c_poses[7 * idx], &poses[7 * idx], 7);
+          break;
         case BlockKind::Intrinsics: {
-          double* k = &c_intr[static_cast<std::size_t>(np) * idx];
+          const std::size_t at = static_cast<std::size_t>(np) * idx;
+          double* k = &c_intr[at];
           for (int c = 0; c < fb.size; ++c) k[c] += delta[c];
+          add_difference(k, &intr[at], fb.size);
           break;
         }
-        case BlockKind::SetRigid: pose_retract(&sets[8 * idx], delta, &c_sets[8 * idx]); break;
-        case BlockKind::SetScale: c_sets[8 * idx + 7] = sets[8 * idx + 7] * std::exp(delta[0]); break;
+        // A set's transform is two blocks, as in the Ceres harness: the rigid part
+        // (7 stored values) and the scale (1).
+        case BlockKind::SetRigid:
+          pose_retract(&sets[8 * idx], delta, &c_sets[8 * idx]);
+          add_difference(&c_sets[8 * idx], &sets[8 * idx], 7);
+          break;
+        case BlockKind::SetScale:
+          c_sets[8 * idx + 7] = sets[8 * idx + 7] * std::exp(delta[0]);
+          add_difference(&c_sets[8 * idx + 7], &sets[8 * idx + 7], 1);
+          break;
       }
     }
     for (std::size_t j = 0; j < point_off.size(); ++j) {
       const int e = point_off[j];
       if (e < 0) continue;
       for (int c = 0; c < 3; ++c) {
+        // Two statements on purpose: one expression would let the compiler fuse the
+        // multiply and add, which changes rounding and with it the iteration history.
         const double d = e_scale[e + c] * dx_e[e + c];
         c_points[3 * j + c] += d;
-        sq += d * d;
       }
+      add_difference(&c_points[3 * j], &points[3 * j], 3);
     }
     out.step_norm = std::sqrt(sq);
     out.valid = std::isfinite(out.model_cost_change) && out.model_cost_change > 0 && std::isfinite(out.step_norm);
