@@ -89,9 +89,10 @@ Results (2026-11-14, M5 Pro, 18 threads unless stated):
   rounding sensitivity, not a difference in the method.
 - Results are bit-identical for 1 to 18 threads (D59).
 
-Status: exit met on four of the five problems at better than 1e-8; venice-52 only
-with the longer run (D60). Built and tested on macOS; the CI run on Linux and
-Windows is pending.
+Status: done. Exit met on four of the five problems at better than 1e-8, venice-52
+with the longer run (D60). Tested on macOS (owner's Mac) and, in a quick CI run
+(D61) on 2026-11-14, on Ubuntu 24.04 and Windows Server 2025, with no compiler
+warnings. A quick CI run takes about 1.5 minutes and bills about 6 minutes.
 
 ## Milestone 2: the main use case on CPU
 
