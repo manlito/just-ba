@@ -78,7 +78,7 @@ problems the end points still agree to 1e-8 or better. On venice-52 with the gau
 held, rounding alone selects different basins, so BAL parity runs without gauge
 fixing (decision D60). Ceres itself is not repeatable from run to run with several
 threads; on ladybug-49 that alone moves the final cost difference between 1e-9 and
-5e-7 (document 12).
+5e-7. The parity tool therefore runs Ceres on one thread (D63).
 
 ### Problem sets
 

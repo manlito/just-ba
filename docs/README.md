@@ -57,8 +57,6 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
 2. **Real sessions for a private test set.** Milestone 2 cannot meet its exit
    condition without them.
 3. **Python boundary**: copy arrays or view them (document 12; recommendation: copy).
-4. **Ceres on one thread in the parity tests**, so the comparison is repeatable
-   (document 12).
 
 ## Reference material
 

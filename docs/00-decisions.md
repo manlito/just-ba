@@ -121,6 +121,7 @@ Made during the milestone 1 work and recorded for the owner to review.
 | # | Decision | Why | Rejected or ruled out |
 |---|---|---|---|
 | D62 | Two details of the trust-region loop that did not follow Ceres were changed to follow it, completing D54: the step norm used by the parameter tolerance (and reported in the history) is the norm of candidate minus current in stored coordinates, quaternion included; the solve fails on reaching `max_consecutive_invalid_steps`, not on exceeding it. The owner asked for the fix. | Found by comparing the loop with Ceres 2.2.0's source (document 12). Iteration histories on the five BAL problems are bit-identical before and after. | Recording them as accepted differences. |
+| D63 | In the parity tool, Ceres runs on one thread by default (`--ceres-threads` changes it). just-ba's thread count is unaffected. The owner's choice. | With several threads Ceres's end point varies from run to run: on ladybug-49 the relative cost difference moved between 1e-9 and 5e-7 against a limit of 1e-6. On one thread, eight runs of ladybug-49 gave one result; final-93 still alternates between two results 7e-12 apart, which does not matter. The venice-52 test now takes about four minutes instead of two (it is in CI's full mode only, D61); the others gain a second or two. | Leaving Ceres multithreaded and accepting a thin, noisy margin. Loosening the limit. |
 
 ## Still open
 
@@ -128,7 +129,6 @@ Made during the milestone 1 work and recorded for the owner to review.
 |---|---|
 | Default prior weight values (D21) | Milestone 2, from real captures |
 | Whether real ARKit or ARCore sessions can be exported for a private test set | Before milestone 2 can finish (its exit condition needs one) |
-| Whether the Ceres side of the parity tests runs on one thread. With several, Ceres's end point varies from run to run: on ladybug-49 the relative cost difference was seen between 1e-9 and 5e-7, against a limit of 1e-6 (document 12) | Start of milestone 2 |
 | Python boundary: copy arrays in and out, or view them. Recommendation: copy, and normalise quaternions there (document 12) | Before the bindings are written |
 | Shape of the backend for several residual types (document 12, item 3) | Start of milestone 2, recorded as a decision when done |
 | Which linear solver is the default at each problem size | From the benchmark |

@@ -83,8 +83,10 @@ Results (2026-11-14, M5 Pro, 18 threads unless stated):
   | venice-52 | 1.6e-4 at 300 iterations, 2.7e-7 at 2,000 | 232 / 190 at 300 | |
 
   Times with 3 threads each, three runs in parallel; indicative only. The cost
-  differences are one run each: with several threads Ceres's end point varies from
-  run to run, on ladybug-49 between 1e-9 and 5e-7 (document 12).
+  differences are those with Ceres on one thread, which is how the parity tool now
+  runs it (D63); they were measured again on 2026-11-14 and are repeatable. With
+  several threads Ceres's end point varies from run to run, on ladybug-49 between
+  1e-9 and 5e-7 (document 12).
 - Histories match to 12 digits until the first inner solve long enough for rounding
   to change its stopping iteration (iteration 3 on trafalgar). Our own solver built
   without fused multiply-add diverges from itself at the same point, so this is

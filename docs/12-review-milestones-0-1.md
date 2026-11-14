@@ -135,7 +135,6 @@ hand.
 
 1. Can real sessions be exported (item 1)?
 2. Is copying at the Python boundary acceptable (item 7)?
-3. Should the Ceres side of the parity tests run on one thread (see below)?
 
 ## Follow-up (2026-11-14)
 
@@ -165,10 +164,12 @@ Two things learned while checking:
   ladybug-49 with identical settings gave Ceres final costs of 13344.31821,
   13344.31895 and 13344.32537 (the last in 33 iterations, not 35), against our
   13344.31823 every time. The relative difference therefore moved between 1e-9 and
-  5e-7, and the test's limit is 1e-6. The figures in document 07's table are one
-  sample each. The test has not failed, but the margin is thinner than the table
-  suggests. Running the Ceres side on one thread would make the comparison
-  repeatable, at the price of a slower test; this is left to the owner.
+  5e-7, and the test's limit is 1e-6. The test has not failed, but the margin was
+  thinner than the table in document 07 suggests. The owner chose to run the Ceres side on one thread (D63). Measured
+  afterwards: eight runs of ladybug-49 give one Ceres result and a difference of
+  5.96e-9 every time; final-93 alternates between two results 7e-12 apart; the four
+  fast BAL problems reproduce the table in document 07; the venice-52 test takes
+  about four minutes instead of two. Full parity set: 38 of 38.
 - **A harmless-looking edit changed our own results.** Writing the point update as
   one expression let the compiler fuse the multiply and the add, and ladybug-49
   ended at 13344.318211 where it had ended at 13344.318229. The statement was put
