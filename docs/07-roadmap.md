@@ -69,8 +69,9 @@ Results (2026-11-14, M5 Pro, 18 threads unless stated):
 - Level 1 against Ceres: residuals and Jacobians agree with Ceres's automatic
   differentiation to 1.3e-14 for all four models; losses to 1e-15.
 - Level 2, synthetic (14 cases: every model, fixed blocks, sigma, shared and
-  per-image intrinsics, three losses with 5% outliers): final cost, camera centres
-  and rotations within the document 05 thresholds.
+  per-image intrinsics, three losses with 5% outliers), both solvers run to tight
+  tolerances: final costs agree to 1e-15 to 2e-12, camera centres to 1e-15 (2e-8
+  with all shared intrinsics free), rotations exactly.
 - Level 2, BAL test set (the smallest problem of each family, no gauge, D60):
 
   | Problem | Final cost, relative difference | Iterations, just-ba / Ceres | Time, just-ba / Ceres |

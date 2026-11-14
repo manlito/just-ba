@@ -12,6 +12,30 @@
 
 namespace jba_test {
 
+// Random numbers that are the same on every platform. std::mt19937_64 is fully
+// specified, but std::uniform_real_distribution and std::normal_distribution are
+// not: libc++ and libstdc++ give different values. These use only the raw engine
+// output and arithmetic.
+struct Uniform {
+  double lo, hi;
+  Uniform(double a = 0, double b = 1) : lo(a), hi(b) {}
+  double operator()(std::mt19937_64& g) const {
+    return lo + (hi - lo) * static_cast<double>(g() >> 11) * 0x1.0p-53;
+  }
+};
+
+// Approximately normal: the sum of twelve uniforms minus six (Irwin-Hall). Plenty
+// for test noise, and free of transcendental functions.
+struct Normal {
+  double mean, sigma;
+  Normal(double m = 0, double s = 1) : mean(m), sigma(s) {}
+  double operator()(std::mt19937_64& g) const {
+    double z = -6;
+    for (int i = 0; i < 12; ++i) z += static_cast<double>(g() >> 11) * 0x1.0p-53;
+    return mean + sigma * z;
+  }
+};
+
 inline void typical_intrinsics(jba::CameraModel model, double* k) {
   using M = jba::CameraModel;
   switch (model) {
@@ -25,8 +49,8 @@ inline void typical_intrinsics(jba::CameraModel model, double* k) {
 
 // Random unit quaternion with rotation angle up to max_angle.
 inline void random_rotation(std::mt19937_64& rng, double max_angle, double* q) {
-  std::normal_distribution<double> n(0, 1);
-  std::uniform_real_distribution<double> u(0, max_angle);
+  jba_test::Normal n(0, 1);
+  jba_test::Uniform u(0, max_angle);
   double axis[3] = {n(rng), n(rng), n(rng)};
   const double len = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
   const double angle = u(rng);
@@ -65,8 +89,8 @@ inline void reference_project(jba::CameraModel model, const double* k, const dou
 inline jba::Problem random_problem(jba::CameraModel model, int images, int points, std::uint64_t seed,
                                    double pixel_noise = 0.5) {
   std::mt19937_64 rng(seed);
-  std::uniform_real_distribution<double> u(-1, 1);
-  std::normal_distribution<double> noise(0, pixel_noise);
+  jba_test::Uniform u(-1, 1);
+  jba_test::Normal noise(0, pixel_noise);
   jba::Problem p;
   p.model = model;
   p.intrinsics.resize(static_cast<std::size_t>(jba::num_params(model)));

@@ -20,7 +20,7 @@ namespace {
 void perturb(jba::Problem& p, std::uint64_t seed, double point_sigma = 0.02, double rot_sigma = 0.01,
              double trans_sigma = 0.02) {
   std::mt19937_64 rng(seed);
-  std::normal_distribution<double> n(0, 1);
+  jba_test::Normal n(0, 1);
   for (double& v : p.points) v += point_sigma * n(rng);
   for (std::size_t i = 0; i < p.num_images(); ++i) {
     double* pose = &p.poses[7 * i];
@@ -149,7 +149,7 @@ int main() {
     auto truth = jba_test::random_problem(CameraModel::SimpleRadial, 10, 300, 33, 0.3);
     auto noisy = truth;
     std::mt19937_64 rng(34);
-    std::uniform_real_distribution<double> u(0, 1);
+    jba_test::Uniform u(0, 1);
     for (std::size_t k = 0; k < noisy.num_observations(); ++k) {
       if (u(rng) < 0.05) noisy.obs_xy[2 * k] += 40;
     }

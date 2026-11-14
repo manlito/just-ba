@@ -93,6 +93,8 @@ int main(int argc, char** argv) {
         o.max_iterations = std::stoi(val);
       } else if (key == "--function-tolerance") {
         o.function_tolerance = std::stod(val);
+      } else if (key == "--parameter-tolerance") {
+        o.parameter_tolerance = std::stod(val);
       } else if (key == "--linear-solver") {
         linear_name = val;
         if (val == "iterative_schur") linear = jba_ceres::LinearSolver::IterativeSchur;

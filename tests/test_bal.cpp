@@ -12,6 +12,7 @@
 #include "check.h"
 #include "jba/cpu/cost.h"
 #include "jba/problem_io.h"
+#include "synthetic.h"
 
 namespace {
 
@@ -28,7 +29,7 @@ void rodrigues(const double* aa, const double* X, double* out) {
 
 int main() {
   std::mt19937_64 rng(3);
-  std::uniform_real_distribution<double> u(-1, 1);
+  jba_test::Uniform u(-1, 1);
   const int n_cam = 3, n_pts = 6;
   double cams[n_cam][9], pts[n_pts][3];
   for (auto& c : cams) {

@@ -139,7 +139,7 @@ int main() {
   const CameraModel models[] = {CameraModel::SimplePinhole, CameraModel::Pinhole, CameraModel::SimpleRadial,
                                 CameraModel::Radial};
   std::mt19937_64 rng(42);
-  std::uniform_real_distribution<double> u(-1, 1);
+  jba_test::Uniform u(-1, 1);
   int cases = 0;
 
   for (CameraModel model : models) {

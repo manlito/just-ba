@@ -28,6 +28,9 @@ std::optional<LossType> loss_from_name(std::string_view name);
 // rho(s), rho'(s), rho''(s).
 inline void evaluate_loss(const Loss& loss, double s, double rho[3]) {
   const double a2 = loss.scale * loss.scale;
+  rho[0] = s;
+  rho[1] = 1;
+  rho[2] = 0;
   switch (loss.type) {
     case LossType::None:
       rho[0] = s;

@@ -21,7 +21,7 @@ using jba::CameraModel;
 
 int main() {
   std::mt19937_64 rng(17);
-  std::uniform_real_distribution<double> u(-1, 1);
+  jba_test::Uniform u(-1, 1);
   double worst = 0;
   jba_ceres::LeftRotationVectorQuaternion manifold;
 

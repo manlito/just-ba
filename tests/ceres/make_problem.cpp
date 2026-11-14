@@ -55,8 +55,8 @@ int main(int argc, char** argv) {
 
     auto p = jba_test::random_problem(model, images, points, seed, noise);
     std::mt19937_64 rng(seed + 1000);
-    std::normal_distribution<double> n(0, 1);
-    std::uniform_real_distribution<double> u(0, 1);
+    jba_test::Normal n(0, 1);
+    jba_test::Uniform u(0, 1);
 
     // Gross outliers: move a fraction of observations by 20 to 60 pixels.
     for (std::size_t k = 0; k < p.num_observations(); ++k) {

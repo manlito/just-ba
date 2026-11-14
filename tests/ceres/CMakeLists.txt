@@ -18,10 +18,14 @@ add_test(NAME test_ceres_level1 COMMAND test_ceres_level1)
 
 # Level 2 on synthetic problems: one generated file per case, then a parity run.
 #   jba_parity_case(<name> "<generator options>" "<parity options>")
+# Both solvers run to tight tolerances, so they stop at the minimum rather than
+# wherever the default stopping rule (|cost change| <= 1e-6 cost) fires; otherwise
+# the end points could differ by about that much and the comparison would be noise.
 function(jba_parity_case name gen parity)
   set(file ${CMAKE_CURRENT_BINARY_DIR}/synthetic_${name}.jba)
   separate_arguments(gen_list UNIX_COMMAND "${gen}")
-  separate_arguments(parity_list UNIX_COMMAND "${parity}")
+  separate_arguments(parity_list UNIX_COMMAND
+    "--function-tolerance 1e-12 --parameter-tolerance 1e-12 --max-iterations 200 ${parity}")
   add_test(NAME parity_make_${name} COMMAND jba_make_problem ${file} ${gen_list})
   add_test(NAME parity_${name} COMMAND jba_parity ${file} ${parity_list})
   set_tests_properties(parity_make_${name} PROPERTIES FIXTURES_SETUP synthetic_${name})
