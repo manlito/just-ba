@@ -22,9 +22,9 @@ Conventions:
 - ARKit and ARCore report camera-to-world poses with a different axis convention.
   The Python layer converts on the way in and out; the exact conversions are to be
   verified when the importer is written.
-- Rotations are stored as unit quaternions and updated through a 3-parameter
-  tangent step. Whether the pose step is on SE(3) or on rotation and translation
-  separately is fixed during the first residual spike; both are standard.
+- Rotations are stored as unit quaternions (w, x, y, z; D47) and updated through a
+  3-parameter tangent step. Rotation and translation are updated separately:
+  `R <- Exp(dtheta) R`, `t <- t + dt` (D46).
 
 ## Objective
 
@@ -37,8 +37,9 @@ minimize   sum over all residuals   rho_k( || W_k r_k ||^2 )
   of standard deviations and terms of different kinds can be added.
 - `rho_k` is a robust loss, chosen per residual type.
 
-Robust losses offered: none, Huber, Cauchy, Geman-McClure. Applied by iterative
-reweighting. Graduated non-convexity (start with a forgiving loss, tighten over
+Robust losses offered: none, Huber, Cauchy, Geman-McClure, with Ceres's definitions
+(D56). Applied by iterative reweighting. As built after milestone 1 there is one
+loss setting, for reprojection; one per residual type comes with the priors. Graduated non-convexity (start with a forgiving loss, tighten over
 rounds) is offered as an outer schedule, because it is the published remedy for
 exactly our situation of gross outliers in priors (see pose priors below).
 

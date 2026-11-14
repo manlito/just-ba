@@ -116,11 +116,21 @@ Made during the milestone 1 work and recorded for the owner to review.
 | D60 | BAL parity is run without gauge fixing, as Ceres's own BAL example does. venice-52 runs 300 iterations with a 1e-3 cost tolerance in CI; agreement to 3e-7 after 2,000 iterations is a manual check. | With the gauge held, venice-52's end point depends on rounding: our solver lands at 248k or 244k depending on fused multiply-add, Ceres at 236k (iterative) or 242k (exact). Without it, both solvers follow the same path to the same cost. The other four problems agree to 1e-8 or better either way. | Requiring 1e-6 on venice-52 at Ceres's default 50 iterations: neither solver has converged then. |
 | D61 | CI has two manual modes. Quick (the default): Linux and Windows build and test, plus Ceres parity without slow tests. Full: adds macOS and the slow tests (venice-52). | The owner wants CI runs cheap. macOS bills at 10x and is tested on the owner's Mac anyway; venice-52 takes about two minutes. The Ceres build is cached, so a quick run is mostly compile time. | One mode that always runs everything. |
 
+## After the review of milestones 0 and 1 (2026-11-14)
+
+| # | Decision | Why | Rejected or ruled out |
+|---|---|---|---|
+| D62 | Two details of the trust-region loop that did not follow Ceres were changed to follow it, completing D54: the step norm used by the parameter tolerance (and reported in the history) is the norm of candidate minus current in stored coordinates, quaternion included; the solve fails on reaching `max_consecutive_invalid_steps`, not on exceeding it. The owner asked for the fix. | Found by comparing the loop with Ceres 2.2.0's source (document 12). Iteration histories on the five BAL problems are bit-identical before and after. | Recording them as accepted differences. |
+| D63 | In the parity tool, Ceres runs on one thread by default (`--ceres-threads` changes it). just-ba's thread count is unaffected. The owner's choice. | With several threads Ceres's end point varies from run to run: on ladybug-49 the relative cost difference moved between 1e-9 and 5e-7 against a limit of 1e-6. On one thread, eight runs of ladybug-49 gave one result; final-93 still alternates between two results 7e-12 apart, which does not matter. The venice-52 test now takes about four minutes instead of two (it is in CI's full mode only, D61); the others gain a second or two. | Leaving Ceres multithreaded and accepting a thin, noisy margin. Loosening the limit. |
+
 ## Still open
 
 | Item | When it gets decided |
 |---|---|
 | Default prior weight values (D21) | Milestone 2, from real captures |
+| Whether real ARKit or ARCore sessions can be exported for a private test set | Before milestone 2 can finish (its exit condition needs one) |
+| Python boundary: copy arrays in and out, or view them. Recommendation: copy, and normalise quaternions there (document 12) | Before the bindings are written |
+| Shape of the backend for several residual types (document 12, item 3) | Start of milestone 2, recorded as a decision when done |
 | Which linear solver is the default at each problem size | From the benchmark |
 | Whether venice-52 with the gauge held should be studied further (different basins by rounding, our two runs slightly above Ceres's two) | When strategy B (direct solve) exists, which removes the inner-solve rounding sensitivity |
 | Whether the caller's system or the library joins groups of frames left unconnected after a tracking break | When real broken sessions are available |

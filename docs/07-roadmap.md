@@ -6,7 +6,7 @@ milestone has an exit condition instead.
 
 ## Milestone 0: decisions and spikes
 
-- Language is decided: C++ (document 06). Set up the build (C++20, CMake) on Linux,
+- Language is decided: C++ (document 06). Set up the build (C++23, D52; CMake) on Linux,
   macOS and Windows.
 - Spike the symbolic tool on the reprojection residual: derive, emit for CPU and one
   GPU target, check against finite differences.
@@ -82,7 +82,11 @@ Results (2026-11-14, M5 Pro, 18 threads unless stated):
   | final-93 | 3.8e-10 | 6 / 6 | 1.77 s / 2.24 s |
   | venice-52 | 1.6e-4 at 300 iterations, 2.7e-7 at 2,000 | 232 / 190 at 300 | |
 
-  Times with 3 threads each, three runs in parallel; indicative only.
+  Times with 3 threads each, three runs in parallel; indicative only. The cost
+  differences are those with Ceres on one thread, which is how the parity tool now
+  runs it (D63); they were measured again on 2026-11-14 and are repeatable. With
+  several threads Ceres's end point varies from run to run, on ladybug-49 between
+  1e-9 and 5e-7 (document 12).
 - Histories match to 12 digits until the first inner solve long enough for rounding
   to change its stopping iteration (iteration 3 on trafalgar). Our own solver built
   without fused multiply-add diverges from itself at the same point, so this is
@@ -95,6 +99,22 @@ with the longer run (D60). Tested on macOS (owner's Mac) and, in a quick CI run
 warnings. A quick CI run takes about 1.5 minutes and bills about 6 minutes.
 
 ## Milestone 2: the main use case on CPU
+
+Before the features, from the review of milestones 0 and 1 (document 12):
+
+- A stored baseline of times and iteration counts for the current solver, so the
+  regression rule of document 05 can be applied to every residual added here.
+- The CPU backend reshaped for several residual types, with bit-identical
+  histories on the parity suite before and after.
+- One loss per residual type, in the options and in the problem file (`loss.*`).
+- The automatic gauge made aware of priors (document 02, gauge table).
+- The Python boundary decided (copy or view; quaternions normalised on the way in),
+  and public headers separated from internal ones.
+- Done already (D62, document 12): the two small differences from Ceres in the
+  trust-region loop, and the small input and output fixes.
+- Ceres harness: cost functors for both prior types and the two new camera models.
+
+Then:
 
 - Relative and global pose prior residuals; transform for a global prior set.
 - Starting poses built from the priors; reporting of unconnected groups.
@@ -217,7 +237,7 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 | 3 | Depth formulation | Decided: per-point depth residual with per-image scale and offset first; photometric refinement optional and later | 02 |
 | 4 | Order of GPU backends | Decided: CPU, then Metal, then CUDA | 03 |
 | 5 | Is the incremental pipeline needed before the GPU backends | No | this document |
-| 6 | Can the existing system export real sessions for a private test set | Needed for milestone 2 | 05 |
+| 6 | Can the existing system export real sessions for a private test set | Still open. Needed before milestone 2 can finish: its exit condition is a real session | 05 |
 | 7 | Open source licence | Decided: Apache-2.0 | 08 |
 | 8 | GPU test hardware | Decided: the owner's Mac for Metal; laptop (Linux and Windows) for CUDA development; a Google Cloud L4 VM for development sessions. All GPU testing is by hand; CI stays free, with no nightly jobs | 08 |
 

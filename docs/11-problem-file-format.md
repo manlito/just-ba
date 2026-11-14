@@ -41,7 +41,11 @@ damaged by text-mode transfers. Nothing may follow the last section.
   problem that does not validate. It never reads a damaged file silently.
 - Sections a reader does not know are kept verbatim and written back unchanged.
   New optional sections can therefore be added without a version change.
-- The version changes only when an existing section changes meaning.
+- The version changes only when an existing section changes meaning, or when a
+  data type is added: a reader fails on a data type it does not know, even in a
+  section it would otherwise keep.
+- A section name appears once. A reader fails on a second copy, and the writer
+  refuses to produce one.
 - Section order does not matter. Writers use the order of the table below.
 
 ## Sections, version 1
@@ -64,8 +68,8 @@ per block for the camera model.
 | `obs.xy` | f64 | [K, 2] | yes | Keypoint in pixels, in the same pixel convention as the principal point in `intrinsics` |
 | `obs.sigma` | f64 | [K] | no | Keypoint standard deviation in pixels. Absent: 1 |
 
-Validation: index ranges, array lengths, positive sigmas, and quaternion norms
-within 1e-9 of one.
+Validation: index ranges, array lengths, finite values, positive sigmas, and
+quaternion norms within 1e-9 of one.
 
 Normally a session has one intrinsics block (D11). Several blocks, all of the
 model in `camera.model`, are allowed so that BAL problems, which have one camera
@@ -82,7 +86,7 @@ Reserved names, added in the milestones that need them. Each will be optional.
 | `image.gravity` | 3 | Gravity direction per image |
 | `depth.*` | 3 | Depth at keypoints, confidence, per-image scale and offset |
 | `lines.*` | 3 | Line segments per image for the Manhattan prior |
-| `loss.*` | 1 | Robust loss per residual type |
+| `loss.*` | 2 | Robust loss per residual type. Planned for milestone 1 and not built; until then the loss is a solver option |
 
 ## BAL conversion
 

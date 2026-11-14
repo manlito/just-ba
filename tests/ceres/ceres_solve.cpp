@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     if (!output.empty()) jba::write_problem(output, p);
 
     const double rel = std::abs(r.initial_cost - jba_initial) / std::max(1.0, std::abs(r.initial_cost));
-    std::printf("{\n  \"input\": \"%s\",\n  \"ceres_version\": \"%s\",\n  \"model\": \"%s\",\n", input.c_str(),
+    std::printf("{\n  \"input\": %s,\n  \"ceres_version\": \"%s\",\n  \"model\": \"%s\",\n", jba_ceres::json_string(input).c_str(),
                 CERES_VERSION_STRING, std::string(jba::model_name(p.model)).c_str());
     std::printf("  \"images\": %zu, \"points\": %zu, \"observations\": %zu,\n", p.num_images(), p.num_points(),
                 p.num_observations());

@@ -72,7 +72,7 @@ void run_trust_region(Backend& backend, const SolverOptions& o, const IterationC
 
     bool accepted = false;
     if (!step.valid) {
-      if (++invalid_steps > o.max_consecutive_invalid_steps)
+      if (++invalid_steps >= o.max_consecutive_invalid_steps)  // as in Ceres
         return finish(Termination::Failure, "too many consecutive invalid steps");
       radius /= decrease_factor;
       decrease_factor *= 2;

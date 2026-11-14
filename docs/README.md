@@ -6,7 +6,10 @@ job is refining reconstructions that come with noisy camera poses from ARKit, AR
 or another tracker.
 
 Status: milestone 1 (CPU solver, parity with Ceres) done; see the results in
-[07-roadmap.md](07-roadmap.md). Build instructions: [../README.md](../README.md).
+[07-roadmap.md](07-roadmap.md). Milestones 0 and 1 were reviewed before milestone 2;
+the findings and the changes to make first are in
+[12-review-milestones-0-1.md](12-review-milestones-0-1.md). Build instructions:
+[../README.md](../README.md).
 
 ## Documents
 
@@ -24,6 +27,7 @@ Status: milestone 1 (CPU solver, parity with Ceres) done; see the results in
 | 09 | [Desktop app](09-desktop-app.md) | The later Windows and Mac app, and what it requires of the library now |
 | 10 | [Mobile app as a consumer](10-mobile-consumer.md) | A separate-repository phone app that will link this library, and the constraints that keeps open |
 | 11 | [Problem file format](11-problem-file-format.md) | The on-disk format used by the CLI and tests |
+| 12 | [Review of milestones 0 and 1](12-review-milestones-0-1.md) | What was checked, what was found, what changes before milestone 2 |
 
 ## Decisions waiting on the owner
 
@@ -50,6 +54,9 @@ Decided so far:
 Still open (full list in [00-decisions.md](00-decisions.md)):
 
 1. **Default prior weights.** The values need real captures to set.
+2. **Real sessions for a private test set.** Milestone 2 cannot meet its exit
+   condition without them.
+3. **Python boundary**: copy arrays or view them (document 12; recommendation: copy).
 
 ## Reference material
 

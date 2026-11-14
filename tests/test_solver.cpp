@@ -178,6 +178,82 @@ int main() {
     auto p = jba_test::random_problem(CameraModel::Pinhole, 3, 10, 36);
     p.obs_point[0] = 999;
     EXPECT_THROWS(jba::solve(p));
+    auto q = jba_test::random_problem(CameraModel::Pinhole, 3, 10, 36);
+    q.points[4] = std::nan("");
+    EXPECT_THROWS(jba::solve(q));
+  }
+
+  // A start with no finite cost ends in Failure, with the parameters untouched.
+  // An image with zero translation sees a point at the origin at depth exactly
+  // zero, whatever its rotation and however the platform rounds.
+  {
+    auto p = jba_test::random_problem(CameraModel::Pinhole, 4, 40, 37);
+    const std::size_t i = static_cast<std::size_t>(p.obs_image[0]), j = static_cast<std::size_t>(p.obs_point[0]);
+    for (std::size_t a = 0; a < 3; ++a) p.poses[7 * i + 4 + a] = p.points[3 * j + a] = 0.0;
+    const auto before = p;
+    const auto s = jba::solve(p);
+    EXPECT(s.termination == jba::Termination::Failure);
+    EXPECT(s.iterations == 0);
+    EXPECT(p.poses == before.poses && p.points == before.points);
+  }
+
+  // An image and a point without observations are left alone; the same point
+  // observed twice in one image is accepted; the rest still converges.
+  {
+    auto p = jba_test::random_problem(CameraModel::SimpleRadial, 8, 150, 38, 0.0);
+    perturb(p, 39);
+    for (int a = 0; a < 7; ++a) p.poses.push_back(p.poses[static_cast<std::size_t>(a)]);
+    p.points.insert(p.points.end(), {1.0, 2.0, 3.0});
+    p.obs_image.push_back(p.obs_image[0]);
+    p.obs_point.push_back(p.obs_point[0]);
+    p.obs_xy.push_back(p.obs_xy[0]);
+    p.obs_xy.push_back(p.obs_xy[1]);
+    const std::size_t image = p.num_images() - 1, point = p.num_points() - 1;
+    const auto before = p;
+    jba::SolverOptions o;
+    o.function_tolerance = 1e-12;
+    o.max_iterations = 100;
+    const auto s = jba::solve(p, o);
+    EXPECT(s.termination == jba::Termination::Convergence);
+    EXPECT(s.final_cost < 1e-12 * s.initial_cost);
+    for (std::size_t a = 0; a < 7; ++a) EXPECT(p.poses[7 * image + a] == before.poses[7 * image + a]);
+    for (std::size_t a = 0; a < 3; ++a) EXPECT(p.points[3 * point + a] == before.points[3 * point + a]);
+  }
+
+  // No observations at all: nothing to do, and that is convergence.
+  {
+    auto p = jba_test::random_problem(CameraModel::Pinhole, 3, 10, 40);
+    p.obs_image.clear();
+    p.obs_point.clear();
+    p.obs_xy.clear();
+    const auto before = p;
+    const auto s = jba::solve(p);
+    EXPECT(s.termination == jba::Termination::Convergence);
+    EXPECT(s.iterations == 0 && s.final_cost == 0);
+    EXPECT(p.poses == before.poses && p.points == before.points);
+  }
+
+  // The step norm is measured in stored coordinates, as in Ceres: for a pose step
+  // that is nearly all rotation it is about half the rotation angle.
+  {
+    auto p = jba_test::random_problem(CameraModel::Pinhole, 6, 200, 41, 0.0);
+    const auto truth = p;
+    p.point_fixed.assign(p.num_points(), 1);
+    p.image_fixed.assign(p.num_images(), 1);
+    p.image_fixed[2] = 0;
+    const double step[6] = {0.02, 0, 0, 0, 0, 0};
+    double moved[7];
+    jba::pose_retract(&truth.poses[14], step, moved);
+    for (std::size_t a = 0; a < 7; ++a) p.poses[14 + a] = moved[a];
+    const auto s = jba::solve(p);
+    double stored = 0;
+    for (std::size_t a = 0; a < 7; ++a) stored += (p.poses[14 + a] - moved[a]) * (p.poses[14 + a] - moved[a]);
+    double sum = 0;
+    for (const auto& h : s.history) sum += h.step_accepted ? h.step_norm : 0.0;
+    std::printf("step norms: summed %.6g, start to end in stored coordinates %.6g\n", sum, std::sqrt(stored));
+    EXPECT(s.history.size() >= 2 && s.history[1].step_accepted);
+    EXPECT(s.history[1].step_norm < 0.75 * 0.02);  // a tangent norm would be about 0.02
+    EXPECT(sum >= std::sqrt(stored) * (1 - 1e-9));
   }
 
   return TEST_MAIN_RESULT();
