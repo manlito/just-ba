@@ -1,0 +1,511 @@
+// Python bindings, first version (document 03: thin). The C++ types are exposed as
+// they are; arrays cross as NumPy arrays (copied in and out in this version).
+// The Python layer in just_ba/__init__.py adds conventions and conveniences.
+
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include <nanobind/stl/array.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <numeric>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include "jba/camera_model.h"
+#include "jba/initialize.h"
+#include "jba/priors.h"
+#include "jba/problem.h"
+#include "jba/problem_io.h"
+#include "jba/refine.h"
+#include "jba/report.h"
+#include "jba/solver.h"
+#include "jba/tracks.h"
+
+namespace nb = nanobind;
+using namespace nb::literals;
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// Arrays.
+
+template <typename T>
+using In = nb::ndarray<const T, nb::c_contig, nb::device::cpu>;
+template <typename T>
+using Out = nb::ndarray<nb::numpy, T>;
+
+template <typename T>
+Out<T> to_numpy(const std::vector<T>& v, std::vector<std::size_t> tail = {}) {
+  std::size_t per = 1;
+  for (auto d : tail) per *= d;
+  std::vector<std::size_t> shape = {per == 0 ? 0 : v.size() / per};
+  shape.insert(shape.end(), tail.begin(), tail.end());
+  T* data = new T[std::max<std::size_t>(v.size(), 1)];
+  std::copy(v.begin(), v.end(), data);
+  nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<T*>(p); });
+  return Out<T>(data, shape.size(), shape.data(), owner);
+}
+
+// Copies an array of shape [n] (tail empty) or [n, tail...] into a vector.
+template <typename T>
+std::vector<T> from_numpy(const In<T>& a, const std::vector<std::size_t>& tail, const char* name) {
+  bool ok = a.ndim() == 1 + tail.size();
+  for (std::size_t d = 0; ok && d < tail.size(); ++d) ok = a.shape(1 + d) == tail[d];
+  if (!ok) {
+    std::string want = "(n";
+    for (auto d : tail) want += ", " + std::to_string(d);
+    throw nb::value_error((std::string(name) + " must have shape " + want + ")").c_str());
+  }
+  return std::vector<T>(a.data(), a.data() + a.size());
+}
+
+// Anything NumPy can turn into an array of T (lists included).
+template <typename T>
+In<T> as_array(nb::handle h, const char* name) {
+  static const char* dtype = std::is_same_v<T, double>          ? "float64"
+                             : std::is_same_v<T, std::int32_t>  ? "int32"
+                             : std::is_same_v<T, std::int64_t>  ? "int64"
+                                                                : "uint8";
+  nb::object arr;
+  try {
+    arr = nb::module_::import_("numpy").attr("ascontiguousarray")(h, "dtype"_a = dtype);
+  } catch (nb::python_error&) {
+    throw nb::type_error((std::string(name) + " must be convertible to a " + dtype + " array").c_str());
+  }
+  return nb::cast<In<T>>(arr);
+}
+
+template <typename T>
+std::vector<T> from_optional(const std::optional<In<T>>& a, const std::vector<std::size_t>& tail, const char* name) {
+  return a ? from_numpy(*a, tail, name) : std::vector<T>{};
+}
+
+jba::CameraModel model_of(const nb::handle& h) {
+  if (nb::isinstance<nb::str>(h)) {
+    const std::string s = nb::cast<std::string>(h);
+    if (auto m = jba::model_from_name(s)) return *m;
+    throw nb::value_error(("unknown camera model " + s).c_str());
+  }
+  return nb::cast<jba::CameraModel>(h);
+}
+
+jba::LossType loss_type_of(const nb::handle& h) {
+  if (nb::isinstance<nb::str>(h)) {
+    const std::string s = nb::cast<std::string>(h);
+    if (auto t = jba::loss_from_name(s)) return *t;
+    throw nb::value_error(("unknown loss " + s + " (none, huber, cauchy, geman_mcclure)").c_str());
+  }
+  return nb::cast<jba::LossType>(h);
+}
+
+// Problem array fields with a fixed row width.
+template <typename T>
+void array_field(nb::class_<jba::Problem>& c, const char* name, std::vector<T> jba::Problem::*field,
+                 std::vector<std::size_t> tail, const char* doc) {
+  c.def_prop_rw(
+      name, [field, tail](const jba::Problem& p) { return to_numpy(p.*field, tail); },
+      [field, tail, name](jba::Problem& p, nb::handle h) { p.*field = from_numpy(as_array<T>(h, name), tail, name); },
+      nb::for_getter(nb::rv_policy::move), doc);
+}
+
+// Python callables as iteration callbacks: run with the GIL held; an exception
+// stops the solve and is raised again afterwards.
+struct Callback {
+  nb::object fn;
+  std::optional<nb::python_error> error;
+  bool operator()(const jba::IterationSummary& it) {
+    nb::gil_scoped_acquire gil;
+    try {
+      nb::object r = fn(it);
+      return r.is_none() ? true : nb::cast<bool>(r);
+    } catch (nb::python_error& e) {
+      error.emplace(std::move(e));
+      return false;
+    }
+  }
+};
+
+}  // namespace
+
+NB_MODULE(_core, m) {
+  m.doc() = "just-ba: minimal, fast bundle adjustment (compiled core)";
+
+  // --- Enums ---------------------------------------------------------------
+  nb::enum_<jba::CameraModel>(m, "CameraModel", "Camera models; names and parameter order follow COLMAP.")
+      .value("SIMPLE_PINHOLE", jba::CameraModel::SimplePinhole)
+      .value("PINHOLE", jba::CameraModel::Pinhole)
+      .value("SIMPLE_RADIAL", jba::CameraModel::SimpleRadial)
+      .value("RADIAL", jba::CameraModel::Radial)
+      .value("OPENCV", jba::CameraModel::OpenCV)
+      .value("OPENCV_FISHEYE", jba::CameraModel::OpenCVFisheye);
+  m.def("num_params", [](nb::handle model) { return jba::num_params(model_of(model)); }, "model"_a,
+        "Number of intrinsic parameters of a camera model.");
+
+  nb::enum_<jba::LossType>(m, "LossType")
+      .value("NONE", jba::LossType::None)
+      .value("HUBER", jba::LossType::Huber)
+      .value("CAUCHY", jba::LossType::Cauchy)
+      .value("GEMAN_MCCLURE", jba::LossType::GemanMcClure);
+  nb::enum_<jba::FrameRelation>(m, "FrameRelation", "How a global prior set relates to the working frame (D19).")
+      .value("IDENTITY", jba::FrameRelation::Identity)
+      .value("RIGID", jba::FrameRelation::Rigid)
+      .value("SIMILARITY", jba::FrameRelation::Similarity);
+  nb::enum_<jba::GaugeMode>(m, "GaugeMode").value("AUTO", jba::GaugeMode::Auto).value("NONE", jba::GaugeMode::None);
+  nb::enum_<jba::Termination>(m, "Termination")
+      .value("CONVERGENCE", jba::Termination::Convergence)
+      .value("NO_CONVERGENCE", jba::Termination::NoConvergence)
+      .value("FAILURE", jba::Termination::Failure)
+      .value("CANCELLED", jba::Termination::Cancelled);
+  nb::enum_<jba::ConflictPolicy>(m, "ConflictPolicy")
+      .value("DROP", jba::ConflictPolicy::Drop)
+      .value("REPAIR", jba::ConflictPolicy::Repair);
+
+  // --- Problem -------------------------------------------------------------
+  nb::class_<jba::Problem> problem(
+      m, "Problem",
+      "A bundle adjustment problem (document 11). Poses map world to camera, stored as qw qx qy qz tx ty tz; "
+      "camera axes x right, y down, z forward. Array attributes are copied in and out.");
+  problem.def(nb::init<>())
+      .def("__copy__", [](const jba::Problem& p) { return jba::Problem(p); })
+      .def("copy", [](const jba::Problem& p) { return jba::Problem(p); }, "A deep copy.")
+      .def_prop_rw(
+          "model", [](const jba::Problem& p) { return p.model; },
+          [](jba::Problem& p, nb::handle h) { p.model = model_of(h); }, "Camera model (CameraModel or its name).")
+      .def_prop_rw(
+          "intrinsics",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) {
+            const auto a = as_array<double>(h, "intrinsics");
+            const auto np = static_cast<std::size_t>(jba::num_params(p.model));
+            if (a.ndim() == 1 && a.shape(0) == np) p.intrinsics.assign(a.data(), a.data() + np);
+            else p.intrinsics = from_numpy(a, {np}, "intrinsics");
+          },
+          nb::for_getter(nb::rv_policy::move),
+          "Intrinsics blocks, (B, num_params(model)); one block (a 1-d array) is the normal case. Set the model first.")
+      .def_prop_ro("num_images", &jba::Problem::num_images)
+      .def_prop_ro("num_points", &jba::Problem::num_points)
+      .def_prop_ro("num_observations", &jba::Problem::num_observations)
+      .def_prop_ro("num_relative_priors", &jba::Problem::num_relative_priors)
+      .def_prop_ro("num_global_priors", &jba::Problem::num_global_priors)
+      .def_prop_ro("num_prior_sets", &jba::Problem::num_prior_sets)
+      .def("validate", [](const jba::Problem& p) { return jba::validate(p); },
+           "Empty string when valid, otherwise the first problem found.");
+  array_field(problem, "intrinsics_free", &jba::Problem::intrinsics_free, {},
+              "Per intrinsics block: bit mask of freed groups (1 focal, 2 principal point, 4 distortion).");
+  array_field(problem, "poses", &jba::Problem::poses, {7}, "(N, 7) world-to-camera poses.");
+  array_field(problem, "image_intrinsics", &jba::Problem::image_intrinsics, {}, "(N,) intrinsics block per image.");
+  array_field(problem, "image_fixed", &jba::Problem::image_fixed, {}, "(N,) 1 holds a pose fixed.");
+  array_field(problem, "points", &jba::Problem::points, {3}, "(M, 3) world points.");
+  array_field(problem, "point_fixed", &jba::Problem::point_fixed, {}, "(M,) 1 holds a point fixed.");
+  array_field(problem, "obs_image", &jba::Problem::obs_image, {}, "(K,) image of each observation.");
+  array_field(problem, "obs_point", &jba::Problem::obs_point, {}, "(K,) point of each observation.");
+  array_field(problem, "obs_xy", &jba::Problem::obs_xy, {2}, "(K, 2) keypoints in pixels.");
+  array_field(problem, "obs_sigma", &jba::Problem::obs_sigma, {}, "(K,) keypoint standard deviations, pixels.");
+  array_field(problem, "rel_images", &jba::Problem::rel_images, {2}, "(R, 2) images i, j of each relative prior.");
+  array_field(problem, "rel_pose", &jba::Problem::rel_pose, {7},
+              "(R, 7) relative priors: the motion T_j T_i^-1 (camera i to camera j coordinates).");
+  array_field(problem, "rel_sigma", &jba::Problem::rel_sigma, {2},
+              "(R, 2) rotation (rad) and translation (m) standard deviations; inf leaves a part out.");
+  array_field(problem, "rel_sqrt_info", &jba::Problem::rel_sqrt_info, {6, 6}, "(R, 6, 6) whitening matrices.");
+  array_field(problem, "glob_image", &jba::Problem::glob_image, {}, "(G,) image of each global prior.");
+  array_field(problem, "glob_set", &jba::Problem::glob_set, {}, "(G,) prior set of each global prior.");
+  array_field(problem, "glob_pose", &jba::Problem::glob_pose, {7}, "(G, 7) world-to-camera poses in the set's frame.");
+  array_field(problem, "glob_sigma", &jba::Problem::glob_sigma, {2},
+              "(G, 2) rotation (rad) and position (set units) standard deviations.");
+  array_field(problem, "glob_sqrt_info", &jba::Problem::glob_sqrt_info, {6, 6}, "(G, 6, 6) whitening matrices.");
+  array_field(problem, "set_transform", &jba::Problem::set_transform, {8},
+              "(S, 8) qw qx qy qz tx ty tz s per prior set: X_working = s R X_set + t.");
+  problem.def_prop_rw(
+      "set_relation",
+      [](const jba::Problem& p) {
+        std::vector<std::int32_t> v(p.set_relation.size());
+        for (std::size_t a = 0; a < v.size(); ++a) v[a] = static_cast<std::int32_t>(p.set_relation[a]);
+        return to_numpy(v);
+      },
+      [](jba::Problem& p, nb::handle h) {
+        p.set_relation.clear();
+        for (nb::handle item : h) {
+          if (nb::isinstance<jba::FrameRelation>(item)) p.set_relation.push_back(nb::cast<jba::FrameRelation>(item));
+          else p.set_relation.push_back(static_cast<jba::FrameRelation>(nb::cast<std::int32_t>(item)));
+        }
+      },
+      nb::for_getter(nb::rv_policy::move),
+      "(S,) relation of each prior set: FrameRelation values (0 identity, 1 rigid, 2 similarity).");
+
+  m.def("read_problem", &jba::read_problem, "path"_a, "Reads a .jba problem file.");
+  m.def("write_problem", &jba::write_problem, "path"_a, "problem"_a, "Writes a .jba problem file.");
+  m.def("read_bal", &jba::read_bal, "path"_a, "Reads a Bundle Adjustment in the Large problem.");
+  m.def(
+      "add_relative_priors_from_poses",
+      [](jba::Problem& p, nb::handle poses, nb::handle pairs) {
+        jba::add_relative_priors_from_poses(p, from_numpy(as_array<double>(poses, "poses"), {7}, "poses"),
+                                            from_numpy(as_array<std::int32_t>(pairs, "pairs"), {2}, "pairs"));
+      },
+      "problem"_a, "poses"_a, "pairs"_a,
+      "Appends relative priors T_j T_i^-1 computed from per-image poses (N, 7) for each pair (i, j) in pairs (P, 2).");
+
+  // --- Options -------------------------------------------------------------
+  nb::class_<jba::Loss>(m, "Loss", "Robust loss, Ceres's definitions; scale in standard deviations.")
+      .def(nb::init<>())
+      .def("__init__", [](jba::Loss* l, nb::handle type, double scale) { new (l) jba::Loss{loss_type_of(type), scale}; },
+           "type"_a, "scale"_a = 1.0)
+      .def_rw("type", &jba::Loss::type)
+      .def_rw("scale", &jba::Loss::scale)
+      .def("__repr__", [](const jba::Loss& l) {
+        return "Loss('" + std::string(jba::loss_name(l.type)) + "', " + std::to_string(l.scale) + ")";
+      });
+
+  nb::class_<jba::PriorDefaults>(m, "PriorDefaults", "Weights for priors given without any (provisional, D65).")
+      .def(nb::init<>())
+      .def_rw("relative_rotation_sigma", &jba::PriorDefaults::relative_rotation_sigma)
+      .def_rw("relative_rotation_per_radian", &jba::PriorDefaults::relative_rotation_per_radian)
+      .def_rw("relative_translation_sigma", &jba::PriorDefaults::relative_translation_sigma)
+      .def_rw("relative_translation_per_metre", &jba::PriorDefaults::relative_translation_per_metre)
+      .def_rw("global_rotation_sigma", &jba::PriorDefaults::global_rotation_sigma)
+      .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma);
+
+  nb::class_<jba::SolverOptions>(m, "SolverOptions", "Levenberg-Marquardt options; defaults are Ceres's.")
+      .def(nb::init<>())
+      .def_rw("max_iterations", &jba::SolverOptions::max_iterations)
+      .def_rw("function_tolerance", &jba::SolverOptions::function_tolerance)
+      .def_rw("gradient_tolerance", &jba::SolverOptions::gradient_tolerance)
+      .def_rw("parameter_tolerance", &jba::SolverOptions::parameter_tolerance)
+      .def_rw("initial_trust_region_radius", &jba::SolverOptions::initial_trust_region_radius)
+      .def_rw("max_trust_region_radius", &jba::SolverOptions::max_trust_region_radius)
+      .def_rw("min_trust_region_radius", &jba::SolverOptions::min_trust_region_radius)
+      .def_rw("min_relative_decrease", &jba::SolverOptions::min_relative_decrease)
+      .def_rw("max_consecutive_invalid_steps", &jba::SolverOptions::max_consecutive_invalid_steps)
+      .def_rw("max_linear_iterations", &jba::SolverOptions::max_linear_iterations)
+      .def_rw("min_linear_iterations", &jba::SolverOptions::min_linear_iterations)
+      .def_rw("eta", &jba::SolverOptions::eta)
+      .def_rw("loss", &jba::SolverOptions::loss, "Loss on reprojection residuals.")
+      .def_rw("relative_prior_loss", &jba::SolverOptions::relative_prior_loss)
+      .def_rw("global_prior_loss", &jba::SolverOptions::global_prior_loss)
+      .def_rw("prior_defaults", &jba::SolverOptions::prior_defaults)
+      .def_rw("gauge", &jba::SolverOptions::gauge)
+      .def_rw("num_threads", &jba::SolverOptions::num_threads, "0: all hardware threads. Results do not depend on it.");
+
+  // --- Solve ---------------------------------------------------------------
+  nb::class_<jba::IterationSummary>(m, "IterationSummary")
+      .def_ro("iteration", &jba::IterationSummary::iteration)
+      .def_ro("cost", &jba::IterationSummary::cost)
+      .def_ro("cost_change", &jba::IterationSummary::cost_change)
+      .def_ro("gradient_max_norm", &jba::IterationSummary::gradient_max_norm)
+      .def_ro("step_norm", &jba::IterationSummary::step_norm)
+      .def_ro("relative_decrease", &jba::IterationSummary::relative_decrease)
+      .def_ro("trust_region_radius", &jba::IterationSummary::trust_region_radius)
+      .def_ro("linear_iterations", &jba::IterationSummary::linear_iterations)
+      .def_ro("step_valid", &jba::IterationSummary::step_valid)
+      .def_ro("step_accepted", &jba::IterationSummary::step_accepted)
+      .def_ro("time_seconds", &jba::IterationSummary::time_seconds);
+  nb::class_<jba::Gauge>(m, "Gauge")
+      .def_ro("fixed_images", &jba::Gauge::fixed_images)
+      .def_ro("fixed_translations", &jba::Gauge::fixed_translations)
+      .def_ro("fixed_set_scales", &jba::Gauge::fixed_set_scales);
+  nb::class_<jba::SolverSummary>(m, "SolverSummary")
+      .def_ro("termination", &jba::SolverSummary::termination)
+      .def_ro("message", &jba::SolverSummary::message)
+      .def_ro("initial_cost", &jba::SolverSummary::initial_cost)
+      .def_ro("final_cost", &jba::SolverSummary::final_cost)
+      .def_ro("iterations", &jba::SolverSummary::iterations)
+      .def_ro("accepted_steps", &jba::SolverSummary::accepted_steps)
+      .def_ro("linear_iterations", &jba::SolverSummary::linear_iterations)
+      .def_ro("time_seconds", &jba::SolverSummary::time_seconds)
+      .def_ro("history", &jba::SolverSummary::history)
+      .def_ro("gauge", &jba::SolverSummary::gauge)
+      .def("__repr__", [](const jba::SolverSummary& s) {
+        return "SolverSummary(" + std::string(jba::termination_name(s.termination)) + ", cost " +
+               std::to_string(s.initial_cost) + " -> " + std::to_string(s.final_cost) + ", " +
+               std::to_string(s.iterations) + " iterations)";
+      });
+
+  m.def(
+      "solve",
+      [](jba::Problem& p, const jba::SolverOptions& o, nb::object callback) {
+        jba::SolverSummary s;
+        if (callback.is_none()) {
+          nb::gil_scoped_release release;
+          s = jba::solve(p, o);
+        } else {
+          Callback cb{callback, std::nullopt};
+          {
+            nb::gil_scoped_release release;
+            s = jba::solve(p, o, [&cb](const jba::IterationSummary& it) { return cb(it); });
+          }
+          if (cb.error) throw std::move(*cb.error);
+        }
+        return s;
+      },
+      "problem"_a, "options"_a = jba::SolverOptions{}, "callback"_a = nb::none(),
+      "Solves in place on the CPU. callback(IterationSummary) is called after every iteration; "
+      "returning False stops the solve.");
+  m.def("choose_gauge", &jba::choose_gauge, "problem"_a, "The gauge GaugeMode.AUTO would hold fixed.");
+
+  nb::class_<jba::ResidualReport>(m, "ResidualReport", "Per-residual diagnostics at the current parameters.")
+      .def_ro("reprojection_cost", &jba::ResidualReport::reprojection_cost)
+      .def_ro("relative_prior_cost", &jba::ResidualReport::relative_prior_cost)
+      .def_ro("global_prior_cost", &jba::ResidualReport::global_prior_cost)
+      .def_prop_ro("reprojection_error", [](const jba::ResidualReport& r) { return to_numpy(r.reprojection_error); }, nb::rv_policy::move)
+      .def_prop_ro("in_front", [](const jba::ResidualReport& r) {
+        std::vector<std::uint8_t> v(r.in_front.begin(), r.in_front.end());
+        return to_numpy(v);
+      }, nb::rv_policy::move)
+      .def_prop_ro("relative_prior_norm", [](const jba::ResidualReport& r) { return to_numpy(r.relative_prior_norm); }, nb::rv_policy::move)
+      .def_prop_ro("relative_prior_weight", [](const jba::ResidualReport& r) { return to_numpy(r.relative_prior_weight); }, nb::rv_policy::move)
+      .def_prop_ro("global_prior_norm", [](const jba::ResidualReport& r) { return to_numpy(r.global_prior_norm); }, nb::rv_policy::move)
+      .def_prop_ro("global_prior_weight", [](const jba::ResidualReport& r) { return to_numpy(r.global_prior_weight); }, nb::rv_policy::move)
+      .def_prop_ro("downweighted_relative", [](const jba::ResidualReport& r) { return to_numpy(r.downweighted_relative); }, nb::rv_policy::move)
+      .def_prop_ro("downweighted_global", [](const jba::ResidualReport& r) { return to_numpy(r.downweighted_global); }, nb::rv_policy::move);
+  m.def("evaluate", &jba::evaluate, "problem"_a, "options"_a = jba::SolverOptions{}, "downweight_threshold"_a = 0.1,
+        nb::call_guard<nb::gil_scoped_release>(), "Cost by residual type, reprojection errors, prior weights.");
+
+  // --- Starting poses --------------------------------------------------------
+  nb::class_<jba::PoseInitialization>(m, "PoseInitialization")
+      .def_prop_ro("poses", [](const jba::PoseInitialization& i) { return to_numpy(i.poses, {7}); }, nb::rv_policy::move)
+      .def_prop_ro("set_transform", [](const jba::PoseInitialization& i) { return to_numpy(i.set_transform, {8}); }, nb::rv_policy::move)
+      .def_prop_ro("group", [](const jba::PoseInitialization& i) { return to_numpy(i.group); }, nb::rv_policy::move)
+      .def_ro("num_groups", &jba::PoseInitialization::num_groups);
+  m.def("initialize_poses", &jba::initialize_poses, "problem"_a, "defaults"_a = jba::PriorDefaults{},
+        "Starting poses from the priors alone, and the groups of images they connect.");
+
+  // --- Tracks --------------------------------------------------------------
+  nb::class_<jba::TriangulationOptions>(m, "TriangulationOptions")
+      .def(nb::init<>())
+      .def_rw("max_angle_error_deg", &jba::TriangulationOptions::max_angle_error_deg)
+      .def_rw("min_tri_angle_deg", &jba::TriangulationOptions::min_tri_angle_deg)
+      .def_rw("min_views", &jba::TriangulationOptions::min_views)
+      .def_rw("max_samples", &jba::TriangulationOptions::max_samples);
+  nb::class_<jba::TrackOptions>(m, "TrackOptions")
+      .def(nb::init<>())
+      .def_rw("min_views", &jba::TrackOptions::min_views)
+      .def_rw("max_views", &jba::TrackOptions::max_views)
+      .def_rw("conflict_policy", &jba::TrackOptions::conflict_policy)
+      .def_rw("check_clean", &jba::TrackOptions::check_clean)
+      .def_rw("triangulation", &jba::TrackOptions::triangulation);
+  nb::class_<jba::TrackStats>(m, "TrackStats")
+      .def_ro("rejected_matches", &jba::TrackStats::rejected_matches)
+      .def_ro("components", &jba::TrackStats::components)
+      .def_ro("clean", &jba::TrackStats::clean)
+      .def_ro("conflicted", &jba::TrackStats::conflicted)
+      .def_ro("tracks", &jba::TrackStats::tracks)
+      .def_ro("dropped_observations", &jba::TrackStats::dropped_observations);
+  nb::class_<jba::Tracks>(m, "Tracks",
+                          "Track t has observations begin[t]..begin[t+1]-1, each an (image, keypoint) pair.")
+      .def(nb::init<>())
+      .def("__init__",
+           [](jba::Tracks* t, nb::handle begin, nb::handle image, nb::handle keypoint) {
+             new (t) jba::Tracks{from_numpy(as_array<std::int64_t>(begin, "begin"), {}, "begin"),
+                                 from_numpy(as_array<std::int32_t>(image, "image"), {}, "image"),
+                                 from_numpy(as_array<std::int32_t>(keypoint, "keypoint"), {}, "keypoint")};
+             if (t->begin.empty() || t->begin.front() != 0 ||
+                 t->begin.back() != static_cast<std::int64_t>(t->image.size()) || t->image.size() != t->keypoint.size())
+               throw nb::value_error("tracks: begin must start at 0 and end at len(image) == len(keypoint)");
+           },
+           "begin"_a, "image"_a, "keypoint"_a)
+      .def("__len__", &jba::Tracks::size)
+      .def_prop_ro("begin", [](const jba::Tracks& t) { return to_numpy(t.begin); }, nb::rv_policy::move)
+      .def_prop_ro("image", [](const jba::Tracks& t) { return to_numpy(t.image); }, nb::rv_policy::move)
+      .def_prop_ro("keypoint", [](const jba::Tracks& t) { return to_numpy(t.keypoint); }, nb::rv_policy::move);
+
+  // Keypoints as a list of (n_i, 2) arrays, one per image.
+  auto keypoints_of = [](nb::handle per_image) {
+    jba::Keypoints k;
+    k.begin.assign(1, 0);
+    for (nb::handle h : per_image) {
+      const auto a = as_array<double>(h, "keypoints[i]");
+      if (a.size() == 0) {
+        k.begin.push_back(k.begin.back());
+        continue;
+      }
+      const auto v = from_numpy(a, {2}, "keypoints[i]");
+      k.xy.insert(k.xy.end(), v.begin(), v.end());
+      k.begin.push_back(static_cast<std::int64_t>(k.xy.size() / 2));
+    }
+    return k;
+  };
+
+  m.def(
+      "build_tracks",
+      [keypoints_of](nb::handle keypoints, nb::handle matches, const jba::TrackOptions& o,
+                     std::optional<const jba::Problem*> cameras) {
+        const auto k = keypoints_of(keypoints);
+        const auto mv = from_numpy(as_array<std::int32_t>(matches, "matches"), {4}, "matches");
+        jba::TrackStats st;
+        jba::Tracks t;
+        if (cameras && *cameras) {
+          const jba::Problem& p = **cameras;
+          jba::Cameras c{p.model, p.intrinsics, p.image_intrinsics, p.poses};
+          nb::gil_scoped_release release;
+          t = jba::build_tracks(k, mv, o, &c, &st);
+        } else {
+          nb::gil_scoped_release release;
+          t = jba::build_tracks(k, mv, o, nullptr, &st);
+        }
+        return std::make_pair(t, st);
+      },
+      "keypoints"_a, "matches"_a, "options"_a = jba::TrackOptions{}, "cameras"_a = nb::none(),
+      "Tracks from pairwise matches (M, 4): image_a, keypoint_a, image_b, keypoint_b. With `cameras` (a Problem "
+      "giving the model, intrinsics and poses) conflicted components are repaired geometrically. Returns "
+      "(Tracks, TrackStats).");
+
+  // --- Refine --------------------------------------------------------------
+  nb::class_<jba::RefineOptions>(m, "RefineOptions")
+      .def(nb::init<>())
+      .def_rw("solver", &jba::RefineOptions::solver)
+      .def_rw("tracks", &jba::RefineOptions::tracks)
+      .def_rw("rounds", &jba::RefineOptions::rounds)
+      .def_rw("prior_solve", &jba::RefineOptions::prior_solve)
+      .def_rw("max_reprojection_error", &jba::RefineOptions::max_reprojection_error)
+      .def_rw("min_tri_angle_deg", &jba::RefineOptions::min_tri_angle_deg)
+      .def_rw("downweight_threshold", &jba::RefineOptions::downweight_threshold)
+      .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only);
+  nb::class_<jba::RefineResult>(m, "RefineResult")
+      .def_ro("problem", &jba::RefineResult::problem, "The solved problem.")
+      .def_prop_ro("obs_keypoint", [](const jba::RefineResult& r) { return to_numpy(r.obs_keypoint); },
+                   "Keypoint (in its image) of each observation of `problem`.", nb::rv_policy::move)
+      .def_prop_ro("group", [](const jba::RefineResult& r) { return to_numpy(r.group); }, nb::rv_policy::move)
+      .def_ro("num_groups", &jba::RefineResult::num_groups)
+      .def_prop_ro("refined", [](const jba::RefineResult& r) {
+        std::vector<std::uint8_t> v(r.refined.begin(), r.refined.end());
+        return to_numpy(v);
+      }, nb::rv_policy::move)
+      .def_ro("report", &jba::RefineResult::report)
+      .def_ro("summaries", &jba::RefineResult::summaries)
+      .def_ro("track_stats", &jba::RefineResult::track_stats)
+      .def_ro("rejected_observations", &jba::RefineResult::rejected_observations)
+      .def_prop_ro("relative_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.relative_prior_index); }, nb::rv_policy::move)
+      .def_prop_ro("global_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.global_prior_index); }, nb::rv_policy::move);
+
+  m.def(
+      "refine",
+      [keypoints_of](const jba::Problem& scene, nb::handle keypoints, nb::handle matches,
+                     std::optional<const jba::Tracks*> tracks, nb::handle keypoint_sigma,
+                     const jba::RefineOptions& o) {
+        jba::RefineInput in;
+        in.scene = scene;
+        in.keypoints = keypoints_of(keypoints);
+        if (in.keypoints.num_images() != scene.num_images() && scene.num_images() != 0)
+          throw nb::value_error("refine: one keypoint array per image of scene.poses is needed");
+        if (!matches.is_none()) in.matches = from_numpy(as_array<std::int32_t>(matches, "matches"), {4}, "matches");
+        if (tracks && *tracks) in.tracks = **tracks;
+        if (in.matches.empty() && in.tracks.size() == 0) throw nb::value_error("refine: give matches or tracks");
+        if (!keypoint_sigma.is_none())
+          in.keypoint_sigma = from_numpy(as_array<double>(keypoint_sigma, "keypoint_sigma"), {}, "keypoint_sigma");
+        nb::gil_scoped_release release;
+        return jba::refine(in, o);
+      },
+      "scene"_a, "keypoints"_a, "matches"_a = nb::none(), "tracks"_a = nb::none(), "keypoint_sigma"_a = nb::none(),
+      "options"_a = jba::RefineOptions{},
+      "The main use case end to end: starting poses from the priors in `scene`, tracks from the matches, "
+      "triangulation, solve, outlier removal, repeated (D69).");
+}

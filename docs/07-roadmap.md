@@ -153,9 +153,14 @@ Results so far (2026-11-14, M5 Pro):
   Keypoint noise is 0.5 px. With noise-free keypoints the images alone recover the
   truth exactly, so these figures are the scenes' own information limit, not a
   bias. The whole set runs in about 7 seconds.
-- Not done yet: the Python bindings (nanobind is not installed on the development
-  machine yet), and the real-session part of the exit, which needs an exported
-  ARKit or ARCore session (open question 6 below).
+- Python bindings, first version (D72): problems, solve with callbacks, the report,
+  starting poses, track building and `refine`, plus conversion of ARKit and ARCore
+  camera-to-world matrices. Tested from Python on a scene built in NumPy: through
+  `refine`, a drifting tracker's 7.9 mm and 0.32 deg become 1.2 mm and 0.039 deg.
+  The problem files match document 11's reference reader. Built and tested on the
+  owner's Mac; added to the CI build on Linux and Windows, not yet run there.
+- Not done yet: the real-session part of the exit, which needs an exported ARKit or
+  ARCore session (open question 6 below).
 
 ## Milestone 3: Manhattan prior and depth
 

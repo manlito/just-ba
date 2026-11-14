@@ -23,6 +23,32 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
+## Python bindings
+
+The bindings use nanobind, needed at build time only, and the stable ABI from
+Python 3.12. Set up a virtual environment with the build and test requirements:
+
+```bash
+uv venv --python 3.12 bindings/python/.venv && uv pip install --python bindings/python/.venv/bin/python -r bindings/python/requirements.txt
+```
+
+```bash
+cmake -S . -B build -DJBA_BUILD_PYTHON=ON -DPython_EXECUTABLE=$PWD/bindings/python/.venv/bin/python
+```
+
+The package is assembled in `build/bindings/python/just_ba` and tested by `ctest`
+(label `python`). To use it from that build:
+
+```bash
+PYTHONPATH=build/bindings/python bindings/python/.venv/bin/python -c "import just_ba; print(just_ba.CameraModel.OPENCV)"
+```
+
+The main entry point is `just_ba.refine(scene, keypoints, matches=...)`: a `Problem`
+holding the camera and the pose priors, one `(n, 2)` keypoint array per image, and
+pairwise matches `(m, 4)`. `just_ba.poses_from_camera_to_world(T, "arkit")` converts
+ARKit or ARCore camera-to-world matrices to the library's poses. Packaging for
+PyPI is milestone 6.
+
 ## Reference solver (test-only)
 
 Ceres 2.2.0 is built separately, with Eigen only, and never linked into the library.
