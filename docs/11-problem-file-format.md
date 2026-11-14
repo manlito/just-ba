@@ -41,7 +41,11 @@ damaged by text-mode transfers. Nothing may follow the last section.
   problem that does not validate. It never reads a damaged file silently.
 - Sections a reader does not know are kept verbatim and written back unchanged.
   New optional sections can therefore be added without a version change.
-- The version changes only when an existing section changes meaning.
+- The version changes only when an existing section changes meaning, or when a
+  data type is added: a reader fails on a data type it does not know, even in a
+  section it would otherwise keep.
+- A section name should appear once. The current reader keeps the last one
+  silently; it is to reject the file instead (document 12).
 - Section order does not matter. Writers use the order of the table below.
 
 ## Sections, version 1
@@ -82,7 +86,7 @@ Reserved names, added in the milestones that need them. Each will be optional.
 | `image.gravity` | 3 | Gravity direction per image |
 | `depth.*` | 3 | Depth at keypoints, confidence, per-image scale and offset |
 | `lines.*` | 3 | Line segments per image for the Manhattan prior |
-| `loss.*` | 1 | Robust loss per residual type |
+| `loss.*` | 2 | Robust loss per residual type. Planned for milestone 1 and not built; until then the loss is a solver option |
 
 ## BAL conversion
 

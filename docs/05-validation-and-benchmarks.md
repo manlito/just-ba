@@ -42,14 +42,16 @@ library or the Python wheel.
 For every residual type and every camera model:
 
 - Residual values agree with an independent Ceres cost functor on random inputs.
-- Analytic Jacobians agree with central finite differences computed in extended
-  precision, and with Ceres automatic differentiation.
+- Analytic Jacobians agree with central finite differences, and with Ceres automatic
+  differentiation. (As built: the differences are taken in double, which gives
+  about 1e-9 relative; the comparison with Ceres, at 1e-14, is the tight one.)
 - Edge cases: point near the image centre (fisheye `r -> 0`), point near the
   principal plane, identity rotation, large rotations, fixed blocks.
 - Every backend (CPU, CUDA, Apple) produces the same residuals and Jacobians as the
   CPU reference within a stated tolerance per precision.
 
-These run on every commit. They need no dataset.
+These run on every commit once the repository is public; until then CI is started
+by hand (D49). They need no dataset.
 
 ## Level 2: solver parity with Ceres
 
@@ -209,6 +211,8 @@ Ceres, DeepLM and MegBA on six BAL problems.
   one command that runs the suite and writes the results. They are not CI jobs:
   CI uses free hosted runners only, with nothing scheduled.
 - Results are stored as JSON per commit so trends can be plotted.
+- Not built yet. The first baseline is taken before milestone 2 adds residuals
+  (document 12), so the rule below can be applied from the first new residual.
 - Every new residual type must add: Level 1 checks, a synthetic Level 2 problem, and
   a line in the speed benchmark showing existing problems did not slow down.
 

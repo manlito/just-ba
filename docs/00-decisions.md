@@ -121,6 +121,10 @@ Made during the milestone 1 work and recorded for the owner to review.
 | Item | When it gets decided |
 |---|---|
 | Default prior weight values (D21) | Milestone 2, from real captures |
+| Whether real ARKit or ARCore sessions can be exported for a private test set | Before milestone 2 can finish (its exit condition needs one) |
+| Two differences from Ceres in the trust-region loop, against D54: the parameter tolerance uses the tangent step norm where Ceres uses the norm in stored coordinates; failure comes after six consecutive invalid steps where Ceres stops at five. Fix, or accept and amend D54 (document 12) | Start of milestone 2 |
+| Python boundary: copy arrays in and out, or view them. Recommendation: copy, and normalise quaternions there (document 12) | Before the bindings are written |
+| Shape of the backend for several residual types (document 12, item 3) | Start of milestone 2, recorded as a decision when done |
 | Which linear solver is the default at each problem size | From the benchmark |
 | Whether venice-52 with the gauge held should be studied further (different basins by rounding, our two runs slightly above Ceres's two) | When strategy B (direct solve) exists, which removes the inner-solve rounding sensitivity |
 | Whether the caller's system or the library joins groups of frames left unconnected after a tracking break | When real broken sessions are available |
