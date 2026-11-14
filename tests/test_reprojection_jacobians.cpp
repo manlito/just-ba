@@ -74,13 +74,13 @@ void check_case(CameraModel model, const Case& c) {
   double px, py;
   jba_test::reference_project(model, c.intrinsics, pc, &px, &py);
   const double rscale = std::max({1.0, std::abs(px), std::abs(py)});
-  CHECK_NEAR(r[0], px - c.observed[0], 1e-12 * rscale);
-  CHECK_NEAR(r[1], py - c.observed[1], 1e-12 * rscale);
+  EXPECT_NEAR(r[0], px - c.observed[0], 1e-12 * rscale);
+  EXPECT_NEAR(r[1], py - c.observed[1], 1e-12 * rscale);
 
   // Optional outputs skipped: same residual.
   double r_only[2];
   residual_of(model, c, r_only);
-  CHECK(r_only[0] == r[0] && r_only[1] == r[1]);
+  EXPECT(r_only[0] == r[0] && r_only[1] == r[1]);
 
   // Scale of each Jacobian, so tolerances are relative.
   auto max_abs = [](const double* v, int n) {
@@ -180,7 +180,7 @@ int main() {
                 o[2] = {340, 290};
     float r[2], Jp[12];
     jba::cpu::reprojection<float>(CameraModel::Radial, q, t, X, k, o, r, Jp, nullptr, nullptr);
-    CHECK(std::isfinite(r[0]) && std::isfinite(Jp[0]));
+    EXPECT(std::isfinite(r[0]) && std::isfinite(Jp[0]));
   }
 
   std::printf("checked %d cases, worst relative Jacobian error %.3g\n", cases, worst);

@@ -5,7 +5,8 @@ adjustment library with Python bindings and a sample command-line binary. Its ma
 job is refining reconstructions that come with noisy camera poses from ARKit, ARCore
 or another tracker.
 
-Status: milestone 0 done (decisions and spikes); see the results in
+Status: milestone 1 (CPU solver, parity with Ceres) done on macOS, pending a CI
+run on Linux and Windows; see the results in
 [07-roadmap.md](07-roadmap.md). Build instructions: [../README.md](../README.md).
 
 ## Documents

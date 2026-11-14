@@ -60,6 +60,38 @@ Results (2026-11-14, measured on the owner's M5 Pro):
 
 Exit: matches Ceres final cost on the BAL test set in double precision.
 
+Results (2026-11-14, M5 Pro, 18 threads unless stated):
+
+- Built: problem setup with fixed blocks and partially freed intrinsics, the
+  Levenberg-Marquardt loop (D54), implicit Schur with conjugate gradients and the
+  Schur-Jacobi preconditioner (D55), four robust losses (D56), automatic gauge (D57),
+  progress and cancellation callback, `just-ba solve` with JSON history.
+- Level 1 against Ceres: residuals and Jacobians agree with Ceres's automatic
+  differentiation to 1.3e-14 for all four models; losses to 1e-15.
+- Level 2, synthetic (14 cases: every model, fixed blocks, sigma, shared and
+  per-image intrinsics, three losses with 5% outliers): final cost, camera centres
+  and rotations within the document 05 thresholds.
+- Level 2, BAL test set (the smallest problem of each family, no gauge, D60):
+
+  | Problem | Final cost, relative difference | Iterations, just-ba / Ceres | Time, just-ba / Ceres |
+  |---|---|---|---|
+  | ladybug-49 | 6.0e-9 | 35 / 35 | 0.76 s / 1.51 s |
+  | trafalgar-21 | 1.0e-8 | 8 / 8 | 0.34 s / 0.70 s |
+  | dubrovnik-16 | 7.4e-11 | 12 / 12 | 0.79 s / 1.35 s |
+  | final-93 | 3.8e-10 | 6 / 6 | 1.77 s / 2.24 s |
+  | venice-52 | 1.6e-4 at 300 iterations, 2.7e-7 at 2,000 | 232 / 190 at 300 | |
+
+  Times with 3 threads each, three runs in parallel; indicative only.
+- Histories match to 12 digits until the first inner solve long enough for rounding
+  to change its stopping iteration (iteration 3 on trafalgar). Our own solver built
+  without fused multiply-add diverges from itself at the same point, so this is
+  rounding sensitivity, not a difference in the method.
+- Results are bit-identical for 1 to 18 threads (D59).
+
+Status: exit met on four of the five problems at better than 1e-8; venice-52 only
+with the longer run (D60). Built and tested on macOS; the CI run on Linux and
+Windows is pending.
+
 ## Milestone 2: the main use case on CPU
 
 - Relative and global pose prior residuals; transform for a global prior set.

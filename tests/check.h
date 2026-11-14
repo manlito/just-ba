@@ -12,25 +12,25 @@ namespace jba_test {
 inline int failures = 0;
 }
 
-#define CHECK(cond)                                                              \
+#define EXPECT(cond)                                                              \
   do {                                                                           \
     if (!(cond)) {                                                               \
-      std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
+      std::fprintf(stderr, "%s:%d: EXPECT failed: %s\n", __FILE__, __LINE__, #cond); \
       ++jba_test::failures;                                                      \
     }                                                                            \
   } while (0)
 
-#define CHECK_NEAR(a, b, tol)                                                    \
+#define EXPECT_NEAR(a, b, tol)                                                    \
   do {                                                                           \
     const double _a = (a), _b = (b), _t = (tol);                                 \
     if (!(std::abs(_a - _b) <= _t)) {                                            \
-      std::fprintf(stderr, "%s:%d: CHECK_NEAR failed: %s = %.17g, %s = %.17g, tol %.3g\n", \
+      std::fprintf(stderr, "%s:%d: EXPECT_NEAR failed: %s = %.17g, %s = %.17g, tol %.3g\n", \
                    __FILE__, __LINE__, #a, _a, #b, _b, _t);                      \
       ++jba_test::failures;                                                      \
     }                                                                            \
   } while (0)
 
-#define CHECK_THROWS(expr)                                                       \
+#define EXPECT_THROWS(expr)                                                       \
   do {                                                                           \
     bool _threw = false;                                                         \
     try {                                                                        \

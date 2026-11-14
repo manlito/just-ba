@@ -31,6 +31,22 @@ std::string_view model_name(CameraModel model) { return info(model).name; }
 
 bool has_reprojection(CameraModel model) { return info(model).has_reprojection; }
 
+IntrinsicsGroup intrinsics_group(CameraModel model, int index) {
+  switch (model) {
+    case CameraModel::SimplePinhole:
+    case CameraModel::SimpleRadial:
+    case CameraModel::Radial:
+      // f, cx, cy, then distortion
+      return index == 0 ? kFocal : index <= 2 ? kPrincipalPoint : kDistortion;
+    case CameraModel::Pinhole:
+    case CameraModel::OpenCV:
+    case CameraModel::OpenCVFisheye:
+      // fx, fy, cx, cy, then distortion
+      return index <= 1 ? kFocal : index <= 3 ? kPrincipalPoint : kDistortion;
+  }
+  return kDistortion;
+}
+
 std::optional<CameraModel> model_from_id(std::int32_t id) {
   if (id < 0 || id >= static_cast<std::int32_t>(kModels.size())) return std::nullopt;
   return kModels[static_cast<std::size_t>(id)].model;

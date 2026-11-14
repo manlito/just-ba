@@ -283,6 +283,7 @@ pipeline/        incremental reconstruction (test fixture)
 bindings/
   python/
   wasm/
+api/             public entry points (solve), later the C-level API
 cli/             sample binary and benchmark driver
 bench/           benchmark definitions, stored baselines
 tests/

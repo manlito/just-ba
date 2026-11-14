@@ -16,11 +16,28 @@ import urllib.request
 
 BASE = "https://grail.cs.washington.edu/projects/bal/data"
 
+# The BAL test set for milestone 1 parity: the smallest problem of each family.
 # name -> (path under BASE, sha256 of the .bz2 file)
 PROBLEMS = {
     "problem-49-7776-pre": (
         "ladybug/problem-49-7776-pre.txt.bz2",
         "1ccb15701a92a8ad909d30860a0108cd3f2d7916c1ecf2851e59a6198b9de6b0",
+    ),
+    "problem-21-11315-pre": (
+        "trafalgar/problem-21-11315-pre.txt.bz2",
+        "4a4ed35e334af9a60661bf83f1e86842e772f22a967113932456c5ebcf40e5e6",
+    ),
+    "problem-16-22106-pre": (
+        "dubrovnik/problem-16-22106-pre.txt.bz2",
+        "0d695947deb3fc3026e5434a904151b18fe8e60c0176e430dcb5e7a3da039ca5",
+    ),
+    "problem-52-64053-pre": (
+        "venice/problem-52-64053-pre.txt.bz2",
+        "f378c9774e92f02b6b97f1e790458ebefb444ea26def60580a7e38224c43a753",
+    ),
+    "problem-93-61203-pre": (
+        "final/problem-93-61203-pre.txt.bz2",
+        "6ac514d3dde4e23ca7751b50799188d808188848e1e88c72fc9e67df2701896f",
     ),
 }
 

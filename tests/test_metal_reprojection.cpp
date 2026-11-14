@@ -95,11 +95,11 @@ int main() {
                 std::string(jba::model_name(model)).c_str(), conditioned ? "conditioned" : "raw", n, res.vs_float,
                 jp.vs_float, jx.vs_float, jk.vs_float, res.vs_double, jp.vs_double, jx.vs_double, jk.vs_double);
     // Same arithmetic in float: agreement to a few ulps.
-    for (const Errors* e : {&res, &jp, &jx, &jk}) CHECK(e->vs_float < 1e-5);
+    for (const Errors* e : {&res, &jp, &jx, &jk}) EXPECT(e->vs_float < 1e-5);
     // Single precision against double: Jacobians to a few ulps of their largest
     // entry; residuals to a small fraction of a pixel (far below keypoint noise).
-    for (const Errors* e : {&jp, &jx, &jk}) CHECK(e->vs_double < 1e-5);
-    CHECK(res.vs_double < 5e-4);
+    for (const Errors* e : {&jp, &jx, &jk}) EXPECT(e->vs_double < 1e-5);
+    EXPECT(res.vs_double < 5e-4);
   }
   return TEST_MAIN_RESULT();
 }

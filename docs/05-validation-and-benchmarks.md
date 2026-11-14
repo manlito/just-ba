@@ -69,6 +69,13 @@ Bundle adjustment problems can have several local minima that are equally good, 
 parameter comparison is done only on problems that converge to the same basin; final
 cost is the primary criterion.
 
+Measured in milestone 1 (results in document 07): with an inexact inner solve,
+per-iteration histories agree only until rounding changes a conjugate gradients
+stopping decision, typically after two or three iterations. On well-conditioned
+problems the end points still agree to 1e-8 or better. On venice-52 with the gauge
+held, rounding alone selects different basins, so BAL parity runs without gauge
+fixing (decision D60).
+
 ### Problem sets
 
 | Set | Source | Exercises |

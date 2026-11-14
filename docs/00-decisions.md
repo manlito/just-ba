@@ -101,12 +101,27 @@ for the owner to review; D52 and D53 are the owner's.
 | D52 | C++ standard: C++23 everywhere, CUDA sources included. Requires CUDA 13.3 or later. | The owner chose "whatever CUDA supports". nvcc accepts `-std=c++23` from CUDA 13.3 (13.5 documentation checked on 2026-11-14). Brings `std::expected` for the C-level API and `std::mdspan` for Jacobian blocks. | C++20 (the suggestion in document 06; no reason to stay). C++26 (compiler support still partial). |
 | D53 | The solver accepts several intrinsics blocks, one per image at most, all of the same camera model. One block per session stays the normal case and the fast path. Refines D11. | BAL has one camera per image, and milestone 1 parity with Ceres runs on BAL. The file format already holds several blocks (D48). One model per problem keeps kernels free of per-observation branching. | BAL parity only after averaging or fixing intrinsics (changes the problem, so not a parity test). Several camera models in one problem. |
 
+## Milestone 1 (2026-11-14)
+
+Made during the milestone 1 work and recorded for the owner to review.
+
+| # | Decision | Why | Rejected or ruled out |
+|---|---|---|---|
+| D54 | The trust-region loop follows Ceres's Levenberg-Marquardt exactly, with Ceres's defaults: Jacobian column scaling 1 / (1 + norm) computed once at the first iteration; damping clamp(diag(J^T J), 1e-6, 1e32) / radius; Ceres's radius updates; parameter and function tolerances tested on the candidate before accepting it; conjugate gradients stopped by Ceres's quadratic-model test with eta 0.1 and a residual reset every 10 iterations. | Parity with Ceres (D4) can then be checked iteration by iteration, not only at the end. On the first iterations of every BAL problem the costs and inner iteration counts are identical. | A different damping strategy or stopping rule: it would make every parity difference ambiguous. Can be revisited for speed once parity is established. |
+| D55 | Milestone 1 linear solver: implicit Schur complement with preconditioned conjugate gradients; preconditioner = the exact camera-side diagonal blocks of the Schur complement (Ceres's SCHUR_JACOBI). | Needs nothing external (document 03, strategy A) and matches a Ceres configuration directly. | Block-Jacobi on the camera blocks of J^T J only: cheaper but weaker. The explicit reduced system with a direct solve (strategy B) comes later. |
+| D56 | Robust losses: none, Huber, Cauchy, Geman-McClure, with Ceres's definitions and scale parameter; applied with Ceres's residual and Jacobian correction. | Same objective as Ceres. For all four losses rho'' <= 0, where the correction is exactly iterative reweighting (document 02). | Losses without a use yet (soft L1, Tukey, arctan). |
+| D57 | Automatic gauge, applied only when no image and no point is held fixed: hold the pose of the image with the most observations, and one translation coordinate of the image sharing the most points with it (the largest coordinate of R2 (C2 - C1), so it fixes the scale). Exposed as `choose_gauge` so reference solvers apply the same one. | Document 02's gauge table; deterministic; does not depend on frame order except to break ties. | Holding image 0 (depends on order, against D12). |
+| D58 | A top-level `api/` library holds the public entry points (`solve`), above core and the backends; the C-level API will live there too. | core must not depend on a backend, and the entry point chooses one. | Putting `solve` in the CPU backend. |
+| D59 | The CPU backend gives bit-identical results for any thread count: every output is written by one task, and sums use fixed-size blocks added in a fixed order. | Design principle 5 (document 03); makes failures reproducible. | Thread-count-dependent reductions. |
+| D60 | BAL parity is run without gauge fixing, as Ceres's own BAL example does. venice-52 runs 300 iterations with a 1e-3 cost tolerance in CI; agreement to 3e-7 after 2,000 iterations is a manual check. | With the gauge held, venice-52's end point depends on rounding: our solver lands at 248k or 244k depending on fused multiply-add, Ceres at 236k (iterative) or 242k (exact). Without it, both solvers follow the same path to the same cost. The other four problems agree to 1e-8 or better either way. | Requiring 1e-6 on venice-52 at Ceres's default 50 iterations: neither solver has converged then. |
+
 ## Still open
 
 | Item | When it gets decided |
 |---|---|
 | Default prior weight values (D21) | Milestone 2, from real captures |
 | Which linear solver is the default at each problem size | From the benchmark |
+| Whether venice-52 with the gauge held should be studied further (different basins by rounding, our two runs slightly above Ceres's two) | When strategy B (direct solve) exists, which removes the inner-solve rounding sensitivity |
 | Whether the caller's system or the library joins groups of frames left unconnected after a tracking break | When real broken sessions are available |
 | Desktop app: UI technology, bundled matcher, bare photos versus pose-carrying captures first | When the app is scheduled |
 

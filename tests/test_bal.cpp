@@ -64,12 +64,12 @@ int main() {
   }
 
   const auto p = jba::read_bal(path);
-  CHECK(p.model == jba::CameraModel::Radial);
-  CHECK(p.num_images() == n_cam && p.num_points() == n_pts && p.num_observations() == n_cam * n_pts);
-  CHECK(p.num_intrinsics_blocks() == n_cam);
+  EXPECT(p.model == jba::CameraModel::Radial);
+  EXPECT(p.num_images() == n_cam && p.num_points() == n_pts && p.num_observations() == n_cam * n_pts);
+  EXPECT(p.num_intrinsics_blocks() == n_cam);
   const double cost = jba::cpu::reprojection_cost(p);
   std::printf("BAL cost %.12g, converted cost %.12g\n", expected, cost);
-  CHECK_NEAR(cost, expected, 1e-10 * expected);
+  EXPECT_NEAR(cost, expected, 1e-10 * expected);
   std::filesystem::remove(path);
   return TEST_MAIN_RESULT();
 }

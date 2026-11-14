@@ -36,4 +36,7 @@ enum IntrinsicsGroup : std::uint8_t {
   kDistortion = 4,
 };
 
+// Group of parameter `index` of a model.
+IntrinsicsGroup intrinsics_group(CameraModel model, int index);
+
 }  // namespace jba

@@ -2,8 +2,8 @@
 
 A minimal, high-performance bundle adjustment library in C++ with Python bindings,
 for refining reconstructions that come with noisy camera poses from ARKit, ARCore
-or another tracker. Early development: milestone 0 (build, generated residuals,
-reference solver, file format). The plan is in [docs/](docs/README.md).
+or another tracker. Early development: milestone 1, plain bundle adjustment on the
+CPU, checked against Ceres. The plan is in [docs/](docs/README.md).
 
 ## Build
 
@@ -60,6 +60,17 @@ build/cli/just-ba convert-bal problem.txt problem.jba
 ```bash
 build/cli/just-ba info problem.jba
 ```
+
+```bash
+build/cli/just-ba solve problem.jba --loss huber:2 --output solved.jba --history history.json
+```
+
+Run `build/cli/just-ba` without arguments for every option.
+
+## Parity with Ceres
+
+With the reference solver enabled, `build/tests/ceres/jba_parity <problem>` solves
+the same problem with both solvers and checks the agreement (document 05).
 
 ## Licence
 

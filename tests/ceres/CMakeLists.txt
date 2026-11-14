@@ -2,25 +2,68 @@
 # -DCMAKE_PREFIX_PATH=<its install dir>.
 find_package(Ceres 2.2.0 EXACT REQUIRED CONFIG)
 
+add_library(jba_ceres_reference STATIC ceres_reference.cpp)
+target_link_libraries(jba_ceres_reference PUBLIC jba Ceres::ceres)
+
 add_executable(jba_ceres_solve ceres_solve.cpp)
-target_link_libraries(jba_ceres_solve PRIVATE jba_cpu Ceres::ceres)
+target_link_libraries(jba_ceres_solve PRIVATE jba_ceres_reference)
+add_executable(jba_parity parity.cpp)
+target_link_libraries(jba_parity PRIVATE jba_ceres_reference)
+add_executable(jba_make_problem make_problem.cpp)
+target_link_libraries(jba_make_problem PRIVATE jba)
+target_include_directories(jba_make_problem PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+add_executable(test_ceres_level1 test_ceres_level1.cpp)
+target_link_libraries(test_ceres_level1 PRIVATE jba_ceres_reference)
+add_test(NAME test_ceres_level1 COMMAND test_ceres_level1)
 
-# A synthetic problem written by the CLI's own tests is not available here, so the
-# always-on Ceres test converts a tiny generated BAL file; see make_tiny_problem.
-add_executable(jba_make_tiny_problem make_tiny_problem.cpp)
-target_link_libraries(jba_make_tiny_problem PRIVATE jba_cpu)
-target_include_directories(jba_make_tiny_problem PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+# Level 2 on synthetic problems: one generated file per case, then a parity run.
+#   jba_parity_case(<name> "<generator options>" "<parity options>")
+function(jba_parity_case name gen parity)
+  set(file ${CMAKE_CURRENT_BINARY_DIR}/synthetic_${name}.jba)
+  separate_arguments(gen_list UNIX_COMMAND "${gen}")
+  separate_arguments(parity_list UNIX_COMMAND "${parity}")
+  add_test(NAME parity_make_${name} COMMAND jba_make_problem ${file} ${gen_list})
+  add_test(NAME parity_${name} COMMAND jba_parity ${file} ${parity_list})
+  set_tests_properties(parity_make_${name} PROPERTIES FIXTURES_SETUP synthetic_${name})
+  set_tests_properties(parity_${name} PROPERTIES FIXTURES_REQUIRED synthetic_${name} LABELS parity)
+endfunction()
 
-add_test(NAME ceres_tiny_make COMMAND jba_make_tiny_problem ${CMAKE_CURRENT_BINARY_DIR}/tiny.jba)
-add_test(NAME ceres_tiny_solve COMMAND jba_ceres_solve ${CMAKE_CURRENT_BINARY_DIR}/tiny.jba --linear-solver dense_schur)
-set_tests_properties(ceres_tiny_make PROPERTIES FIXTURES_SETUP tiny_problem)
-set_tests_properties(ceres_tiny_solve PROPERTIES FIXTURES_REQUIRED tiny_problem)
+jba_parity_case(simple_pinhole "--model SIMPLE_PINHOLE" "--check-parameters")
+jba_parity_case(pinhole "--model PINHOLE" "--check-parameters")
+jba_parity_case(simple_radial "--model SIMPLE_RADIAL" "--check-parameters")
+jba_parity_case(radial "--model RADIAL" "--check-parameters")
+jba_parity_case(no_gauge "--model RADIAL" "--gauge none")
+jba_parity_case(fixed_blocks "--model PINHOLE --fix-images 2 --fix-points 20" "--check-parameters")
+jba_parity_case(sigma "--model SIMPLE_RADIAL --sigma 0.7" "--check-parameters")
+jba_parity_case(shared_focal "--model RADIAL --free-intrinsics 1" "--check-parameters")
+jba_parity_case(shared_all_intrinsics "--model PINHOLE --free-intrinsics 7" "--check-parameters")
+jba_parity_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --free-intrinsics 5" "")
+jba_parity_case(huber "--model SIMPLE_RADIAL --outliers 0.05" "--loss huber:2 --check-parameters")
+jba_parity_case(cauchy "--model SIMPLE_RADIAL --outliers 0.05" "--loss cauchy:2 --check-parameters")
+jba_parity_case(geman_mcclure "--model SIMPLE_RADIAL --outliers 0.05" "--loss geman_mcclure:2 --check-parameters")
+# Against Ceres's exact solver: costs must agree, but an inexact inner solve takes
+# more outer iterations by design, so the iteration ratio is not the matched one.
+jba_parity_case(sparse_schur "--model RADIAL" "--linear-solver sparse_schur --max-iteration-ratio 3")
 
-# A real BAL problem, when present (fetch with tests/data/fetch_bal.py).
+# Level 2 on the BAL test set, when present (fetch with tests/data/fetch_bal.py).
+# Run without gauge fixing, as Ceres's own BAL example does: with the gauge held,
+# venice-52's end point depends on rounding (several basins; document 05, results).
+# venice-52 also needs more than 50 iterations to converge, and then agrees to about
+# 2e-4; it reaches 3e-7 only after about 2,000 iterations, a manual check.
+set(_bal_args_problem-52-64053-pre --max-iterations 300 --max-cost-diff 1e-3)
 set(JBA_BAL_DIR "${PROJECT_SOURCE_DIR}/tests/data/bal" CACHE PATH "Directory holding downloaded BAL problems")
-set(_ladybug "${JBA_BAL_DIR}/problem-49-7776-pre.txt")
-if(EXISTS "${_ladybug}")
-  add_test(NAME ceres_bal_ladybug_49 COMMAND jba_ceres_solve ${_ladybug} --linear-solver sparse_schur)
-else()
-  message(STATUS "BAL ladybug-49 not found in ${JBA_BAL_DIR}; run tests/data/fetch_bal.py to enable its Ceres test")
+set(_bal_set problem-49-7776-pre problem-21-11315-pre problem-16-22106-pre problem-52-64053-pre
+             problem-93-61203-pre)
+set(_missing "")
+foreach(_name IN LISTS _bal_set)
+  set(_file "${JBA_BAL_DIR}/${_name}.txt")
+  if(EXISTS "${_file}")
+    add_test(NAME parity_bal_${_name} COMMAND jba_parity ${_file} --gauge none ${_bal_args_${_name}})
+    set_tests_properties(parity_bal_${_name} PROPERTIES LABELS "parity;bal")
+  else()
+    list(APPEND _missing ${_name})
+  endif()
+endforeach()
+if(_missing)
+  message(STATUS "BAL problems not found in ${JBA_BAL_DIR}: ${_missing}; run tests/data/fetch_bal.py")
 endif()

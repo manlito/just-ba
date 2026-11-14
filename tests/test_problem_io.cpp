@@ -51,9 +51,9 @@ int main() {
     const auto path = temp_path("minimal.jba");
     jba::write_problem(path, p);
     const auto q = jba::read_problem(path);
-    CHECK(same(p, q));
-    CHECK(q.num_observations() == p.num_observations());
-    CHECK(slurp(path).size() % 8 == 0);
+    EXPECT(same(p, q));
+    EXPECT(q.num_observations() == p.num_observations());
+    EXPECT(slurp(path).size() % 8 == 0);
     fs::remove(path);
   }
 
@@ -79,32 +79,32 @@ int main() {
     const auto path = temp_path("full.jba");
     jba::write_problem(path, p);
     const auto q = jba::read_problem(path);
-    CHECK(same(p, q));
+    EXPECT(same(p, q));
 
     // Writing what was read gives the same bytes.
     const auto path2 = temp_path("full2.jba");
     jba::write_problem(path2, q);
-    CHECK(slurp(path) == slurp(path2));
+    EXPECT(slurp(path) == slurp(path2));
 
     // Damaged files are refused with an exception, never read silently.
     const auto bytes = slurp(path);
     const auto bad = temp_path("bad.jba");
     for (std::size_t cut : {std::size_t(3), std::size_t(17), bytes.size() / 2, bytes.size() - 8}) {
       spit(bad, std::vector<char>(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(cut)));
-      CHECK_THROWS(jba::read_problem(bad));
+      EXPECT_THROWS(jba::read_problem(bad));
     }
     auto wrong_magic = bytes;
     wrong_magic[1] = 'X';
     spit(bad, wrong_magic);
-    CHECK_THROWS(jba::read_problem(bad));
+    EXPECT_THROWS(jba::read_problem(bad));
     auto wrong_version = bytes;
     wrong_version[8] = 9;
     spit(bad, wrong_version);
-    CHECK_THROWS(jba::read_problem(bad));
+    EXPECT_THROWS(jba::read_problem(bad));
     auto trailing = bytes;
     trailing.insert(trailing.end(), 8, 0);
     spit(bad, trailing);
-    CHECK_THROWS(jba::read_problem(bad));
+    EXPECT_THROWS(jba::read_problem(bad));
     for (const auto& f : {path, path2, bad}) fs::remove(f);
   }
 
@@ -114,14 +114,14 @@ int main() {
     const auto path = temp_path("invalid.jba");
     auto bad_index = p;
     bad_index.obs_point[0] = 1000;
-    CHECK_THROWS(jba::write_problem(path, bad_index));
+    EXPECT_THROWS(jba::write_problem(path, bad_index));
     auto bad_quat = p;
     bad_quat.poses[0] = 2;
-    CHECK_THROWS(jba::write_problem(path, bad_quat));
+    EXPECT_THROWS(jba::write_problem(path, bad_quat));
     auto two_blocks = p;
     two_blocks.intrinsics.insert(two_blocks.intrinsics.end(), p.intrinsics.begin(), p.intrinsics.end());
-    CHECK_THROWS(jba::write_problem(path, two_blocks));  // image_intrinsics missing
-    CHECK(!jba::validate(p).size());
+    EXPECT_THROWS(jba::write_problem(path, two_blocks));  // image_intrinsics missing
+    EXPECT(!jba::validate(p).size());
     fs::remove(path);
   }
 
