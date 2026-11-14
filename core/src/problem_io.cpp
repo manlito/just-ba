@@ -84,6 +84,15 @@ class Writer {
     section(name, dtype_of<T>(), shape, v.data(), v.size() * sizeof(T));
   }
 
+  template <typename T>
+  void array_shape(const std::string& name, const std::vector<T>& v, const std::vector<std::uint64_t>& tail) {
+    std::uint64_t per = 1;
+    for (auto d : tail) per *= d;
+    std::vector<std::uint64_t> shape = {v.size() / per};
+    shape.insert(shape.end(), tail.begin(), tail.end());
+    section(name, dtype_of<T>(), shape, v.data(), v.size() * sizeof(T));
+  }
+
   std::uint32_t count() const { return count_; }
 
  private:
@@ -147,14 +156,21 @@ class Reader {
   std::size_t pos_ = 0;
 };
 
+// Reads a section of shape [n] (tail empty) or [n, tail...].
 template <typename T>
-void take(const std::string& path, const RawSection& s, std::uint64_t cols, std::vector<T>& out) {
+void take_shape(const std::string& path, const RawSection& s, const std::vector<std::uint64_t>& tail,
+                std::vector<T>& out) {
   if (s.dtype != dtype_of<T>()) fail(path, "section '" + s.name + "' has the wrong dtype");
-  const bool ok = cols == 1 ? (s.shape.size() == 1)
-                            : (s.shape.size() == 2 && s.shape[1] == cols);
+  bool ok = s.shape.size() == 1 + tail.size();
+  for (std::size_t d = 0; ok && d < tail.size(); ++d) ok = s.shape[1 + d] == tail[d];
   if (!ok) fail(path, "section '" + s.name + "' has the wrong shape");
   out.resize(s.bytes.size() / sizeof(T));
   if (!out.empty()) std::memcpy(out.data(), s.bytes.data(), s.bytes.size());
+}
+
+template <typename T>
+void take(const std::string& path, const RawSection& s, std::uint64_t cols, std::vector<T>& out) {
+  take_shape(path, s, cols == 1 ? std::vector<std::uint64_t>{} : std::vector<std::uint64_t>{cols}, out);
 }
 
 std::vector<std::uint8_t> read_file(const std::string& path) {
@@ -166,6 +182,80 @@ std::vector<std::uint8_t> read_file(const std::string& path) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+
+namespace {
+
+bool unit_quaternion(const double* q) {
+  const double n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+  return std::abs(n - 1.0) < 1e-9;
+}
+
+// Weights of one kind of prior: at most one of sigma and sqrt_info; sigmas positive
+// (+inf allowed: that part is left out); whitening finite.
+std::string validate_weights(const char* kind, std::size_t n, const std::vector<double>& sigma,
+                             const std::vector<double>& sqrt_info) {
+  const std::string k(kind);
+  if (!sigma.empty() && !sqrt_info.empty()) return k + " priors may have sigma or sqrt_info, not both";
+  if (!sigma.empty() && sigma.size() != 2 * n) return k + " prior sigma must have 2 values per prior";
+  if (!sqrt_info.empty() && sqrt_info.size() != 36 * n) return k + " prior sqrt_info must have 36 values per prior";
+  for (std::size_t a = 0; a < sigma.size(); ++a) {
+    if (!(sigma[a] > 0)) return k + " prior " + std::to_string(a / 2) + " has a non-positive sigma";
+  }
+  for (std::size_t a = 0; a < sqrt_info.size(); ++a) {
+    if (!std::isfinite(sqrt_info[a])) return k + " prior " + std::to_string(a / 36) + " has a non-finite sqrt_info";
+  }
+  return {};
+}
+
+std::string validate_priors(const Problem& p) {
+  const std::size_t n_img = p.num_images();
+  const std::size_t n_rel = p.num_relative_priors(), n_glob = p.num_global_priors();
+  if (p.rel_images.size() % 2 != 0) return "rel_images must hold 2 values per relative prior";
+  if (p.rel_pose.size() != 7 * n_rel) return "rel_pose must hold 7 values per relative prior";
+  for (std::size_t k = 0; k < n_rel; ++k) {
+    const auto i = p.rel_images[2 * k], j = p.rel_images[2 * k + 1];
+    if (i < 0 || j < 0 || static_cast<std::size_t>(i) >= n_img || static_cast<std::size_t>(j) >= n_img)
+      return "relative prior " + std::to_string(k) + " refers to a missing image";
+    if (i == j) return "relative prior " + std::to_string(k) + " ties an image to itself";
+    if (!unit_quaternion(&p.rel_pose[7 * k])) return "relative prior " + std::to_string(k) + " has a non-unit quaternion";
+  }
+  if (auto err = validate_weights("relative", n_rel, p.rel_sigma, p.rel_sqrt_info); !err.empty()) return err;
+
+  if (p.glob_pose.size() != 7 * n_glob) return "glob_pose must hold 7 values per global prior";
+  if (!p.glob_set.empty() && p.glob_set.size() != n_glob) return "glob_set must have one entry per global prior";
+  const std::size_t n_sets = p.num_prior_sets();
+  for (std::size_t k = 0; k < n_glob; ++k) {
+    if (p.glob_image[k] < 0 || static_cast<std::size_t>(p.glob_image[k]) >= n_img)
+      return "global prior " + std::to_string(k) + " refers to a missing image";
+    const auto s = p.set_of_global_prior(k);
+    if (s < 0 || static_cast<std::size_t>(s) >= n_sets)
+      return "global prior " + std::to_string(k) + " refers to a missing prior set";
+    if (!unit_quaternion(&p.glob_pose[7 * k])) return "global prior " + std::to_string(k) + " has a non-unit quaternion";
+  }
+  if (auto err = validate_weights("global", n_glob, p.glob_sigma, p.glob_sqrt_info); !err.empty()) return err;
+  for (auto r : p.set_relation) {
+    if (r != FrameRelation::Identity && r != FrameRelation::Rigid && r != FrameRelation::Similarity)
+      return "unknown prior set relation " + std::to_string(static_cast<int>(r));
+  }
+  if (!p.set_transform.empty()) {
+    if (p.set_transform.size() != 8 * n_sets) return "set_transform must hold 8 values per prior set";
+    for (std::size_t s = 0; s < n_sets; ++s) {
+      if (!unit_quaternion(&p.set_transform[8 * s])) return "prior set " + std::to_string(s) + " has a non-unit quaternion";
+      if (!(p.set_transform[8 * s + 7] > 0)) return "prior set " + std::to_string(s) + " has a non-positive scale";
+      if (p.relation_of_set(s) == FrameRelation::Identity) {
+        static constexpr double kIdentity[8] = {1, 0, 0, 0, 0, 0, 0, 1};
+        for (int a = 0; a < 8; ++a)
+          if (p.set_transform[8 * s + static_cast<std::size_t>(a)] != kIdentity[a])
+            return "prior set " + std::to_string(s) + " is the working frame but its transform is not the identity";
+      }
+      if (p.relation_of_set(s) == FrameRelation::Rigid && p.set_transform[8 * s + 7] != 1)
+        return "prior set " + std::to_string(s) + " is rigid but its scale is not 1";
+    }
+  }
+  return {};
+}
+
+}  // namespace
 
 std::string validate(const Problem& p) {
   const int np = num_params(p.model);
@@ -191,10 +281,9 @@ std::string validate(const Problem& p) {
       return "image " + std::to_string(i) + " refers to a missing intrinsics block";
   }
   for (std::size_t i = 0; i < n_img; ++i) {
-    const double* q = &p.poses[7 * i];
-    const double n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    if (!(std::abs(n - 1.0) < 1e-9)) return "image " + std::to_string(i) + " has a non-unit quaternion";
+    if (!unit_quaternion(&p.poses[7 * i])) return "image " + std::to_string(i) + " has a non-unit quaternion";
   }
+  if (auto err = validate_priors(p); !err.empty()) return err;
   for (std::size_t k = 0; k < n_obs; ++k) {
     if (p.obs_image[k] < 0 || static_cast<std::size_t>(p.obs_image[k]) >= n_img)
       return "observation " + std::to_string(k) + " refers to a missing image";
@@ -225,6 +314,25 @@ void write_problem(const std::string& path, const Problem& p) {
   w.array("obs.point", p.obs_point, 1);
   w.array("obs.xy", p.obs_xy, 2);
   if (!p.obs_sigma.empty()) w.array("obs.sigma", p.obs_sigma, 1);
+  if (p.num_relative_priors() > 0) {
+    w.array("prior.relative.images", p.rel_images, 2);
+    w.array("prior.relative.pose", p.rel_pose, 7);
+    if (!p.rel_sigma.empty()) w.array("prior.relative.sigma", p.rel_sigma, 2);
+    if (!p.rel_sqrt_info.empty()) w.array_shape("prior.relative.sqrt_info", p.rel_sqrt_info, {6, 6});
+  }
+  if (p.num_global_priors() > 0) {
+    w.array("prior.global.image", p.glob_image, 1);
+    if (!p.glob_set.empty()) w.array("prior.global.set", p.glob_set, 1);
+    w.array("prior.global.pose", p.glob_pose, 7);
+    if (!p.glob_sigma.empty()) w.array("prior.global.sigma", p.glob_sigma, 2);
+    if (!p.glob_sqrt_info.empty()) w.array_shape("prior.global.sqrt_info", p.glob_sqrt_info, {6, 6});
+  }
+  if (!p.set_relation.empty()) {
+    std::vector<std::int32_t> rel(p.set_relation.size());
+    for (std::size_t a = 0; a < rel.size(); ++a) rel[a] = static_cast<std::int32_t>(p.set_relation[a]);
+    w.array("prior.set.relation", rel, 1);
+  }
+  if (!p.set_transform.empty()) w.array("prior.set.transform", p.set_transform, 8);
   for (const auto& s : p.extra) w.section(s.name, s.dtype, s.shape, s.bytes.data(), s.bytes.size());
 
   std::vector<std::uint8_t> file;
@@ -286,6 +394,22 @@ Problem read_problem(const std::string& path) {
     else if (n == "obs.point") { take(path, s, 1, p.obs_point); have_op = true; }
     else if (n == "obs.xy") { take(path, s, 2, p.obs_xy); have_oxy = true; }
     else if (n == "obs.sigma") take(path, s, 1, p.obs_sigma);
+    else if (n == "prior.relative.images") take(path, s, 2, p.rel_images);
+    else if (n == "prior.relative.pose") take(path, s, 7, p.rel_pose);
+    else if (n == "prior.relative.sigma") take(path, s, 2, p.rel_sigma);
+    else if (n == "prior.relative.sqrt_info") take_shape(path, s, {6, 6}, p.rel_sqrt_info);
+    else if (n == "prior.global.image") take(path, s, 1, p.glob_image);
+    else if (n == "prior.global.set") take(path, s, 1, p.glob_set);
+    else if (n == "prior.global.pose") take(path, s, 7, p.glob_pose);
+    else if (n == "prior.global.sigma") take(path, s, 2, p.glob_sigma);
+    else if (n == "prior.global.sqrt_info") take_shape(path, s, {6, 6}, p.glob_sqrt_info);
+    else if (n == "prior.set.relation") {
+      std::vector<std::int32_t> rel;
+      take(path, s, 1, rel);
+      p.set_relation.resize(rel.size());
+      for (std::size_t a = 0; a < rel.size(); ++a) p.set_relation[a] = static_cast<FrameRelation>(rel[a]);
+    }
+    else if (n == "prior.set.transform") take(path, s, 8, p.set_transform);
     else p.extra.push_back(std::move(s));
   }
   if (!have_intr) fail(path, "missing section 'intrinsics'");

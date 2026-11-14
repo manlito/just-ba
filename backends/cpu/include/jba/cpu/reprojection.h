@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdexcept>
-
 #include "jba/camera_model.h"
 #include "reprojection_generated.h"  // residuals/generated/cpu
 
@@ -24,8 +22,11 @@ inline void reprojection(CameraModel model, const Scalar* q, const Scalar* t, co
       return g::reprojection_simple_radial(q, t, point, intrinsics, observed, residual, J_pose, J_point, J_intrinsics);
     case CameraModel::Radial:
       return g::reprojection_radial(q, t, point, intrinsics, observed, residual, J_pose, J_point, J_intrinsics);
-    default:
-      throw std::invalid_argument("reprojection: camera model not implemented yet");
+    case CameraModel::OpenCV:
+      return g::reprojection_opencv(q, t, point, intrinsics, observed, residual, J_pose, J_point, J_intrinsics);
+    case CameraModel::OpenCVFisheye:
+      return g::reprojection_opencv_fisheye(q, t, point, intrinsics, observed, residual, J_pose, J_point,
+                                            J_intrinsics);
   }
 }
 

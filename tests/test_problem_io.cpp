@@ -5,10 +5,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
+#include <random>
 #include <string>
 #include <vector>
 
 #include "check.h"
+#include "jba/priors.h"
 #include "jba/problem_io.h"
 #include "synthetic.h"
 
@@ -39,12 +42,54 @@ bool same(const jba::Problem& a, const jba::Problem& b) {
   return a.model == b.model && a.intrinsics == b.intrinsics && a.intrinsics_free == b.intrinsics_free &&
          a.poses == b.poses && a.image_intrinsics == b.image_intrinsics && a.image_fixed == b.image_fixed &&
          a.points == b.points && a.point_fixed == b.point_fixed && a.obs_image == b.obs_image &&
-         a.obs_point == b.obs_point && a.obs_xy == b.obs_xy && a.obs_sigma == b.obs_sigma && extra_same;
+         a.obs_point == b.obs_point && a.obs_xy == b.obs_xy && a.obs_sigma == b.obs_sigma &&
+         a.rel_images == b.rel_images && a.rel_pose == b.rel_pose && a.rel_sigma == b.rel_sigma &&
+         a.rel_sqrt_info == b.rel_sqrt_info && a.glob_image == b.glob_image && a.glob_set == b.glob_set &&
+         a.glob_pose == b.glob_pose && a.glob_sigma == b.glob_sigma && a.glob_sqrt_info == b.glob_sqrt_info &&
+         a.set_relation == b.set_relation && a.set_transform == b.set_transform && extra_same;
 }
 
 }  // namespace
 
 int main() {
+  // Pose priors: every prior section, both weight forms, several sets.
+  {
+    auto p = jba_test::random_problem(jba::CameraModel::Pinhole, 4, 20, 9);
+    jba::add_relative_priors_from_poses(p, p.poses, {0, 1, 1, 2, 2, 3});
+    p.rel_sqrt_info.assign(36 * p.num_relative_priors(), 0.0);
+    for (std::size_t k = 0; k < p.num_relative_priors(); ++k)
+      for (int a = 0; a < 6; ++a) p.rel_sqrt_info[36 * k + 7 * static_cast<std::size_t>(a)] = 10.0 + a;
+    p.glob_image = {0, 2, 3};
+    p.glob_set = {0, 1, 1};
+    p.glob_pose.assign(p.poses.begin(), p.poses.begin() + 21);
+    p.glob_sigma = {0.01, 0.1, 0.02, std::numeric_limits<double>::infinity(), 0.03, 0.3};
+    p.set_relation = {jba::FrameRelation::Identity, jba::FrameRelation::Similarity};
+    p.set_transform = {1, 0, 0, 0, 0, 0, 0, 1, 0.6, 0.8, 0, 0, 1, 2, 3, 1.5};
+    const auto path = temp_path("priors.jba");
+    jba::write_problem(path, p);
+    const auto q = jba::read_problem(path);
+    EXPECT(same(p, q));
+    EXPECT(q.num_relative_priors() == 3 && q.num_global_priors() == 3 && q.num_prior_sets() == 2);
+    fs::remove(path);
+
+    // Invalid priors are refused.
+    auto bad = p;
+    bad.rel_images[1] = 0;  // ties image 0 to itself
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.rel_sigma = {0.1, 0.1, 0.1, 0.1, 0.1, 0.1};  // both weight forms
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.glob_set[1] = 5;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.set_transform[4] = 0.5;  // identity set with a non-identity transform
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.glob_sigma[0] = 0;
+    EXPECT(!jba::validate(bad).empty());
+  }
+
   // Minimal problem: required sections only.
   {
     const auto p = jba_test::random_problem(jba::CameraModel::SimpleRadial, 4, 30, 7);
@@ -69,7 +114,7 @@ int main() {
     p.point_fixed[3] = 1;
     p.obs_sigma.assign(p.num_observations(), 1.5);
     jba::RawSection future;
-    future.name = "prior.relative.pairs";
+    future.name = "lines.segments";
     future.dtype = 2;  // int32
     future.shape = {2, 2};
     future.bytes.assign(16, 0);

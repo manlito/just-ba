@@ -10,6 +10,8 @@
 //   PINHOLE         id 1: fx, fy, cx, cy
 //   SIMPLE_RADIAL   id 2: f, cx, cy, k
 //   RADIAL          id 3: f, cx, cy, k1, k2
+//   OPENCV          id 4: fx, fy, cx, cy, k1, k2, p1, p2
+//   OPENCV_FISHEYE  id 5: fx, fy, cx, cy, k1, k2, k3, k4
 
 namespace jba_generated {
 
@@ -459,6 +461,388 @@ inline void reprojection_radial(thread const Scalar* q, thread const Scalar* t, 
   const Scalar v0000 = intrinsics[1];
   residual[0] = v0000 + v0691 * (v0321 * v0542) + -v0002;
   residual[1] = v0069 + v0691 * (v0321 * v0562) + -v0070;
+}
+
+template <typename Scalar>
+inline void reprojection_opencv(thread const Scalar* q, thread const Scalar* t, thread const Scalar* point, thread const Scalar* intrinsics, thread const Scalar* observed, thread Scalar* residual, thread Scalar* J_pose, thread Scalar* J_point, thread Scalar* J_intrinsics)
+{
+  // Operation counts:
+  // add: 133
+  // branch: 3
+  // divide: 3
+  // multiply: 290
+  // negate: 17
+  // total: 446
+
+  const Scalar v00020 = q[0];
+  const Scalar v00014 = q[3];
+  const Scalar v00011 = q[2];
+  const Scalar v01277 = -v00020;
+  const Scalar v00022 = q[1];
+  const Scalar v00411 = v00011 * v00014;
+  const Scalar v00394 = v00011 * v00022;
+  const Scalar v00406 = v00022 * v00022;
+  const Scalar v00389 = v00014 * v00014;
+  const Scalar v00398 = v00014 * v00022;
+  const Scalar v00388 = v00011 * v00011;
+  const Scalar v00412 = v00022 * v01277 + v00411;
+  const Scalar v00026 = point[2];
+  const Scalar v00403 = v00394 + v00014 * v00020;
+  const Scalar v00009 = point[0];
+  const Scalar v01275 = -static_cast<Scalar>(2);
+  const Scalar v00399 = v00398 + v00011 * v00020;
+  const Scalar v00395 = v00014 * v01277 + v00394;
+  const Scalar v00019 = point[1];
+  const Scalar v00420 = v00411 + v00020 * v00022;
+  const Scalar v00416 = v00398 + v00011 * v01277;
+  const Scalar v00409 = static_cast<Scalar>(1) + (v00389 + v00406) * v01275;
+  const Scalar v00392 = static_cast<Scalar>(1) + (v00388 + v00389) * v01275;
+  const Scalar v00426 = static_cast<Scalar>(1) + (v00388 + v00406) * v01275;
+  const Scalar v01270 = v00019 * v00409 + static_cast<Scalar>(2) * (v00009 * v00403 + v00026 * v00412);
+  const Scalar v00032 = t[1];
+  const Scalar v01269 = v00009 * v00392 + static_cast<Scalar>(2) * (v00019 * v00395 + v00026 * v00399);
+  const Scalar v00008 = t[0];
+  const Scalar v01271 = v00026 * v00426 + static_cast<Scalar>(2) * (v00009 * v00416 + v00019 * v00420);
+  const Scalar v00044 = t[2];
+  const Scalar v00825 = v00032 + v01270;
+  const Scalar v00815 = v00008 + v01269;
+  const Scalar v00835 = v00044 + v01271;
+  const Scalar v01159 = v00825 * v00825;
+  const Scalar v01158 = v00815 * v00815;
+  const Scalar v01242 = v00835 * v00835;
+  const Scalar v00433 = v01158 + v01159;
+  const Scalar v00055 = static_cast<Scalar>(1) / v01242;
+  const Scalar v01127 = v00055 * v00433;
+  const Scalar v00068 = intrinsics[5];
+  const Scalar v00064 = intrinsics[4];
+  const Scalar v00436 = v00064 + v00068 * v01127;
+  const Scalar v00096 = static_cast<Scalar>(1) / (v00835 * v01242);
+  const Scalar v00057 = intrinsics[7];
+  const Scalar v00007 = intrinsics[6];
+  const Scalar v01221 = v00096 * static_cast<Scalar>(4);
+  const Scalar v01156 = v00057 * v00815;
+  const Scalar v01124 = static_cast<Scalar>(2) * v00815;
+  const Scalar v01125 = static_cast<Scalar>(2) * v00825;
+  const Scalar v01152 = v00007 * v00825;
+  const Scalar v01123 = static_cast<Scalar>(2) * v00055;
+  const Scalar v01272 = v00055 + v01127 * (v00055 * v00436);
+  const Scalar v00587 = v01156 * v01221 + v01272;
+  const Scalar v01243 = v00436 * v01127;
+  const Scalar v01284 = -v00096;
+  const Scalar v00582 = v00815 * v01124 + static_cast<Scalar>(6) * v01159;
+  const Scalar v00464 = static_cast<Scalar>(6) * v01158 + v00825 * v01125;
+  const Scalar v00071 = static_cast<Scalar>(1) / v00835;
+  const Scalar v01280 = -v00815;
+  const Scalar v00485 = v01152 * v01221 + v01272;
+  const Scalar v00477 = v00064 + v01123 * (v00068 * v00433);
+  const Scalar v01136 = static_cast<Scalar>(3) * v00825;
+  const Scalar v01135 = static_cast<Scalar>(3) * v00815;
+  const Scalar v01176 = v00587 * v00825;
+  const Scalar v00440 = static_cast<Scalar>(1) + v01243;
+  const Scalar v01246 = v00582 * v01284;
+  const Scalar v01244 = v00464 * v01284;
+  const Scalar v01184 = v00071 * v00825;
+  const Scalar v01245 = v00485 * v01280;
+  const Scalar v00080 = intrinsics[1];
+  const Scalar v00005 = intrinsics[0];
+  if (J_pose != nullptr) {
+    const Scalar v01281 = -v01269;
+    const Scalar v01260 = v01270 * v01280;
+    const Scalar v01240 = v00825 * v01269;
+    const Scalar v01129 = v00055 * v01271;
+    const Scalar v01141 = v00096 * v00433;
+    const Scalar v00873 = v01240 + v01260;
+    const Scalar v01137 = v00433 * v00436;
+    const Scalar v01174 = v00071 * v00477;
+    const Scalar v00865 = v00815 * v01129 + v00433 * (v01281 * v01284);
+    const Scalar v01143 = v00096 * v00582;
+    const Scalar v01247 = v01123 * v01271;
+    const Scalar v00857 = v00825 * v01129 + v01141 * v01270;
+    const Scalar v01138 = v00477 * v00815;
+    const Scalar v01142 = v00096 * v00464;
+    const Scalar v00901 = v00071 * (static_cast<Scalar>(2) * v00477) * v01141;
+    const Scalar v00538 = v01270 * -v00825 + v00815 * v01269;
+    const Scalar v01262 = ((v00007 * v00815 + v00057 * v00825) + v01138 * v01184) * v01123;
+    J_pose[0] = v00005 * ((v00485 * v01270 + static_cast<Scalar>(2) * (v00007 * v01129 + v00857 * v01174)) * v01280 + -(v00057 * (v01123 * (v00825 * v01271) + v01142 * v01270)));
+    J_pose[1] = v00005 * (v01152 * v01247 + v00057 * (v01135 * v01247 + v01244 * v01281) + v01245 * v01281 + v00071 * (v01124 * (v00477 * v00865) + v01243 * v01271 + v01271));
+    J_pose[2] = v00005 * (v00071 * (v00873 * v01123 * v01138 + v00440 * -v01270) + (v00057 * (static_cast<Scalar>(3) * v01260 + v01240) + v00007 * v00538) * v01123);
+    J_pose[3] = v00005 * (v00071 + v00055 * (static_cast<Scalar>(2) * (v00057 * v01135 + v01152) + v00071 * (v01124 * v01138 + v01137)));
+    J_pose[4] = v00005 * v01262;
+    J_pose[5] = -(v00005 * (v00057 * v01142 + v00815 * (v00485 + v00901)));
+    J_pose[6] = v00080 * (-(v00071 * (v01125 * (v00477 * v00857) + v00440 * v01271)) + -((v01156 * v01247 + v01176 * v01270) + v00007 * (v01136 * v01247 + v01143 * v01270)));
+    J_pose[7] = v00080 * (v00007 * (v01123 * (v00815 * v01271) + v01246 * v01281) + v00825 * (v00587 * (static_cast<Scalar>(-1) * static_cast<Scalar>(-1)) * v01269 + static_cast<Scalar>(2) * (v00057 * v01129 + v00865 * v01174)));
+    J_pose[8] = v00080 * (v00071 * (v00055 * (v01125 * (v00477 * v00873) + v01137 * v01269) + v01269) + (v00007 * (v01136 * v01269 + v01260) + v00057 * v00538) * v01123);
+    J_pose[9] = v00080 * v01262;
+    J_pose[10] = v00080 * (v00071 + v00055 * (v00071 * (v01125 * (v00477 * v00825) + v01137) + static_cast<Scalar>(2) * (v00007 * v01136 + v01156)));
+    J_pose[11] = -(v00080 * (v00007 * v01143 + v00825 * (v00587 + v00901)));
+  }
+  const Scalar v01134 = v00055 * v00057;
+  const Scalar v01133 = v00007 * v00055;
+  if (J_point != nullptr) {
+    const Scalar v01227 = v00412 * v00825;
+    const Scalar v01224 = v00399 * v00815;
+    const Scalar v01257 = v00395 * v01124;
+    const Scalar v01226 = v00409 * v00825;
+    const Scalar v01258 = v00403 * v01125;
+    const Scalar v01222 = v00392 * v00815;
+    const Scalar v01171 = static_cast<Scalar>(2) * v00433;
+    const Scalar v01172 = static_cast<Scalar>(2) * v00440;
+    const Scalar v01237 = v00477 * (v00433 * (v00426 * v01284) + (v01224 + v01227) * v01123);
+    const Scalar v01252 = static_cast<Scalar>(2) * v01123;
+    const Scalar v00704 = v00409 * v00815 + v00395 * v01125;
+    const Scalar v01236 = v00477 * (v01171 * (v00420 * v01284) + v00055 * (v01226 + v01257));
+    const Scalar v00670 = v00392 * v00825 + v00403 * v01124;
+    const Scalar v01235 = v00477 * (v01171 * (v00416 * v01284) + v00055 * (v01222 + v01258));
+    const Scalar v01261 = (v00412 * v00815 + v00399 * v00825) * v01123;
+    const Scalar v01153 = static_cast<Scalar>(2) * v00057;
+    const Scalar v01151 = v00007 * static_cast<Scalar>(2);
+    J_point[0] = v00005 * ((v00416 * v01244 + v00055 * (v00392 * v01135 + v01258)) * v01153 + v00071 * (v00392 + v00392 * v01243 + v01124 * v01235) + static_cast<Scalar>(2) * (v00416 * v01245 + v00670 * v01133));
+    J_point[1] = v00005 * ((v00420 * v01244 + v00055 * (static_cast<Scalar>(3) * v01257 + v01226)) * v01153 + v00071 * (v01124 * v01236 + v00440 * (static_cast<Scalar>(2) * v00395)) + static_cast<Scalar>(2) * (v00420 * v01245 + v00704 * v01133));
+    J_point[2] = v00005 * (v00057 * (v00426 * v01244 + (v00399 * v01135 + v01227) * v01252) + v00426 * v01245 + v01151 * v01261 + v00071 * (v01124 * v01237 + v00399 * v01172));
+    J_point[3] = v00080 * ((v00416 * v01246 + v00055 * (static_cast<Scalar>(3) * v01258 + v01222)) * v01151 + v00071 * (v01125 * v01235 + v00440 * (static_cast<Scalar>(2) * v00403)) + static_cast<Scalar>(2) * (v01176 * -v00416 + v00670 * v01134));
+    J_point[4] = v00080 * ((v00420 * v01246 + v00055 * (v00409 * v01136 + v01257)) * v01151 + v00071 * (v00409 + v00409 * v01243 + v01125 * v01236) + static_cast<Scalar>(2) * (v01176 * -v00420 + v00704 * v01134));
+    J_point[5] = v00080 * (v00007 * (v00426 * v01246 + (v00412 * v01136 + v01224) * v01252) + v01176 * -v00426 + v01153 * v01261 + v00071 * (v01125 * v01237 + v00412 * v01172));
+  }
+  const Scalar v00842 = v00071 * v00440;
+  const Scalar v00445 = v00825 * v01136 + v01158;
+  const Scalar v00429 = v00815 * v01135 + v01159;
+  const Scalar v00850 = v00445 * v01133 + v00825 * (v00842 + v01123 * v01156);
+  const Scalar v00845 = v00429 * v01134 + v00815 * (v00842 + v01123 * v01152);
+  if (J_intrinsics != nullptr) {
+    const Scalar v01180 = v00005 * v00815;
+    const Scalar v01255 = v00080 * v01127;
+    const Scalar v01253 = v00071 * v01127;
+    J_intrinsics[0] = v00845;
+    J_intrinsics[1] = static_cast<Scalar>(0);
+    J_intrinsics[2] = static_cast<Scalar>(1);
+    J_intrinsics[3] = static_cast<Scalar>(0);
+    J_intrinsics[4] = v01180 * v01253;
+    J_intrinsics[5] = v01253 * (v01127 * v01180);
+    J_intrinsics[6] = v00825 * v01123 * v01180;
+    J_intrinsics[7] = v00429 * (v00005 * v00055);
+    J_intrinsics[8] = static_cast<Scalar>(0);
+    J_intrinsics[9] = v00850;
+    J_intrinsics[10] = static_cast<Scalar>(0);
+    J_intrinsics[11] = static_cast<Scalar>(1);
+    J_intrinsics[12] = v01184 * v01255;
+    J_intrinsics[13] = v01255 * (v01127 * v01184);
+    J_intrinsics[14] = v00445 * (v00055 * v00080);
+    J_intrinsics[15] = v00815 * v01123 * (v00080 * v00825);
+  }
+  const Scalar v00078 = observed[1];
+  const Scalar v00002 = observed[0];
+  const Scalar v00077 = intrinsics[3];
+  const Scalar v00000 = intrinsics[2];
+  residual[0] = v00000 + v00005 * v00845 + -v00002;
+  residual[1] = v00077 + v00080 * v00850 + -v00078;
+}
+
+template <typename Scalar>
+inline void reprojection_opencv_fisheye(thread const Scalar* q, thread const Scalar* t, thread const Scalar* point, thread const Scalar* intrinsics, thread const Scalar* observed, thread Scalar* residual, thread Scalar* J_pose, thread Scalar* J_point, thread Scalar* J_intrinsics)
+{
+  // Operation counts:
+  // add: 76
+  // branch: 7
+  // call: 2
+  // compare: 1
+  // divide: 7
+  // multiply: 205
+  // negate: 8
+  // total: 306
+
+  const Scalar v00019 = q[0];
+  const Scalar v01001 = -v00019;
+  const Scalar v00021 = q[1];
+  const Scalar v00013 = q[3];
+  const Scalar v00010 = q[2];
+  const Scalar v00382 = v00010 * v00013;
+  const Scalar v00370 = v00010 * v00021;
+  const Scalar v00386 = v00021 * v00021;
+  const Scalar v00365 = v00013 * v00013;
+  const Scalar v00374 = v00013 * v00021;
+  const Scalar v00364 = v00010 * v00010;
+  const Scalar v00401 = v00382 + v00021 * v01001;
+  const Scalar v00025 = point[2];
+  const Scalar v00392 = v00370 + v00013 * v00019;
+  const Scalar v00007 = point[0];
+  const Scalar v01000 = -static_cast<Scalar>(2);
+  const Scalar v00375 = v00374 + v00010 * v00019;
+  const Scalar v00371 = v00013 * v01001 + v00370;
+  const Scalar v00018 = point[1];
+  const Scalar v00383 = v00382 + v00019 * v00021;
+  const Scalar v00379 = v00374 + v00010 * v01001;
+  const Scalar v00398 = static_cast<Scalar>(1) + (v00365 + v00386) * v01000;
+  const Scalar v00368 = static_cast<Scalar>(1) + (v00364 + v00365) * v01000;
+  const Scalar v00389 = static_cast<Scalar>(1) + (v00364 + v00386) * v01000;
+  const Scalar v00997 = v00018 * v00398 + static_cast<Scalar>(2) * (v00007 * v00392 + v00025 * v00401);
+  const Scalar v00048 = t[1];
+  const Scalar v00995 = v00007 * v00368 + static_cast<Scalar>(2) * (v00018 * v00371 + v00025 * v00375);
+  const Scalar v00006 = t[0];
+  const Scalar v00996 = v00025 * v00389 + static_cast<Scalar>(2) * (v00007 * v00379 + v00018 * v00383);
+  const Scalar v00031 = t[2];
+  const Scalar v00720 = v00048 + v00997;
+  const Scalar v00700 = v00006 + v00995;
+  const Scalar v00710 = v00031 + v00996;
+  const Scalar v00943 = v00710 * v00710;
+  const Scalar v00405 = v00700 * v00700 + v00720 * v00720;
+  const Scalar v00046 = static_cast<Scalar>(1) / v00943;
+  const Scalar v00406 = v00046 * v00405;
+  const Scalar v00060 = metal::sqrt(v00406);
+  const Scalar v00066 = metal::atan(v00060);
+  const Scalar v00852 = v00066 * v00066;
+  const Scalar v00065 = intrinsics[7];
+  const Scalar v00067 = v00065 * v00852;
+  const Scalar v00064 = intrinsics[6];
+  const Scalar v00068 = v00064 + v00067;
+  const Scalar v00063 = intrinsics[5];
+  const Scalar v00070 = v00063 + v00068 * v00852;
+  const Scalar v00062 = intrinsics[4];
+  const Scalar v00072 = v00062 + v00070 * v00852;
+  const Scalar v00075 = static_cast<Scalar>(1) / v00060;
+  const Scalar v00853 = v00066 * v00075;
+  const Scalar v00074 = static_cast<Scalar>(1) + v00072 * v00852;
+  const bool v00061 = static_cast<Scalar>(1e-12) < v00060;
+  Scalar v00077;
+  if (v00061) {
+    v00077 = v00074 * v00853;
+  } else {
+    v00077 = static_cast<Scalar>(1);
+  }
+  const Scalar v00114 = static_cast<Scalar>(1) / (static_cast<Scalar>(1) + v00406);
+  const Scalar v00810 = v00072 + (v00070 + (v00067 + v00068) * v00852) * v00852;
+  const Scalar v00083 = intrinsics[1];
+  const Scalar v00043 = static_cast<Scalar>(1) / v00710;
+  const Scalar v00005 = intrinsics[0];
+  const Scalar v00440 = v00066 * static_cast<Scalar>(-0.5) * (static_cast<Scalar>(1) / (v00060 * v00060 * v00060)) + static_cast<Scalar>(0.5) * v00114 * (static_cast<Scalar>(1) / v00406);
+  const Scalar v00881 = (static_cast<Scalar>(1) / (v00710 * v00943)) * v00405;
+  const Scalar v00875 = v00043 * v00083;
+  const Scalar v00872 = v00005 * v00043;
+  const Scalar v00880 = v00046 * v00720;
+  const Scalar v00879 = v00046 * v00700;
+  const Scalar v00857 = static_cast<Scalar>(2) * v00046;
+  const Scalar v00949 = v00440 * (static_cast<Scalar>(2) * v00074);
+  const Scalar v00986 = (v00810 * v00852) * ((static_cast<Scalar>(2) * v00075) * (v00075 * v00114));
+  const Scalar v00958 = v00881 * v01000;
+  const Scalar v01005 = -v00077;
+  const Scalar v00945 = v00720 * v00875;
+  const Scalar v00944 = v00700 * v00872;
+  if (J_pose != nullptr) {
+    Scalar v00130;
+    Scalar v00161;
+    Scalar v00186;
+    Scalar v00203;
+    Scalar v00220;
+    Scalar v00239;
+    if (v00061) {
+      const Scalar v00871 = v00114 * v00810;
+      const Scalar v00946 = v00852 * (v00075 * v00075);
+      const Scalar v00867 = v00074 * v00440;
+      const Scalar v00978 = (v00880 * v00996 + v00881 * v00997) * v01000;
+      const Scalar v00994 = v00871 * v00946;
+      const Scalar v00735 = v00879 * v00996 + v00881 * (static_cast<Scalar>(-1) * static_cast<Scalar>(-1)) * v00995;
+      const Scalar v00963 = v00857 * v00867;
+      const Scalar v00746 = v00997 * -v00700 + v00720 * v00995;
+      const Scalar v00987 = v00946 * (v00857 * v00871);
+      v00130 = v00978 * v00994 + v00867 * v00978;
+      v00161 = v00735 * v00986 + v00735 * v00949;
+      v00186 = v00746 * v00987 + v00746 * v00963;
+      v00203 = v00700 * v00987 + v00700 * v00963;
+      v00220 = v00720 * v00987 + v00720 * v00963;
+      v00239 = v00958 * v00994 + v00867 * v00958;
+    } else {
+      v00130 = static_cast<Scalar>(0);
+      v00161 = static_cast<Scalar>(0);
+      v00186 = static_cast<Scalar>(0);
+      v00203 = static_cast<Scalar>(0);
+      v00220 = static_cast<Scalar>(0);
+      v00239 = static_cast<Scalar>(0);
+    }
+    const Scalar v00977 = v00997 * v01005;
+    const Scalar v00993 = (v00995 * v01005) * -v00046;
+    const Scalar v00876 = v00083 * v00720;
+    const Scalar v00569 = v00046 * v01005 + v00043 * v00239;
+    const Scalar v00873 = v00005 * v00700;
+    J_pose[0] = ((v00046 * v00997) * v01005 + v00043 * v00130) * v00873;
+    J_pose[1] = v00005 * (v00700 * v00993 + v00043 * (v00161 * v00700 + v00077 * v00996));
+    J_pose[2] = (v00186 * v00700 + v00977) * v00872;
+    J_pose[3] = (v00077 + v00203 * v00700) * v00872;
+    J_pose[4] = v00220 * v00944;
+    J_pose[5] = v00569 * v00873;
+    J_pose[6] = v00083 * (v00880 * v00977 + v00043 * (v00130 * v00720 + v00996 * v01005));
+    J_pose[7] = (v00043 * v00161 + v00993) * v00876;
+    J_pose[8] = (v00186 * v00720 + v00077 * v00995) * v00875;
+    J_pose[9] = v00203 * v00945;
+    J_pose[10] = (v00077 + v00220 * v00720) * v00875;
+    J_pose[11] = v00569 * v00876;
+  }
+  if (J_point != nullptr) {
+    Scalar v00281;
+    Scalar v00303;
+    Scalar v00326;
+    if (v00061) {
+      const Scalar v00829 = v00379 * v00958 + v00046 * (v00368 * v00700 + v00392 * (static_cast<Scalar>(2) * v00720));
+      const Scalar v00836 = v00383 * v00958 + v00046 * (v00398 * v00720 + v00371 * (static_cast<Scalar>(2) * v00700));
+      const Scalar v00847 = v00881 * -v00389 + (v00401 * v00720 + v00375 * v00700) * v00857;
+      v00281 = v00829 * v00986 + v00829 * v00949;
+      v00303 = v00836 * v00986 + v00836 * v00949;
+      v00326 = v00847 * v00986 + v00847 * v00949;
+    } else {
+      v00281 = static_cast<Scalar>(0);
+      v00303 = static_cast<Scalar>(0);
+      v00326 = static_cast<Scalar>(0);
+    }
+    const Scalar v00874 = static_cast<Scalar>(2) * v00077;
+    const Scalar v00957 = (v00046 * v00077) * v01000;
+    const Scalar v00968 = v00389 * v01005;
+    const Scalar v00989 = v00383 * v00957;
+    const Scalar v00988 = v00379 * v00957;
+    J_point[0] = v00005 * (v00700 * v00988 + v00043 * (v00077 * v00368 + v00281 * v00700));
+    J_point[1] = v00005 * (v00700 * v00989 + v00043 * (v00303 * v00700 + v00371 * v00874));
+    J_point[2] = v00005 * (v00879 * v00968 + v00043 * (v00326 * v00700 + v00375 * v00874));
+    J_point[3] = v00083 * (v00720 * v00988 + v00043 * (v00281 * v00720 + v00392 * v00874));
+    J_point[4] = v00083 * (v00720 * v00989 + v00043 * (v00077 * v00398 + v00303 * v00720));
+    J_point[5] = v00083 * (v00880 * v00968 + v00043 * (v00326 * v00720 + v00401 * v00874));
+  }
+  if (J_intrinsics != nullptr) {
+    Scalar v00346;
+    Scalar v00349;
+    Scalar v00352;
+    Scalar v00355;
+    if (v00061) {
+      const Scalar v00953 = v00852 * v00852;
+      v00346 = v00852 * v00853;
+      v00349 = v00853 * v00953;
+      v00352 = v00953 * (v00852 * v00853);
+      v00355 = v00953 * (v00853 * v00953);
+    } else {
+      v00346 = static_cast<Scalar>(0);
+      v00349 = static_cast<Scalar>(0);
+      v00352 = static_cast<Scalar>(0);
+      v00355 = static_cast<Scalar>(0);
+    }
+    J_intrinsics[0] = v00077 * (v00043 * v00700);
+    J_intrinsics[1] = static_cast<Scalar>(0);
+    J_intrinsics[2] = static_cast<Scalar>(1);
+    J_intrinsics[3] = static_cast<Scalar>(0);
+    J_intrinsics[4] = v00346 * v00944;
+    J_intrinsics[5] = v00349 * v00944;
+    J_intrinsics[6] = v00352 * v00944;
+    J_intrinsics[7] = v00355 * v00944;
+    J_intrinsics[8] = static_cast<Scalar>(0);
+    J_intrinsics[9] = v00077 * (v00043 * v00720);
+    J_intrinsics[10] = static_cast<Scalar>(0);
+    J_intrinsics[11] = static_cast<Scalar>(1);
+    J_intrinsics[12] = v00346 * v00945;
+    J_intrinsics[13] = v00349 * v00945;
+    J_intrinsics[14] = v00352 * v00945;
+    J_intrinsics[15] = v00355 * v00945;
+  }
+  const Scalar v00081 = observed[1];
+  const Scalar v00002 = observed[0];
+  const Scalar v00080 = intrinsics[3];
+  const Scalar v00000 = intrinsics[2];
+  residual[0] = v00000 + v00872 * (v00077 * v00700) + -v00002;
+  residual[1] = v00080 + v00875 * (v00077 * v00720) + -v00081;
 }
 
 }  // namespace jba_generated

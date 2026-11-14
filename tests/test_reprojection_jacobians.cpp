@@ -25,7 +25,7 @@ namespace {
 struct Case {
   double pose[7];
   double point[3];
-  double intrinsics[5];
+  double intrinsics[8];
   double observed[2];
 };
 
@@ -64,7 +64,7 @@ void check_column(const char* what, int col, const std::array<double, 2>& fd, co
 
 void check_case(CameraModel model, const Case& c) {
   const int np = jba::num_params(model);
-  double r[2], Jp[12], Jx[6], Jk[10];
+  double r[2], Jp[12], Jx[6], Jk[16];
   jba::cpu::reprojection<double>(model, c.pose, c.pose + 4, c.point, c.intrinsics, c.observed, r, Jp, Jx, Jk);
 
   // Residual against the independent projection.
@@ -137,7 +137,7 @@ Case make_case(CameraModel model, const double* q, const double* t, const double
 
 int main() {
   const CameraModel models[] = {CameraModel::SimplePinhole, CameraModel::Pinhole, CameraModel::SimpleRadial,
-                                CameraModel::Radial};
+                                CameraModel::Radial,        CameraModel::OpenCV,  CameraModel::OpenCVFisheye};
   std::mt19937_64 rng(42);
   jba_test::Uniform u(-1, 1);
   int cases = 0;
@@ -165,8 +165,10 @@ int main() {
     const double off_axis[3] = {1.5, -1, 3};
     const double near_cam[3] = {0.002, -0.001, 0.01};
     const double far_away[3] = {300, -200, 1000};
+    const double near_axis[3] = {3e-9, -2e-9, 2};  // fisheye: just above its small-radius switch
+    const double wide[3] = {2.5, 1.8, 1};          // 72 degrees off axis: fisheye territory
     for (const double* q : {identity, static_cast<const double*>(near_pi)}) {
-      for (const double* pc : {on_axis, off_axis, near_cam, far_away}) {
+      for (const double* pc : {on_axis, off_axis, near_cam, far_away, near_axis, wide}) {
         check_case(model, make_case(model, q, zero, pc, 0, 0));
         check_case(model, make_case(model, q, t1, pc, 0.7, -0.3));
         cases += 2;

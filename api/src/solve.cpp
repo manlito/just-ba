@@ -17,9 +17,7 @@ SolverSummary solve(Problem& problem, const SolverOptions& options, const Iterat
   const Gauge gauge = options.gauge == GaugeMode::Auto ? choose_gauge(problem) : Gauge{};
   cpu::CpuBackend backend(problem, options, gauge);
   SolverSummary summary;
-  summary.gauge_reference_image = gauge.reference_image;
-  summary.gauge_scale_image = gauge.scale_image;
-  summary.gauge_scale_coordinate = gauge.scale_coordinate;
+  summary.gauge = gauge;
   run_trust_region(backend, options, callback, summary);
   backend.write_back(problem);
   return summary;

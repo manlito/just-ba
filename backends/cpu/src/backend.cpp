@@ -1,15 +1,18 @@
 #include "jba/cpu/backend.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
 #include <vector>
 
+#include "jba/cpu/priors.h"
 #include "jba/cpu/reprojection.h"
 #include "jba/geometry.h"
 #include "jba/loss.h"
+#include "jba/priors.h"
 #include "parallel.h"
 
 namespace jba::cpu {
@@ -84,6 +87,39 @@ struct Corrector {
       J[cols + c] = sqrt_rho1 * (J[cols + c] - alpha_sq_norm * r[1] * rJ);
     }
   }
+  // J is `rows` x cols, row-major.
+  void jacobian_rows(const double* r, double* J, int rows, int cols) const {
+    if (alpha_sq_norm == 0) {
+      for (int i = 0; i < rows * cols; ++i) J[i] *= sqrt_rho1;
+      return;
+    }
+    for (int c = 0; c < cols; ++c) {
+      double rJ = 0;
+      for (int a = 0; a < rows; ++a) rJ += r[a] * J[a * cols + c];
+      for (int a = 0; a < rows; ++a) J[a * cols + c] = sqrt_rho1 * (J[a * cols + c] - alpha_sq_norm * r[a] * rJ);
+    }
+  }
+};
+
+// Pose priors enter as "factors": 6 residual rows on up to three camera-side blocks
+// and no point, so they add to J_f only. Jacobian columns: slot 0 is 0..5, slot 1
+// is 6..11, slot 2 is 12.
+constexpr int kFactorRows = 6;
+constexpr int kFactorCols = 13;
+constexpr int kSlotBase[3] = {0, 6, 12};
+constexpr double kIdentityTransform[8] = {1, 0, 0, 0, 0, 0, 0, 1};
+
+enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale };
+
+struct Factor {
+  bool relative = true;
+  int a = -1, b = -1;   // images (b only for relative priors)
+  int set = -1;         // global priors: prior set
+  bool set_identity = true;
+  int slot_off[3] = {-1, -1, -1};  // f offsets, -1 when fixed or absent
+  double W[36];
+  double prior[7];      // relative: T_j T_i^-1 (q, t); global: q_p, C_p
+  Loss loss;
 };
 
 }  // namespace
@@ -94,20 +130,20 @@ struct CpuBackend::Impl {
   Loss loss;
   ThreadPool pool;
 
-  // Parameters: current and candidate.
-  std::vector<double> poses, points, intr;
-  std::vector<double> c_poses, c_points, c_intr;
+  // Parameters: current and candidate. `sets`: 8 per prior set (q, t, s).
+  std::vector<double> poses, points, intr, sets;
+  std::vector<double> c_poses, c_points, c_intr, c_sets;
 
   // Variables. f = cameras side (pose and intrinsics blocks), e = points.
   struct FBlock {
     int offset;
     int size;
     int pinv_offset;
-    bool is_pose;
-    int index;  // image or intrinsics block
+    BlockKind kind;
+    int index;  // image, intrinsics block or prior set
   };
   std::vector<FBlock> fblocks;
-  std::vector<int> pose_off, intr_off, point_off;  // -1 when fixed
+  std::vector<int> pose_off, intr_off, point_off, rigid_off, scale_off;  // -1 when fixed
   std::vector<std::uint8_t> pose_fixed_cols;      // bit per tangent column
   std::vector<std::uint16_t> intr_fixed_cols;     // bit per parameter
   std::size_t nf = 0, ne = 0;
@@ -120,6 +156,12 @@ struct CpuBackend::Impl {
   std::vector<std::size_t> pt_begin;
   std::vector<std::size_t> img_begin, img_list, ib_begin, ib_list;
   std::vector<std::int32_t> image_block;
+
+  // Pose priors.
+  std::vector<Factor> factors;
+  std::vector<std::size_t> fac_begin;              // per f-block
+  std::vector<std::array<int, 2>> fac_list;        // (factor, slot)
+  std::vector<double> f_r, f_J, f_m;               // 6, 6 x 13 and 6 per factor
 
   // Linearization.
   std::vector<double> r, Jp, Jx, Jk;
@@ -136,27 +178,41 @@ struct CpuBackend::Impl {
     points = p.points;
     intr = p.intrinsics;
     const std::size_t n_img = p.num_images(), n_pts = p.num_points(), n_blk = p.num_intrinsics_blocks();
+    const std::size_t n_sets = p.num_prior_sets();
+    sets.resize(8 * n_sets);
+    for (std::size_t s = 0; s < n_sets; ++s) {
+      if (p.set_transform.empty()) std::copy_n(kIdentityTransform, 8, &sets[8 * s]);
+      else std::copy_n(&p.set_transform[8 * s], 8, &sets[8 * s]);
+    }
     image_block.resize(n_img);
     for (std::size_t i = 0; i < n_img; ++i) image_block[i] = p.intrinsics_of_image(i);
 
-    // Which blocks are observed at all.
-    std::vector<char> img_seen(n_img, 0), pt_seen(n_pts, 0), blk_seen(n_blk, 0);
+    // Which blocks are used at all.
+    std::vector<char> img_seen(n_img, 0), pt_seen(n_pts, 0), blk_seen(n_blk, 0), set_seen(n_sets, 0);
     for (std::size_t k = 0; k < p.num_observations(); ++k) {
       img_seen[p.obs_image[k]] = 1;
       pt_seen[p.obs_point[k]] = 1;
       blk_seen[image_block[p.obs_image[k]]] = 1;
     }
+    for (auto i : p.rel_images) img_seen[static_cast<std::size_t>(i)] = 1;
+    for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
+      img_seen[static_cast<std::size_t>(p.glob_image[k])] = 1;
+      set_seen[static_cast<std::size_t>(p.set_of_global_prior(k))] = 1;
+    }
+    std::vector<char> gauge_fixed(n_img, 0), scale_held(n_sets, 0);
+    for (int i : gauge.fixed_images) gauge_fixed[static_cast<std::size_t>(i)] = 1;
+    for (int s : gauge.fixed_set_scales) scale_held[static_cast<std::size_t>(s)] = 1;
 
     // Pose variables.
     pose_off.assign(n_img, -1);
     pose_fixed_cols.assign(n_img, 0);
+    for (const auto& [i, c] : gauge.fixed_translations) pose_fixed_cols[static_cast<std::size_t>(i)] |= std::uint8_t(1u << (3 + c));
     int off = 0;
     for (std::size_t i = 0; i < n_img; ++i) {
-      const bool fixed = (!p.image_fixed.empty() && p.image_fixed[i]) || static_cast<int>(i) == gauge.reference_image;
+      const bool fixed = (!p.image_fixed.empty() && p.image_fixed[i]) || gauge_fixed[i];
       if (fixed || !img_seen[i]) continue;
       pose_off[i] = off;
-      if (static_cast<int>(i) == gauge.scale_image) pose_fixed_cols[i] = std::uint8_t(1u << (3 + gauge.scale_coordinate));
-      fblocks.push_back({off, 6, 0, true, static_cast<int>(i)});
+      fblocks.push_back({off, 6, 0, BlockKind::Pose, static_cast<int>(i)});
       off += 6;
     }
     // Intrinsics variables.
@@ -172,8 +228,23 @@ struct CpuBackend::Impl {
       if (fixed_cols == (1u << np) - 1) continue;
       intr_off[c] = off;
       intr_fixed_cols[c] = fixed_cols;
-      fblocks.push_back({off, np, 0, false, static_cast<int>(c)});
+      fblocks.push_back({off, np, 0, BlockKind::Intrinsics, static_cast<int>(c)});
       off += np;
+    }
+    // Prior set transforms: the rigid part (6), then the scale (1).
+    rigid_off.assign(n_sets, -1);
+    scale_off.assign(n_sets, -1);
+    for (std::size_t s = 0; s < n_sets; ++s) {
+      const FrameRelation rel = p.relation_of_set(s);
+      if (rel == FrameRelation::Identity || !set_seen[s]) continue;
+      rigid_off[s] = off;
+      fblocks.push_back({off, 6, 0, BlockKind::SetRigid, static_cast<int>(s)});
+      off += 6;
+      if (rel == FrameRelation::Similarity && !scale_held[s]) {
+        scale_off[s] = off;
+        fblocks.push_back({off, 1, 0, BlockKind::SetScale, static_cast<int>(s)});
+        off += 1;
+      }
     }
     nf = static_cast<std::size_t>(off);
     int pinv = 0;
@@ -225,6 +296,8 @@ struct CpuBackend::Impl {
     build_csr(n_blk, [&](std::size_t k) { return static_cast<std::size_t>(image_block[o_img[k]]); }, ib_begin,
               ib_list);
 
+    build_factors(p, o);
+
     r.assign(2 * nobs, 0);
     Jp.assign(12 * nobs, 0);
     Jx.assign(6 * nobs, 0);
@@ -243,6 +316,113 @@ struct CpuBackend::Impl {
     Cinv.assign(9 * n_pts, 0);
   }
 
+  void build_factors(const Problem& p, const SolverOptions& o) {
+    std::vector<double> W_rel, W_glob;
+    prior_whitening(p, o.prior_defaults, W_rel, W_glob);
+    for (std::size_t k = 0; k < p.num_relative_priors(); ++k) {
+      Factor f;
+      f.relative = true;
+      f.a = p.rel_images[2 * k];
+      f.b = p.rel_images[2 * k + 1];
+      f.slot_off[0] = pose_off[static_cast<std::size_t>(f.a)];
+      f.slot_off[1] = pose_off[static_cast<std::size_t>(f.b)];
+      std::copy_n(&W_rel[36 * k], 36, f.W);
+      std::copy_n(&p.rel_pose[7 * k], 7, f.prior);
+      f.loss = o.relative_prior_loss;
+      factors.push_back(f);
+    }
+    for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
+      Factor f;
+      f.relative = false;
+      f.a = p.glob_image[k];
+      f.set = p.set_of_global_prior(k);
+      const auto s = static_cast<std::size_t>(f.set);
+      f.set_identity = p.relation_of_set(s) == FrameRelation::Identity;
+      f.slot_off[0] = pose_off[static_cast<std::size_t>(f.a)];
+      f.slot_off[1] = rigid_off[s];
+      f.slot_off[2] = scale_off[s];
+      std::copy_n(&W_glob[36 * k], 36, f.W);
+      // Prior rotation, then camera centre C = -R^T t, in the set's frame.
+      const double* g = &p.glob_pose[7 * k];
+      std::copy_n(g, 4, f.prior);
+      const double conj[4] = {g[0], -g[1], -g[2], -g[3]};
+      quat_rotate(conj, g + 4, f.prior + 4);
+      for (int a = 4; a < 7; ++a) f.prior[a] = -f.prior[a];
+      f.loss = o.global_prior_loss;
+      factors.push_back(f);
+    }
+    const std::size_t nfac = factors.size();
+    f_r.assign(kFactorRows * nfac, 0);
+    f_J.assign(kFactorRows * kFactorCols * nfac, 0);
+    f_m.assign(kFactorRows * nfac, 0);
+
+    // Factor lists per f-block, in factor order.
+    std::vector<int> block_of(nf + 1, -1);
+    for (std::size_t b = 0; b < fblocks.size(); ++b) block_of[static_cast<std::size_t>(fblocks[b].offset)] = static_cast<int>(b);
+    std::vector<std::vector<std::array<int, 2>>> per(fblocks.size());
+    for (std::size_t f = 0; f < nfac; ++f) {
+      for (int slot = 0; slot < 3; ++slot) {
+        const int so = factors[f].slot_off[slot];
+        if (so >= 0) per[static_cast<std::size_t>(block_of[static_cast<std::size_t>(so)])].push_back({static_cast<int>(f), slot});
+      }
+    }
+    fac_begin.assign(fblocks.size() + 1, 0);
+    for (std::size_t b = 0; b < fblocks.size(); ++b) {
+      fac_begin[b + 1] = fac_begin[b] + per[b].size();
+      fac_list.insert(fac_list.end(), per[b].begin(), per[b].end());
+    }
+  }
+
+  // Unwhitened-then-whitened residual of a factor and, if J is set, its Jacobian
+  // (6 x 13), both multiplied by W.
+  void eval_factor(const Factor& f, const std::vector<double>& P, const std::vector<double>& S, double* rw,
+                   double* J) const {
+    double res[6];
+    double Jraw[kFactorRows * kFactorCols];
+    if (f.relative) {
+      double Ja[36], Jb[36];
+      relative_prior<double>(&P[7 * static_cast<std::size_t>(f.a)], &P[7 * static_cast<std::size_t>(f.b)], f.prior, res,
+                             J ? Ja : nullptr, J ? Jb : nullptr);
+      if (J) {
+        for (int row = 0; row < 6; ++row) {
+          for (int c = 0; c < 6; ++c) {
+            Jraw[row * kFactorCols + c] = Ja[row * 6 + c];
+            Jraw[row * kFactorCols + 6 + c] = Jb[row * 6 + c];
+          }
+          Jraw[row * kFactorCols + 12] = 0;
+        }
+      }
+    } else {
+      const double* T = f.set_identity ? kIdentityTransform : &S[8 * static_cast<std::size_t>(f.set)];
+      double Jpose[36], Jrigid[36], Jscale[6];
+      global_prior<double>(&P[7 * static_cast<std::size_t>(f.a)], T, f.prior, f.prior + 4, res, J ? Jpose : nullptr,
+                           J ? Jrigid : nullptr, J ? Jscale : nullptr);
+      if (J) {
+        for (int row = 0; row < 6; ++row) {
+          for (int c = 0; c < 6; ++c) {
+            Jraw[row * kFactorCols + c] = Jpose[row * 6 + c];
+            Jraw[row * kFactorCols + 6 + c] = Jrigid[row * 6 + c];
+          }
+          Jraw[row * kFactorCols + 12] = Jscale[row];
+        }
+      }
+    }
+    for (int row = 0; row < 6; ++row) {
+      double v = 0;
+      for (int c = 0; c < 6; ++c) v += f.W[row * 6 + c] * res[c];
+      rw[row] = v;
+    }
+    if (J) {
+      for (int row = 0; row < 6; ++row) {
+        for (int c = 0; c < kFactorCols; ++c) {
+          double v = 0;
+          for (int a = 0; a < 6; ++a) v += f.W[row * 6 + a] * Jraw[a * kFactorCols + c];
+          J[row * kFactorCols + c] = v;
+        }
+      }
+    }
+  }
+
   // CSR lists of observation indices grouped by key, each list in increasing order.
   template <typename Key>
   void build_csr(std::size_t n, Key key, std::vector<std::size_t>& begin, std::vector<std::size_t>& list) {
@@ -256,7 +436,25 @@ struct CpuBackend::Impl {
 
   // ---------------------------------------------------------------------------
 
-  double cost_of(const std::vector<double>& P, const std::vector<double>& X, const std::vector<double>& K) {
+  double cost_of(const std::vector<double>& P, const std::vector<double>& X, const std::vector<double>& K,
+                 const std::vector<double>& S) {
+    return reprojection_cost(P, X, K) + factor_cost(P, S);
+  }
+
+  double factor_cost(const std::vector<double>& P, const std::vector<double>& S) {
+    if (factors.empty()) return 0;
+    return 0.5 * pool.sum(factors.size(), [&](std::size_t f) {
+      double rw[6];
+      eval_factor(factors[f], P, S, rw, nullptr);
+      double sq = 0;
+      for (double v : rw) sq += v * v;
+      double rho[3];
+      evaluate_loss(factors[f].loss, sq, rho);
+      return rho[0];
+    });
+  }
+
+  double reprojection_cost(const std::vector<double>& P, const std::vector<double>& X, const std::vector<double>& K) {
     return 0.5 * pool.sum(nobs, [&](std::size_t k) {
       const std::size_t i = static_cast<std::size_t>(o_img[k]);
       const double* pose = &P[7 * i];
@@ -315,6 +513,7 @@ struct CpuBackend::Impl {
         }
       }
     });
+    linearize_factors();
 
     if (compute_scaling) {
       // Ceres: scale = 1 / (1 + column norm), computed once from the first Jacobian.
@@ -348,6 +547,18 @@ struct CpuBackend::Impl {
           }
         }
       });
+      pool.parallel_for(factors.size(), [&](std::size_t f0, std::size_t f1) {
+        for (std::size_t f = f0; f < f1; ++f) {
+          double* J = &f_J[kFactorRows * kFactorCols * f];
+          for (int slot = 0; slot < 3; ++slot) {
+            const int so = factors[f].slot_off[slot];
+            if (so < 0) continue;
+            const int n = slot == 2 ? 1 : 6;
+            for (int row = 0; row < kFactorRows; ++row)
+              for (int c = 0; c < n; ++c) J[row * kFactorCols + kSlotBase[slot] + c] *= f_scale[so + c];
+          }
+        }
+      }, 16);
     }
     column_norms_and_gradient(true);
 
@@ -355,6 +566,78 @@ struct CpuBackend::Impl {
     for (std::size_t c = 0; c < nf; ++c) m = std::max(m, std::abs(g_f[c] / f_scale[c]));
     for (std::size_t c = 0; c < ne; ++c) m = std::max(m, std::abs(g_e[c] / e_scale[c]));
     gmax = m;
+  }
+
+  void linearize_factors() {
+    pool.parallel_for(factors.size(), [&](std::size_t f0, std::size_t f1) {
+      for (std::size_t f = f0; f < f1; ++f) {
+        const Factor& fa = factors[f];
+        double* rw = &f_r[kFactorRows * f];
+        double* J = &f_J[kFactorRows * kFactorCols * f];
+        eval_factor(fa, poses, sets, rw, J);
+        if (fa.loss.type != LossType::None) {
+          double sq = 0;
+          for (int a = 0; a < kFactorRows; ++a) sq += rw[a] * rw[a];
+          double rho[3];
+          evaluate_loss(fa.loss, sq, rho);
+          const Corrector corr(sq, rho);
+          corr.jacobian_rows(rw, J, kFactorRows, kFactorCols);
+          for (int a = 0; a < kFactorRows; ++a) rw[a] *= corr.residual_scaling;
+        }
+        // Columns that are not variables are zero.
+        for (int slot = 0; slot < 3; ++slot) {
+          const int n = slot == 2 ? 1 : 6;
+          std::uint8_t mask = 0;
+          if (fa.slot_off[slot] < 0) mask = 0x3f;
+          else if (slot == 0) mask = pose_fixed_cols[static_cast<std::size_t>(fa.a)];
+          else if (slot == 1 && fa.relative) mask = pose_fixed_cols[static_cast<std::size_t>(fa.b)];
+          for (int c = 0; c < n; ++c) {
+            if (!(mask & (1u << c))) continue;
+            for (int row = 0; row < kFactorRows; ++row) J[row * kFactorCols + kSlotBase[slot] + c] = 0;
+          }
+        }
+      }
+    }, 16);
+  }
+
+  // Observation list of a pose or intrinsics block; empty for the others.
+  void obs_range(const FBlock& fb, std::size_t& q0, std::size_t& q1, const std::vector<std::size_t>*& list) const {
+    q0 = q1 = 0;
+    list = nullptr;
+    if (fb.kind == BlockKind::Pose) {
+      list = &img_list;
+      q0 = img_begin[static_cast<std::size_t>(fb.index)];
+      q1 = img_begin[static_cast<std::size_t>(fb.index) + 1];
+    } else if (fb.kind == BlockKind::Intrinsics) {
+      list = &ib_list;
+      q0 = ib_begin[static_cast<std::size_t>(fb.index)];
+      q1 = ib_begin[static_cast<std::size_t>(fb.index) + 1];
+    }
+  }
+
+  // Factor Jacobian entry (row, column c of the slot) for factor list entry q.
+  const double* factor_J(std::size_t q, int& base) const {
+    const auto [f, slot] = fac_list[q];
+    base = kSlotBase[slot];
+    return &f_J[kFactorRows * kFactorCols * static_cast<std::size_t>(f)];
+  }
+
+  // f_m = J_factor x for every factor.
+  void factors_times(const double* x) {
+    pool.parallel_for(factors.size(), [&](std::size_t f0, std::size_t f1) {
+      for (std::size_t f = f0; f < f1; ++f) {
+        const double* J = &f_J[kFactorRows * kFactorCols * f];
+        double* m = &f_m[kFactorRows * f];
+        for (int row = 0; row < kFactorRows; ++row) m[row] = 0;
+        for (int slot = 0; slot < 3; ++slot) {
+          const int so = factors[f].slot_off[slot];
+          if (so < 0) continue;
+          const int n = slot == 2 ? 1 : 6;
+          for (int row = 0; row < kFactorRows; ++row)
+            for (int c = 0; c < n; ++c) m[row] += J[row * kFactorCols + kSlotBase[slot] + c] * x[so + c];
+        }
+      }
+    }, 16);
   }
 
   // diag = squared column norms of J; g = J^T r when `gradient` is set.
@@ -365,16 +648,28 @@ struct CpuBackend::Impl {
           for (std::size_t b = b0; b < b1; ++b) {
             const FBlock& fb = fblocks[b];
             double d[kMaxParams] = {}, g[kMaxParams] = {};
-            const auto& begin = fb.is_pose ? img_begin : ib_begin;
-            const auto& list = fb.is_pose ? img_list : ib_list;
-            for (std::size_t q = begin[fb.index]; q < begin[fb.index + 1]; ++q) {
-              const std::size_t k = list[q];
-              const double* J = fb.is_pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
-              const int n = fb.size;
+            const int n = fb.size;
+            std::size_t q0, q1;
+            const std::vector<std::size_t>* list;
+            obs_range(fb, q0, q1, list);
+            for (std::size_t q = q0; q < q1; ++q) {
+              const std::size_t k = (*list)[q];
+              const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
               for (int c = 0; c < n; ++c) {
                 d[c] += J[c] * J[c] + J[n + c] * J[n + c];
                 g[c] += J[c] * r[2 * k] + J[n + c] * r[2 * k + 1];
               }
+            }
+            for (std::size_t q = fac_begin[b]; q < fac_begin[b + 1]; ++q) {
+              int base;
+              const double* J = factor_J(q, base);
+              const double* rf = &f_r[kFactorRows * static_cast<std::size_t>(fac_list[q][0])];
+              for (int row = 0; row < kFactorRows; ++row)
+                for (int c = 0; c < n; ++c) {
+                  const double v = J[row * kFactorCols + base + c];
+                  d[c] += v * v;
+                  g[c] += v * rf[row];
+                }
             }
             for (int c = 0; c < fb.size; ++c) {
               diag_f[fb.offset + c] = d[c];
@@ -427,21 +722,32 @@ struct CpuBackend::Impl {
     }
   }
 
-  // y = J_f^T t (gathered per camera-side block).
-  void jft_times_t(double* y) {
+  // y = J_f^T t (gathered per camera-side block); with `factors_too`, plus
+  // J_factor^T f_m.
+  void jft_times_t(double* y, bool factors_too) {
     pool.parallel_for(
         fblocks.size(),
         [&](std::size_t b0, std::size_t b1) {
           for (std::size_t b = b0; b < b1; ++b) {
             const FBlock& fb = fblocks[b];
             double acc[kMaxParams] = {};
-            const auto& begin = fb.is_pose ? img_begin : ib_begin;
-            const auto& list = fb.is_pose ? img_list : ib_list;
             const int n = fb.size;
-            for (std::size_t q = begin[fb.index]; q < begin[fb.index + 1]; ++q) {
-              const std::size_t k = list[q];
-              const double* J = fb.is_pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
+            std::size_t q0, q1;
+            const std::vector<std::size_t>* list;
+            obs_range(fb, q0, q1, list);
+            for (std::size_t q = q0; q < q1; ++q) {
+              const std::size_t k = (*list)[q];
+              const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
               for (int c = 0; c < n; ++c) acc[c] += J[c] * t[2 * k] + J[n + c] * t[2 * k + 1];
+            }
+            if (factors_too) {
+              for (std::size_t q = fac_begin[b]; q < fac_begin[b + 1]; ++q) {
+                int base;
+                const double* J = factor_J(q, base);
+                const double* m = &f_m[kFactorRows * static_cast<std::size_t>(fac_list[q][0])];
+                for (int row = 0; row < kFactorRows; ++row)
+                  for (int c = 0; c < n; ++c) acc[c] += J[row * kFactorCols + base + c] * m[row];
+              }
             }
             for (int c = 0; c < n; ++c) y[fb.offset + c] = acc[c];
           }
@@ -473,7 +779,8 @@ struct CpuBackend::Impl {
         }
       }
     });
-    jft_times_t(y);
+    factors_times(x);
+    jft_times_t(y, true);
     for (std::size_t c = 0; c < nf; ++c) y[c] += d2_f[c] * x[c];
   }
 
@@ -528,16 +835,16 @@ struct CpuBackend::Impl {
             const FBlock& fb = fblocks[b];
             const int n = fb.size;
             double P[kMaxParams * kMaxParams] = {};
-            const auto& begin = fb.is_pose ? img_begin : ib_begin;
-            const auto& list = fb.is_pose ? img_list : ib_list;
-            std::size_t q = begin[fb.index];
-            const std::size_t qend = begin[fb.index + 1];
+            std::size_t q, qend;
+            const std::vector<std::size_t>* lp;
+            obs_range(fb, q, qend, lp);
             while (q < qend) {
+              const auto& list = *lp;
               const std::int32_t j = o_pt[list[q]];
               double E[kMaxParams * 3] = {};
               for (; q < qend && o_pt[list[q]] == j; ++q) {
                 const std::size_t k = list[q];
-                const double* J = fb.is_pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
+                const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
                 const double* X = &Jx[6 * k];
                 for (int a = 0; a < n; ++a) {
                   for (int c = 0; c < n; ++c) P[a * n + c] += J[a] * J[c] + J[n + a] * J[n + c];
@@ -553,6 +860,14 @@ struct CpuBackend::Impl {
               for (int a = 0; a < n; ++a)
                 for (int c = 0; c < n; ++c)
                   P[a * n + c] -= EC[3 * a] * E[3 * c] + EC[3 * a + 1] * E[3 * c + 1] + EC[3 * a + 2] * E[3 * c + 2];
+            }
+            for (std::size_t qf = fac_begin[b]; qf < fac_begin[b + 1]; ++qf) {
+              int base;
+              const double* J = factor_J(qf, base);
+              for (int row = 0; row < kFactorRows; ++row)
+                for (int a = 0; a < n; ++a)
+                  for (int c = 0; c < n; ++c)
+                    P[a * n + c] += J[row * kFactorCols + base + a] * J[row * kFactorCols + base + c];
             }
             for (int a = 0; a < n; ++a) P[a * n + a] += d2_f[fb.offset + a];
             if (!spd_inverse(P, n)) ok = false;
@@ -636,7 +951,7 @@ struct CpuBackend::Impl {
       }
     });
     std::vector<double> b(nf);
-    jft_times_t(b.data());
+    jft_times_t(b.data(), false);
     for (std::size_t c = 0; c < nf; ++c) b[c] -= g_f[c];
 
     bool ok = true;
@@ -672,11 +987,22 @@ struct CpuBackend::Impl {
       }
       return m0 * (r[2 * k] + m0 / 2) + m1 * (r[2 * k + 1] + m1 / 2);
     });
+    if (!factors.empty()) {
+      factors_times(dx_f.data());
+      out.model_cost_change -= pool.sum(factors.size(), [&](std::size_t f) {
+        const double* m = &f_m[kFactorRows * f];
+        const double* rf = &f_r[kFactorRows * f];
+        double v = 0;
+        for (int row = 0; row < kFactorRows; ++row) v += m[row] * (rf[row] + m[row] / 2);
+        return v;
+      });
+    }
 
     // Candidate: unscale the step and retract.
     c_poses = poses;
     c_points = points;
     c_intr = intr;
+    c_sets = sets;
     double sq = 0;
     for (const FBlock& fb : fblocks) {
       double delta[kMaxParams];
@@ -684,12 +1010,16 @@ struct CpuBackend::Impl {
         delta[c] = f_scale[fb.offset + c] * dx_f[fb.offset + c];
         sq += delta[c] * delta[c];
       }
-      if (fb.is_pose) {
-        pose_retract(&poses[7 * static_cast<std::size_t>(fb.index)], delta,
-                     &c_poses[7 * static_cast<std::size_t>(fb.index)]);
-      } else {
-        double* k = &c_intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(fb.index)];
-        for (int c = 0; c < fb.size; ++c) k[c] += delta[c];
+      const auto idx = static_cast<std::size_t>(fb.index);
+      switch (fb.kind) {
+        case BlockKind::Pose: pose_retract(&poses[7 * idx], delta, &c_poses[7 * idx]); break;
+        case BlockKind::Intrinsics: {
+          double* k = &c_intr[static_cast<std::size_t>(np) * idx];
+          for (int c = 0; c < fb.size; ++c) k[c] += delta[c];
+          break;
+        }
+        case BlockKind::SetRigid: pose_retract(&sets[8 * idx], delta, &c_sets[8 * idx]); break;
+        case BlockKind::SetScale: c_sets[8 * idx + 7] = sets[8 * idx + 7] * std::exp(delta[0]); break;
       }
     }
     for (std::size_t j = 0; j < point_off.size(); ++j) {
@@ -709,14 +1039,16 @@ struct CpuBackend::Impl {
   double parameter_norm() const {
     double s = 0;
     for (const FBlock& fb : fblocks) {
-      if (fb.is_pose) {
-        for (int a = 0; a < 7; ++a) s += poses[7 * static_cast<std::size_t>(fb.index) + a] * poses[7 * static_cast<std::size_t>(fb.index) + a];
-      } else {
-        for (int a = 0; a < np; ++a) {
-          const double v = intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(fb.index) + a];
-          s += v * v;
-        }
+      const auto idx = static_cast<std::size_t>(fb.index);
+      const double* v = nullptr;
+      int n = 0;
+      switch (fb.kind) {
+        case BlockKind::Pose: v = &poses[7 * idx]; n = 7; break;
+        case BlockKind::Intrinsics: v = &intr[static_cast<std::size_t>(np) * idx]; n = np; break;
+        case BlockKind::SetRigid: v = &sets[8 * idx]; n = 7; break;
+        case BlockKind::SetScale: v = &sets[8 * idx + 7]; n = 1; break;
       }
+      for (int a = 0; a < n; ++a) s += v[a] * v[a];
     }
     for (std::size_t j = 0; j < point_off.size(); ++j) {
       if (point_off[j] < 0) continue;
@@ -731,7 +1063,7 @@ CpuBackend::CpuBackend(const Problem& problem, const SolverOptions& options, con
 
 CpuBackend::~CpuBackend() = default;
 
-double CpuBackend::cost() { return impl_->cost_of(impl_->poses, impl_->points, impl_->intr); }
+double CpuBackend::cost() { return impl_->cost_of(impl_->poses, impl_->points, impl_->intr, impl_->sets); }
 
 void CpuBackend::linearize(bool compute_scaling) { impl_->linearize(compute_scaling); }
 
@@ -744,7 +1076,7 @@ StepResult CpuBackend::compute_step(double radius, double eta, int min_linear_it
 }
 
 bool CpuBackend::candidate_cost(double* cost) {
-  *cost = impl_->cost_of(impl_->c_poses, impl_->c_points, impl_->c_intr);
+  *cost = impl_->cost_of(impl_->c_poses, impl_->c_points, impl_->c_intr, impl_->c_sets);
   return std::isfinite(*cost);
 }
 
@@ -752,12 +1084,16 @@ void CpuBackend::accept_candidate() {
   impl_->poses.swap(impl_->c_poses);
   impl_->points.swap(impl_->c_points);
   impl_->intr.swap(impl_->c_intr);
+  impl_->sets.swap(impl_->c_sets);
 }
 
 void CpuBackend::write_back(Problem& problem) const {
   problem.poses = impl_->poses;
   problem.points = impl_->points;
   problem.intrinsics = impl_->intr;
+  const bool any_transform = std::any_of(problem.set_relation.begin(), problem.set_relation.end(),
+                                         [](FrameRelation r) { return r != FrameRelation::Identity; });
+  if (!problem.set_transform.empty() || any_transform) problem.set_transform = impl_->sets;
 }
 
 }  // namespace jba::cpu

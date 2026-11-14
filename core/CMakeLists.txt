@@ -1,5 +1,6 @@
 add_library(jba_core STATIC
   src/camera_model.cpp
+  src/priors.cpp
   src/problem_io.cpp
   src/solver.cpp
   src/trust_region.cpp)

@@ -62,6 +62,31 @@ def _radial(u, v, k):
     return f * (u + u * radial) + cx, f * (v + v * radial) + cy
 
 
+def _opencv(u, v, k):
+    fx, fy, cx, cy, k1, k2, p1, p2 = (k[i] for i in range(8))
+    uu, vv, uv = u * u, v * v, u * v
+    r2 = uu + vv
+    radial = k1 * r2 + k2 * r2 * r2
+    du = u * radial + 2 * p1 * uv + p2 * (r2 + 2 * uu)
+    dv = v * radial + 2 * p2 * uv + p1 * (r2 + 2 * vv)
+    return fx * (u + du) + cx, fy * (v + dv) + cy
+
+
+# Below this radius in normalized coordinates the fisheye model is the identity,
+# as in COLMAP: theta_d / r -> 1 there, and the formula divides by r.
+FISHEYE_EPSILON = 1e-12
+
+
+def _opencv_fisheye(u, v, k):
+    fx, fy, cx, cy, k1, k2, k3, k4 = (k[i] for i in range(8))
+    r = sym.sqrt(u * u + v * v)
+    theta = sym.atan(r)
+    t2 = theta * theta
+    theta_d = theta * (1 + t2 * (k1 + t2 * (k2 + t2 * (k3 + t2 * k4))))
+    factor = sym.where(r > FISHEYE_EPSILON, theta_d / r, 1)
+    return fx * (u * factor) + cx, fy * (v * factor) + cy
+
+
 @dataclass(frozen=True)
 class CameraModel:
     name: str
@@ -75,6 +100,8 @@ CAMERA_MODELS = [
     CameraModel("pinhole", 1, ["fx", "fy", "cx", "cy"], _pinhole),
     CameraModel("simple_radial", 2, ["f", "cx", "cy", "k"], _simple_radial),
     CameraModel("radial", 3, ["f", "cx", "cy", "k1", "k2"], _radial),
+    CameraModel("opencv", 4, ["fx", "fy", "cx", "cy", "k1", "k2", "p1", "p2"], _opencv),
+    CameraModel("opencv_fisheye", 5, ["fx", "fy", "cx", "cy", "k1", "k2", "k3", "k4"], _opencv_fisheye),
 ]
 
 

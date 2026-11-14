@@ -106,12 +106,12 @@ int solve(int argc, char** argv) {
   if (!history.empty()) write_history(history, s);
   std::printf(
       "{\"input\": \"%s\", \"model\": \"%s\", \"images\": %zu, \"points\": %zu, \"observations\": %zu, "
-      "\"loss\": \"%s\", \"loss_scale\": %g, \"gauge_reference_image\": %d, \"gauge_scale_image\": %d, "
+      "\"loss\": \"%s\", \"loss_scale\": %g, \"gauge_fixed_images\": %zu, "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
       "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": \"%s\", \"time_seconds\": %.4f}\n",
       input.c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
-      p.num_observations(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, s.gauge_reference_image,
-      s.gauge_scale_image, s.initial_cost, s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
+      p.num_observations(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, s.gauge.fixed_images.size(),
+      s.initial_cost, s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
       std::string(jba::termination_name(s.termination)).c_str(), s.message.c_str(), s.time_seconds);
   return s.termination == jba::Termination::Failure ? 1 : 0;
 }

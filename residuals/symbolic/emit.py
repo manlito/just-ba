@@ -76,11 +76,23 @@ class _PointerCppBase(cg.CppGenerator):
         body = self._format_statements(element.statements, indent=1)
         return f"if ({element.argument.name} != nullptr) {{\n{body}\n}}"
 
+    _STD_NAMES = {
+        "Cos": "cos", "Sin": "sin", "Tan": "tan", "Acos": "acos", "Asin": "asin", "Atan": "atan",
+        "Cosh": "cosh", "Sinh": "sinh", "Tanh": "tanh", "Acosh": "acosh", "Asinh": "asinh",
+        "Atanh": "atanh", "Log": "log", "Exp": "exp", "Sqrt": "sqrt", "Abs": "abs",
+        "Floor": "floor", "Atan2": "atan2", "Powi": "pow", "Powf": "pow",
+    }
+
     def format_call_std_function(self, element: ast.CallStdFunction) -> str:
-        text = super().format_call_std_function(element)
-        if self.std_namespace != "std":
-            text = text.replace("std::", f"{self.std_namespace}::")
-        return text
+        name = element.function.name
+        args = [self.format(a) for a in element.args]
+        if name == "Signum":
+            return self.format_signum(args[0])
+        ns = self.std_namespace
+        return f"{ns}::{self._STD_NAMES[name]}({', '.join(args)})"
+
+    def format_signum(self, x: str) -> str:
+        return f"static_cast<Scalar>((static_cast<Scalar>(0) < ({x})) - (({x}) < static_cast<Scalar>(0)))"
 
 
 class CpuGenerator(_PointerCppBase):
@@ -90,6 +102,9 @@ class CpuGenerator(_PointerCppBase):
 class MetalGenerator(_PointerCppBase):
     pointer_prefix = "thread "
     std_namespace = "metal"
+
+    def format_signum(self, x: str) -> str:
+        return f"metal::sign({x})"
 
 
 def generate(func, generator, name=None) -> str:

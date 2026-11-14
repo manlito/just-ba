@@ -17,8 +17,8 @@ constexpr std::array<ModelInfo, 6> kModels = {{
     {CameraModel::Pinhole, "PINHOLE", 4, true},
     {CameraModel::SimpleRadial, "SIMPLE_RADIAL", 4, true},
     {CameraModel::Radial, "RADIAL", 5, true},
-    {CameraModel::OpenCV, "OPENCV", 8, false},
-    {CameraModel::OpenCVFisheye, "OPENCV_FISHEYE", 8, false},
+    {CameraModel::OpenCV, "OPENCV", 8, true},
+    {CameraModel::OpenCVFisheye, "OPENCV_FISHEYE", 8, true},
 }};
 
 const ModelInfo& info(CameraModel model) { return kModels.at(static_cast<std::size_t>(model)); }

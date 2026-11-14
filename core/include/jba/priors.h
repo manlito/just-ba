@@ -1,0 +1,39 @@
+#pragma once
+
+#include <vector>
+
+#include "jba/problem.h"
+
+namespace jba {
+
+// Weights used for pose priors that arrive without any (D21). Trackers report no
+// uncertainty, so relative priors get a standard deviation that grows with the
+// motion between the two frames (the LaMAR heuristic, document 02): frames far
+// apart are tied more loosely than neighbours.
+//
+// Provisional values: D21 stays open until real captures set them.
+struct PriorDefaults {
+  // Relative priors: sigma = base + per_unit * motion.
+  double relative_rotation_sigma = 0.002;             // rad
+  double relative_rotation_per_radian = 0.02;         // rad per rad of rotation
+  double relative_translation_sigma = 0.005;          // m
+  double relative_translation_per_metre = 0.02;       // m per m travelled
+  // Global priors.
+  double global_rotation_sigma = 0.02;                // rad
+  double global_position_sigma = 0.05;                // the set's own units
+};
+
+// Whitening matrices W (6 x 6, row-major, residual W r) for every relative and
+// global prior: from sqrt_info when given, else from sigma (a +inf sigma gives zero
+// rows: that part is left out), else from `defaults`.
+void prior_whitening(const Problem& problem, const PriorDefaults& defaults, std::vector<double>& relative,
+                     std::vector<double>& global);
+
+// Builds relative priors from per-image poses and a list of image pairs, for callers
+// whose poses are already clean (document 02): each pair (i, j) gets the prior
+// T_j * T_i^-1 computed from `poses` (7 per image, world to camera). Appended to
+// `problem`; weights are left to the defaults.
+void add_relative_priors_from_poses(Problem& problem, const std::vector<double>& poses,
+                                    const std::vector<std::int32_t>& pairs);
+
+}  // namespace jba

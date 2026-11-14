@@ -10,6 +10,7 @@ jba_test(test_reprojection_jacobians)
 jba_test(test_problem_io)
 jba_test(test_bal)
 jba_test(test_solver)
+jba_test(test_prior_jacobians)
 
 if(JBA_WITH_METAL)
   jba_test(test_metal_reprojection jba_metal)

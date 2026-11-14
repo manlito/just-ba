@@ -35,49 +35,39 @@ std::string_view termination_name(Termination t) {
   return "failure";
 }
 
-Gauge choose_gauge(const Problem& p) {
-  Gauge g;
-  const bool any_image_fixed = std::any_of(p.image_fixed.begin(), p.image_fixed.end(), [](auto v) { return v != 0; });
-  const bool any_point_fixed = std::any_of(p.point_fixed.begin(), p.point_fixed.end(), [](auto v) { return v != 0; });
-  if (any_image_fixed || any_point_fixed) return g;
+namespace {
 
-  const std::size_t n_img = p.num_images();
-  std::vector<std::size_t> count(n_img, 0);
-  for (auto i : p.obs_image) ++count[static_cast<std::size_t>(i)];
-  std::size_t ref = 0;
-  for (std::size_t i = 1; i < n_img; ++i) {
-    if (count[i] > count[ref]) ref = i;
+struct UnionFind {
+  std::vector<std::size_t> parent;
+  explicit UnionFind(std::size_t n) : parent(n) {
+    for (std::size_t i = 0; i < n; ++i) parent[i] = i;
   }
-  if (n_img < 2 || count[ref] == 0) return g;
+  std::size_t find(std::size_t a) {
+    while (parent[a] != a) a = parent[a] = parent[parent[a]];
+    return a;
+  }
+  // The smaller index becomes the root, so roots do not depend on the join order.
+  void join(std::size_t a, std::size_t b) {
+    a = find(a);
+    b = find(b);
+    if (a == b) return;
+    if (a < b) parent[b] = a;
+    else parent[a] = b;
+  }
+};
 
-  // Points seen by the reference image, then shared counts per other image.
-  std::vector<char> seen(p.num_points(), 0);
-  for (std::size_t k = 0; k < p.num_observations(); ++k) {
-    if (static_cast<std::size_t>(p.obs_image[k]) == ref) seen[static_cast<std::size_t>(p.obs_point[k])] = 1;
-  }
-  std::vector<std::size_t> shared(n_img, 0);
-  for (std::size_t k = 0; k < p.num_observations(); ++k) {
-    const auto i = static_cast<std::size_t>(p.obs_image[k]);
-    if (i != ref && seen[static_cast<std::size_t>(p.obs_point[k])]) ++shared[i];
-  }
-  std::size_t second = ref;
-  for (std::size_t i = 0; i < n_img; ++i) {
-    if (i == ref) continue;
-    if (second == ref || shared[i] > shared[second]) second = i;
-  }
-  if (second == ref || shared[second] == 0) return g;
-
-  // With the reference pose fixed, the remaining freedom is a scaling about its
-  // centre C1, which moves t2 along R2 (C2 - C1) = -t2 - R2 C1. Hold the largest
-  // coordinate of that direction.
+// Translation coordinate that sets the scale with `ref`'s pose held (D57): the
+// remaining freedom is a scaling about C1, which moves t2 along R2 (C2 - C1)
+// = -t2 - R2 C1. Hold its largest coordinate.
+int scale_coordinate(const Problem& p, std::size_t ref, std::size_t second) {
   const double* p1 = &p.poses[7 * ref];
   const double* p2 = &p.poses[7 * second];
   const double conj1[4] = {p1[0], -p1[1], -p1[2], -p1[3]};
   double C1[3];
-  jba::quat_rotate(conj1, p1 + 4, C1);
+  quat_rotate(conj1, p1 + 4, C1);
   for (double& v : C1) v = -v;
   double R2C1[3];
-  jba::quat_rotate(p2, C1, R2C1);
+  quat_rotate(p2, C1, R2C1);
   int coord = 0;
   double best = -1;
   for (int c = 0; c < 3; ++c) {
@@ -87,9 +77,107 @@ Gauge choose_gauge(const Problem& p) {
       coord = c;
     }
   }
-  g.reference_image = static_cast<int>(ref);
-  g.scale_image = static_cast<int>(second);
-  g.scale_coordinate = coord;
+  return coord;
+}
+
+}  // namespace
+
+Gauge choose_gauge(const Problem& p) {
+  Gauge g;
+  const bool any_image_fixed = std::any_of(p.image_fixed.begin(), p.image_fixed.end(), [](auto v) { return v != 0; });
+  const bool any_point_fixed = std::any_of(p.point_fixed.begin(), p.point_fixed.end(), [](auto v) { return v != 0; });
+  if (any_image_fixed || any_point_fixed) return g;
+
+  const std::size_t n_img = p.num_images(), n_sets = p.num_prior_sets();
+  std::vector<std::size_t> n_obs(n_img, 0), n_priors(n_img, 0);
+  for (auto i : p.obs_image) ++n_obs[static_cast<std::size_t>(i)];
+
+  // Connectivity: images and one node per prior set.
+  UnionFind uf(n_img + n_sets);
+  {
+    std::vector<std::int64_t> first_image(p.num_points(), -1);
+    for (std::size_t k = 0; k < p.num_observations(); ++k) {
+      const auto j = static_cast<std::size_t>(p.obs_point[k]);
+      const auto i = static_cast<std::size_t>(p.obs_image[k]);
+      if (first_image[j] < 0) first_image[j] = static_cast<std::int64_t>(i);
+      else uf.join(static_cast<std::size_t>(first_image[j]), i);
+    }
+  }
+  for (std::size_t k = 0; k < p.num_relative_priors(); ++k) {
+    const auto i = static_cast<std::size_t>(p.rel_images[2 * k]), j = static_cast<std::size_t>(p.rel_images[2 * k + 1]);
+    uf.join(i, j);
+    ++n_priors[i];
+    ++n_priors[j];
+  }
+  for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
+    const auto i = static_cast<std::size_t>(p.glob_image[k]);
+    const auto s = static_cast<std::size_t>(p.set_of_global_prior(k));
+    ++n_priors[i];
+    if (p.relation_of_set(s) != FrameRelation::Identity) uf.join(i, n_img + s);
+  }
+
+  // What each group has.
+  struct Group {
+    bool frame_defined = false, relative = false, rigid = false;
+    int similarity_set = -1;
+    int ref = -1;
+  };
+  std::vector<Group> groups(n_img + n_sets);
+  for (std::size_t k = 0; k < p.num_relative_priors(); ++k) groups[uf.find(static_cast<std::size_t>(p.rel_images[2 * k]))].relative = true;
+  for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
+    const auto s = static_cast<std::size_t>(p.set_of_global_prior(k));
+    Group& gr = groups[uf.find(static_cast<std::size_t>(p.glob_image[k]))];
+    switch (p.relation_of_set(s)) {
+      case FrameRelation::Identity: gr.frame_defined = true; break;
+      case FrameRelation::Rigid: gr.rigid = true; break;
+      case FrameRelation::Similarity:
+        if (gr.similarity_set < 0 || static_cast<int>(s) < gr.similarity_set) gr.similarity_set = static_cast<int>(s);
+        break;
+    }
+  }
+  for (std::size_t i = 0; i < n_img; ++i) {
+    if (n_obs[i] == 0 && n_priors[i] == 0) continue;  // not a variable
+    Group& gr = groups[uf.find(i)];
+    if (gr.ref < 0) {
+      gr.ref = static_cast<int>(i);
+      continue;
+    }
+    const auto r = static_cast<std::size_t>(gr.ref);
+    if (n_obs[i] > n_obs[r] || (n_obs[i] == n_obs[r] && n_priors[i] > n_priors[r])) gr.ref = static_cast<int>(i);
+  }
+
+  // Points of each reference image, for the scale image of reprojection-only groups.
+    for (std::size_t root = 0; root < groups.size(); ++root) {
+    const Group& gr = groups[root];
+    if (gr.ref < 0 || gr.frame_defined) continue;
+    g.fixed_images.push_back(gr.ref);
+    if (gr.relative || gr.rigid) continue;
+    if (gr.similarity_set >= 0) {
+      g.fixed_set_scales.push_back(gr.similarity_set);
+      continue;
+    }
+    const auto ref = static_cast<std::size_t>(gr.ref);
+    if (n_obs[ref] == 0) continue;
+    std::vector<char> seen(p.num_points(), 0);
+    for (std::size_t k = 0; k < p.num_observations(); ++k) {
+      if (static_cast<std::size_t>(p.obs_image[k]) == ref) seen[static_cast<std::size_t>(p.obs_point[k])] = 1;
+    }
+    std::vector<std::size_t> shared(n_img, 0);
+    for (std::size_t k = 0; k < p.num_observations(); ++k) {
+      const auto i = static_cast<std::size_t>(p.obs_image[k]);
+      if (i != ref && seen[static_cast<std::size_t>(p.obs_point[k])]) ++shared[i];
+    }
+    std::size_t second = ref;
+    for (std::size_t i = 0; i < n_img; ++i) {
+      if (i == ref || uf.find(i) != root) continue;
+      if (second == ref || shared[i] > shared[second]) second = i;
+    }
+    if (second == ref || shared[second] == 0) continue;
+    g.fixed_translations.push_back({static_cast<int>(second), scale_coordinate(p, ref, second)});
+  }
+  std::sort(g.fixed_images.begin(), g.fixed_images.end());
+  std::sort(g.fixed_translations.begin(), g.fixed_translations.end());
+  std::sort(g.fixed_set_scales.begin(), g.fixed_set_scales.end());
   return g;
 }
 

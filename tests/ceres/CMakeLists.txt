@@ -45,6 +45,36 @@ jba_parity_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --fr
 jba_parity_case(huber "--model SIMPLE_RADIAL --outliers 0.05" "--loss huber:2 --check-parameters")
 jba_parity_case(cauchy "--model SIMPLE_RADIAL --outliers 0.05" "--loss cauchy:2 --check-parameters")
 jba_parity_case(geman_mcclure "--model SIMPLE_RADIAL --outliers 0.05" "--loss geman_mcclure:2 --check-parameters")
+# Camera models added in milestone 2.
+jba_parity_case(opencv "--model OPENCV" "--check-parameters")
+jba_parity_case(opencv_fisheye "--model OPENCV_FISHEYE" "--check-parameters")
+# With all eight parameters of one shared block free, the minimum is a flat valley:
+# costs agree to about 1e-11, but parameters only to a few 1e-6, and Ceres's own
+# end point moves that much between runs (its threads change the summation order).
+jba_parity_case(opencv_free_distortion "--model OPENCV --free-intrinsics 7"
+                "--check-parameters --max-centre-diff 2e-5 --max-rotation-diff 1e-5")
+jba_parity_case(fisheye_free_distortion "--model OPENCV_FISHEYE --free-intrinsics 7"
+                "--check-parameters --max-centre-diff 2e-5 --max-rotation-diff 1e-5")
+# Pose priors (milestone 2). Default prior losses (Cauchy) unless stated.
+jba_parity_case(relative_priors "--model PINHOLE --relative-priors 2" "--check-parameters")
+jba_parity_case(relative_priors_only "--model PINHOLE --points 0 --relative-priors 3" "--check-parameters")
+jba_parity_case(relative_priors_sigma "--model PINHOLE --relative-priors 2 --prior-sigma 0.01,0.02" "--check-parameters")
+jba_parity_case(relative_prior_outliers "--model SIMPLE_RADIAL --relative-priors 3 --prior-outliers 0.1"
+                "--check-parameters")
+jba_parity_case(relative_prior_huber "--model SIMPLE_RADIAL --relative-priors 3 --prior-outliers 0.1"
+                "--relative-prior-loss huber:2 --check-parameters")
+jba_parity_case(relative_prior_no_loss "--model PINHOLE --relative-priors 2" "--relative-prior-loss none --check-parameters")
+jba_parity_case(global_identity "--model PINHOLE --global-priors" "--check-parameters")
+jba_parity_case(pose_graph "--model PINHOLE --points 0 --relative-priors 2 --global-priors --prior-outliers 0.05"
+                "--check-parameters")
+jba_parity_case(global_rigid "--model PINHOLE --global-priors --global-relation rigid" "--check-parameters")
+jba_parity_case(global_similarity "--model PINHOLE --global-priors --global-relation similarity" "--check-parameters")
+jba_parity_case(relative_and_similarity
+                "--model RADIAL --relative-priors 2 --global-priors --global-relation similarity --prior-outliers 0.05"
+                "--check-parameters")
+jba_parity_case(priors_fixed_blocks "--model PINHOLE --relative-priors 2 --global-priors --fix-images 2"
+                "--check-parameters")
+
 # Against Ceres's exact solver: costs must agree, but an inexact inner solve takes
 # more outer iterations by design, so the iteration ratio is not the matched one.
 jba_parity_case(sparse_schur "--model RADIAL" "--linear-solver sparse_schur --max-iteration-ratio 3")

@@ -43,7 +43,12 @@ inline void typical_intrinsics(jba::CameraModel model, double* k) {
     case M::Pinhole: k[0] = 515; k[1] = 525; k[2] = 318; k[3] = 243; break;
     case M::SimpleRadial: k[0] = 520; k[1] = 320; k[2] = 240; k[3] = -0.08; break;
     case M::Radial: k[0] = 520; k[1] = 320; k[2] = 240; k[3] = -0.08; k[4] = 0.01; break;
-    default: break;
+    case M::OpenCV:
+      k[0] = 515; k[1] = 525; k[2] = 318; k[3] = 243; k[4] = -0.08; k[5] = 0.01; k[6] = 0.001; k[7] = -0.0005;
+      break;
+    case M::OpenCVFisheye:
+      k[0] = 300; k[1] = 302; k[2] = 320; k[3] = 240; k[4] = 0.02; k[5] = -0.005; k[6] = 0.001; k[7] = -0.0002;
+      break;
   }
 }
 
@@ -80,7 +85,21 @@ inline void reference_project(jba::CameraModel model, const double* k, const dou
       const double r2 = x * x + y * y, rad = 1 + k[3] * r2 + k[4] * r2 * r2;
       *px = k[0] * x * rad + k[1]; *py = k[0] * y * rad + k[2]; break;
     }
-    default: *px = *py = 0; break;
+    case jba::CameraModel::OpenCV: {
+      const double r2 = x * x + y * y, rad = k[4] * r2 + k[5] * r2 * r2;
+      const double dx = x * rad + 2 * k[6] * x * y + k[7] * (r2 + 2 * x * x);
+      const double dy = y * rad + 2 * k[7] * x * y + k[6] * (r2 + 2 * y * y);
+      *px = k[0] * (x + dx) + k[2]; *py = k[1] * (y + dy) + k[3]; break;
+    }
+    case jba::CameraModel::OpenCVFisheye: {
+      const double r = std::sqrt(x * x + y * y);
+      double f = 1;
+      if (r > 1e-12) {
+        const double th = std::atan(r), t2 = th * th;
+        f = th * (1 + k[4] * t2 + k[5] * t2 * t2 + k[6] * t2 * t2 * t2 + k[7] * t2 * t2 * t2 * t2) / r;
+      }
+      *px = k[0] * x * f + k[2]; *py = k[1] * y * f + k[3]; break;
+    }
   }
 }
 

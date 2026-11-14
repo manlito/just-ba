@@ -57,7 +57,8 @@ double scene_scale(const jba::Problem& p) {
 int main(int argc, char** argv) {
   try {
     if (argc < 2) {
-      std::fprintf(stderr, "usage: %s <problem> [--loss name:scale] [--gauge auto|none] [--max-iterations n] "
+      std::fprintf(stderr, "usage: %s <problem> [--loss name:scale] [--relative-prior-loss name:scale] "
+                           "[--global-prior-loss name:scale] [--gauge auto|none] [--max-iterations n] "
                            "[--function-tolerance x] [--linear-solver iterative_schur|sparse_schur|dense_schur] "
                            "[--check-parameters] [--max-cost-diff x] [--max-iteration-ratio x] "
                            "[--max-centre-diff x] [--max-rotation-diff x] [--threads n]\n", argv[0]);
@@ -81,12 +82,19 @@ int main(int argc, char** argv) {
       }
       if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
       const std::string val = argv[++a];
-      if (key == "--loss") {
+      auto parse_loss = [&](jba::Loss& loss) {
         const auto colon = val.find(':');
         const auto type = jba::loss_from_name(val.substr(0, colon));
         if (!type) throw std::invalid_argument("unknown loss " + val);
-        o.loss.type = *type;
-        if (colon != std::string::npos) o.loss.scale = std::stod(val.substr(colon + 1));
+        loss.type = *type;
+        if (colon != std::string::npos) loss.scale = std::stod(val.substr(colon + 1));
+      };
+      if (key == "--loss") {
+        parse_loss(o.loss);
+      } else if (key == "--relative-prior-loss") {
+        parse_loss(o.relative_prior_loss);
+      } else if (key == "--global-prior-loss") {
+        parse_loss(o.global_prior_loss);
       } else if (key == "--gauge") {
         o.gauge = val == "none" ? jba::GaugeMode::None : jba::GaugeMode::Auto;
       } else if (key == "--max-iterations") {
@@ -126,7 +134,7 @@ int main(int argc, char** argv) {
     const double initial_diff = std::abs(s.initial_cost - c.initial_cost) / std::max(1e-300, std::abs(c.initial_cost));
     const double ratio = c.iterations > 0 ? static_cast<double>(s.iterations) / c.iterations : 0.0;
 
-    double centre_diff = 0, rotation_diff = 0;
+    double centre_diff = 0, rotation_diff = 0, transform_diff = 0;
     if (check_parameters) {
       const double scale = scene_scale(initial);
       std::vector<double> dc, dr;
@@ -143,6 +151,9 @@ int main(int argc, char** argv) {
       }
       centre_diff = median(dc);
       rotation_diff = median(dr);
+      // Prior set transforms are parameters too.
+      for (std::size_t a = 0; a < ours.set_transform.size() && a < ref.set_transform.size(); ++a)
+        transform_diff = std::max(transform_diff, std::abs(ours.set_transform[a] - ref.set_transform[a]));
     }
 
     // Where the two cost histories first differ by more than 1e-6 relative.
@@ -162,6 +173,7 @@ int main(int argc, char** argv) {
     if (c.iterations > 0 && !(ratio <= max_iteration_ratio)) failures.push_back("too many iterations");
     if (check_parameters && !(centre_diff <= max_centre_diff)) failures.push_back("camera centres differ");
     if (check_parameters && !(rotation_diff <= max_rotation_diff)) failures.push_back("rotations differ");
+    if (check_parameters && !(transform_diff <= max_centre_diff)) failures.push_back("prior set transforms differ");
     if (s.termination == jba::Termination::Failure) failures.push_back("just-ba failed: " + s.message);
     if (!c.usable) failures.push_back("Ceres failed");
 
@@ -169,8 +181,9 @@ int main(int argc, char** argv) {
                 "\"linear_solver\": \"%s\",\n",
                 input.c_str(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale,
                 o.gauge == jba::GaugeMode::Auto ? "auto" : "none", linear_name.c_str());
-    std::printf("  \"images\": %zu, \"points\": %zu, \"observations\": %zu,\n", initial.num_images(),
-                initial.num_points(), initial.num_observations());
+    std::printf("  \"images\": %zu, \"points\": %zu, \"observations\": %zu, \"relative_priors\": %zu, "
+                "\"global_priors\": %zu,\n", initial.num_images(), initial.num_points(), initial.num_observations(),
+                initial.num_relative_priors(), initial.num_global_priors());
     std::printf("  \"jba\":   {\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, "
                 "\"linear_iterations\": %d, \"termination\": \"%s\", \"time_seconds\": %.4f},\n",
                 s.initial_cost, s.final_cost, s.iterations, s.linear_iterations,
@@ -182,7 +195,8 @@ int main(int argc, char** argv) {
     std::printf("  \"final_cost_rel_diff\": %.3g, \"iteration_ratio\": %.3g, \"histories_agree_until\": %d",
                 cost_diff, ratio, first_divergence < 0 ? static_cast<int>(common) - 1 : first_divergence - 1);
     if (check_parameters)
-      std::printf(", \"median_centre_diff\": %.3g, \"median_rotation_diff_rad\": %.3g", centre_diff, rotation_diff);
+      std::printf(", \"median_centre_diff\": %.3g, \"median_rotation_diff_rad\": %.3g, \"transform_diff\": %.3g",
+                  centre_diff, rotation_diff, transform_diff);
     std::printf(",\n  \"pass\": %s\n}\n", failures.empty() ? "true" : "false");
     if (verbose) {
       std::fprintf(stderr, "iter | jba: cost, linear its, radius, rel. decrease, accepted | ceres: same\n");

@@ -12,8 +12,8 @@ enum class CameraModel : std::int32_t {
   Pinhole = 1,        // fx, fy, cx, cy
   SimpleRadial = 2,   // f, cx, cy, k
   Radial = 3,         // f, cx, cy, k1, k2
-  OpenCV = 4,         // fx, fy, cx, cy, k1, k2, p1, p2        (milestone 2)
-  OpenCVFisheye = 5,  // fx, fy, cx, cy, k1, k2, k3, k4        (milestone 2)
+  OpenCV = 4,         // fx, fy, cx, cy, k1, k2, p1, p2
+  OpenCVFisheye = 5,  // fx, fy, cx, cy, k1, k2, k3, k4
 };
 
 // Number of intrinsic parameters of a model.

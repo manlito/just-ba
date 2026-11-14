@@ -64,8 +64,29 @@ per block for the camera model.
 | `obs.xy` | f64 | [K, 2] | yes | Keypoint in pixels, in the same pixel convention as the principal point in `intrinsics` |
 | `obs.sigma` | f64 | [K] | no | Keypoint standard deviation in pixels. Absent: 1 |
 
+Pose priors (milestone 2; all optional). `R` relative priors, `G` global priors,
+`S` prior sets.
+
+| Name | dtype | Shape | Required | Meaning |
+|---|---|---|---|---|
+| `prior.relative.images` | i32 | [R, 2] | with relative priors | Images i, j |
+| `prior.relative.pose` | f64 | [R, 7] | with relative priors | The motion T_j T_i^-1 (camera i to camera j coordinates): qw, qx, qy, qz, tx, ty, tz |
+| `prior.relative.sigma` | f64 | [R, 2] | no | Rotation (rad) and translation (m) standard deviations; +inf leaves that part out |
+| `prior.relative.sqrt_info` | f64 | [R, 6, 6] | no | Whitening matrix W, residual W r; rotation rows first. Not with sigma |
+| `prior.global.image` | i32 | [G] | with global priors | Image of each prior |
+| `prior.global.set` | i32 | [G] | no | Prior set of each prior. Absent: all in set 0 |
+| `prior.global.pose` | f64 | [G, 7] | with global priors | World to camera in the set's frame, as `image.pose` |
+| `prior.global.sigma` | f64 | [G, 2] | no | Rotation (rad) and position (set units) standard deviations; +inf leaves that part out |
+| `prior.global.sqrt_info` | f64 | [G, 6, 6] | no | As for relative priors |
+| `prior.set.relation` | i32 | [S] | no | 0 the set is the working frame, 1 rigid transform, 2 similarity (D19). Absent: one set, the working frame |
+| `prior.set.transform` | f64 | [S, 8] | no | qw, qx, qy, qz, tx, ty, tz, s with X_working = s R X_set + t. Starting value, and the estimate after a solve. Absent: identity |
+
+Without sigma or sqrt_info a prior gets the solver's default weights (D65).
+Residual definitions: decisions D62 and D63.
+
 Validation: index ranges, array lengths, positive sigmas, and quaternion norms
-within 1e-9 of one.
+within 1e-9 of one. A relative prior may not tie an image to itself; a set that is
+the working frame must have the identity transform, and a rigid set scale 1.
 
 Normally a session has one intrinsics block (D11). Several blocks, all of the
 model in `camera.model`, are allowed so that BAL problems, which have one camera
@@ -77,8 +98,6 @@ Reserved names, added in the milestones that need them. Each will be optional.
 
 | Prefix | Milestone | Content |
 |---|---|---|
-| `prior.relative.*` | 2 | Image pairs, relative poses, weights |
-| `prior.global.*` | 2 | Poses per image, frame relation (D19), weights |
 | `image.gravity` | 3 | Gravity direction per image |
 | `depth.*` | 3 | Depth at keypoints, confidence, per-image scale and offset |
 | `lines.*` | 3 | Line segments per image for the Manhattan prior |

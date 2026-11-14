@@ -3,8 +3,14 @@
 //   jba_make_problem <out.jba> [--model NAME] [--images N] [--points N] [--seed N]
 //                    [--noise PX] [--outliers FRACTION] [--free-intrinsics MASK]
 //                    [--per-image-intrinsics] [--fix-images N] [--fix-points N] [--sigma PX]
+//                    [--relative-priors N] [--global-priors] [--global-relation identity|rigid|similarity]
+//                    [--prior-noise ROT,TRANS] [--prior-outliers FRACTION] [--prior-sigma ROT,TRANS]
 //
 // MASK is the IntrinsicsGroup bit mask: 1 focal, 2 principal point, 4 distortion.
+// Priors come from the true poses with noise: relative priors tie each image to
+// its N next neighbours on the ring; global priors are in a frame related to the
+// working frame by a random transform of the given kind. Outliers are gross errors
+// (0.3 to 1 rad, 0.5 to 2 m).
 // Not the synthetic generator of document 05 (milestone 2).
 
 #include <cmath>
@@ -14,6 +20,7 @@
 #include <string>
 
 #include "jba/geometry.h"
+#include "jba/priors.h"
 #include "jba/problem_io.h"
 #include "synthetic.h"
 
@@ -28,11 +35,24 @@ int main(int argc, char** argv) {
     int images = 12, points = 300, fix_images = 0, fix_points = 0, free_mask = 0;
     std::uint64_t seed = 5;
     double noise = 0.5, outliers = 0, sigma = 0;
-    bool per_image = false;
+    bool per_image = false, global_priors = false;
+    int relative_priors = 0;
+    jba::FrameRelation relation = jba::FrameRelation::Identity;
+    double prior_noise[2] = {0.002, 0.005}, prior_sigma[2] = {0, 0}, prior_outliers = 0;
+    auto pair_of = [](const std::string& v, double* out) {
+      const auto comma = v.find(',');
+      if (comma == std::string::npos) throw std::invalid_argument("expected ROT,TRANS: " + v);
+      out[0] = std::stod(v.substr(0, comma));
+      out[1] = std::stod(v.substr(comma + 1));
+    };
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
       if (key == "--per-image-intrinsics") {
         per_image = true;
+        continue;
+      }
+      if (key == "--global-priors") {
+        global_priors = true;
         continue;
       }
       if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
@@ -50,6 +70,16 @@ int main(int argc, char** argv) {
       else if (key == "--fix-images") fix_images = std::stoi(val);
       else if (key == "--fix-points") fix_points = std::stoi(val);
       else if (key == "--sigma") sigma = std::stod(val);
+      else if (key == "--relative-priors") relative_priors = std::stoi(val);
+      else if (key == "--prior-noise") pair_of(val, prior_noise);
+      else if (key == "--prior-sigma") pair_of(val, prior_sigma);
+      else if (key == "--prior-outliers") prior_outliers = std::stod(val);
+      else if (key == "--global-relation") {
+        if (val == "identity") relation = jba::FrameRelation::Identity;
+        else if (val == "rigid") relation = jba::FrameRelation::Rigid;
+        else if (val == "similarity") relation = jba::FrameRelation::Similarity;
+        else throw std::invalid_argument("unknown relation " + val);
+      }
       else throw std::invalid_argument("unknown option " + key);
     }
 
@@ -67,6 +97,72 @@ int main(int argc, char** argv) {
       }
     }
     if (sigma > 0) p.obs_sigma.assign(p.num_observations(), sigma);
+
+    // Priors from the true poses, with noise and gross outliers.
+    const std::vector<double> truth = p.poses;
+    auto noisy = [&](double* pose) {
+      const bool gross = u(rng) < prior_outliers;
+      const double sr = gross ? 0.3 + 0.7 * u(rng) : prior_noise[0];
+      const double st = gross ? 0.5 + 1.5 * u(rng) : prior_noise[1];
+      double step[6];
+      if (gross) {
+        // Fixed magnitude in a random direction.
+        double d[6];
+        double nr = 0, nt = 0;
+        for (int c = 0; c < 6; ++c) d[c] = n(rng);
+        for (int c = 0; c < 3; ++c) nr += d[c] * d[c], nt += d[3 + c] * d[3 + c];
+        for (int c = 0; c < 3; ++c) step[c] = sr * d[c] / std::sqrt(nr), step[3 + c] = st * d[3 + c] / std::sqrt(nt);
+      } else {
+        for (int c = 0; c < 3; ++c) step[c] = sr * n(rng), step[3 + c] = st * n(rng);
+      }
+      double moved[7];
+      jba::pose_retract(pose, step, moved);
+      std::copy_n(moved, 7, pose);
+    };
+    if (relative_priors > 0) {
+      std::vector<std::int32_t> pairs;
+      for (int i = 0; i < images; ++i)
+        for (int d = 1; d <= relative_priors && d < images; ++d) pairs.insert(pairs.end(), {i, (i + d) % images});
+      jba::add_relative_priors_from_poses(p, truth, pairs);
+      for (std::size_t k = 0; k < p.num_relative_priors(); ++k) noisy(&p.rel_pose[7 * k]);
+      if (prior_sigma[0] > 0) {
+        p.rel_sigma.clear();
+        for (std::size_t k = 0; k < p.num_relative_priors(); ++k) p.rel_sigma.insert(p.rel_sigma.end(), {prior_sigma[0], prior_sigma[1]});
+      }
+    }
+    if (global_priors) {
+      // The set's frame: X_working = s R X_set + t, so a world-to-camera pose in the
+      // set's frame is (R_i R, (R_i t + t_i) / s).
+      double S[8] = {1, 0, 0, 0, 0, 0, 0, 1};
+      if (relation != jba::FrameRelation::Identity) {
+        jba_test::random_rotation(rng, 2.5, S);
+        for (int c = 0; c < 3; ++c) S[4 + c] = 3 * (2 * u(rng) - 1);
+        if (relation == jba::FrameRelation::Similarity) S[7] = 0.3 + 2 * u(rng);
+      }
+      for (int i = 0; i < images; ++i) {
+        const double* T = &truth[7 * static_cast<std::size_t>(i)];
+        double g[7], Rt[3];
+        jba::quat_multiply(T, S, g);
+        jba::quat_normalize(g);
+        jba::quat_rotate(T, S + 4, Rt);
+        for (int c = 0; c < 3; ++c) g[4 + c] = (Rt[c] + T[4 + c]) / S[7];
+        noisy(g);
+        p.glob_image.push_back(i);
+        p.glob_pose.insert(p.glob_pose.end(), g, g + 7);
+      }
+      p.set_relation = {relation};
+      if (prior_sigma[0] > 0) {
+        for (int i = 0; i < images; ++i) p.glob_sigma.insert(p.glob_sigma.end(), {prior_sigma[0], prior_sigma[1]});
+      }
+      if (relation != jba::FrameRelation::Identity) {
+        // Start near the truth, as after the alignment that builds starting poses.
+        const double step[6] = {0.05 * n(rng), 0.05 * n(rng), 0.05 * n(rng), 0.1 * n(rng), 0.1 * n(rng), 0.1 * n(rng)};
+        double start[8];
+        jba::pose_retract(S, step, start);
+        start[7] = relation == jba::FrameRelation::Similarity ? S[7] * (1 + 0.05 * n(rng)) : 1.0;
+        p.set_transform.assign(start, start + 8);
+      }
+    }
 
     if (fix_images > 0) {
       p.image_fixed.assign(p.num_images(), 0);

@@ -96,14 +96,16 @@ int main() {
     auto p = jba_test::random_problem(CameraModel::Pinhole, 9, 200, 27);
     perturb(p, 28);
     const auto g = jba::choose_gauge(p);
-    EXPECT(g.reference_image >= 0 && g.scale_image >= 0 && g.scale_image != g.reference_image);
+    EXPECT(g.fixed_images.size() == 1 && g.fixed_translations.size() == 1 && g.fixed_set_scales.empty());
+    const int ref = g.fixed_images.at(0), second = g.fixed_translations.at(0)[0];
+    EXPECT(second != ref);
     const auto before = p.poses;
     const auto s = jba::solve(p);
-    EXPECT(s.gauge_reference_image == g.reference_image);
+    EXPECT(s.gauge.fixed_images == g.fixed_images);
     for (int a = 0; a < 7; ++a)
-      EXPECT(p.poses[7 * static_cast<std::size_t>(g.reference_image) + static_cast<std::size_t>(a)] ==
-             before[7 * static_cast<std::size_t>(g.reference_image) + static_cast<std::size_t>(a)]);
-    const std::size_t held = 7 * static_cast<std::size_t>(g.scale_image) + 4 + static_cast<std::size_t>(g.scale_coordinate);
+      EXPECT(p.poses[7 * static_cast<std::size_t>(ref) + static_cast<std::size_t>(a)] ==
+             before[7 * static_cast<std::size_t>(ref) + static_cast<std::size_t>(a)]);
+    const std::size_t held = 7 * static_cast<std::size_t>(second) + 4 + static_cast<std::size_t>(g.fixed_translations[0][1]);
     EXPECT(p.poses[held] == before[held]);
     EXPECT(s.final_cost < s.initial_cost);
   }
@@ -116,10 +118,10 @@ int main() {
     p.image_fixed[3] = 1;
     p.point_fixed.assign(p.num_points(), 0);
     p.point_fixed[7] = 1;
-    EXPECT(jba::choose_gauge(p).reference_image == -1);
+    EXPECT(jba::choose_gauge(p).empty());
     const auto before = p;
     const auto s = jba::solve(p);
-    EXPECT(s.gauge_reference_image == -1);
+    EXPECT(s.gauge.empty());
     for (int a = 0; a < 7; ++a) EXPECT(p.poses[21 + static_cast<std::size_t>(a)] == before.poses[21 + static_cast<std::size_t>(a)]);
     for (int a = 0; a < 3; ++a) EXPECT(p.points[21 + static_cast<std::size_t>(a)] == before.points[21 + static_cast<std::size_t>(a)]);
     EXPECT(p.intrinsics == before.intrinsics);  // fixed by default
@@ -171,6 +173,60 @@ int main() {
     jba::solve(b, robust);
     std::printf("point RMS error: no loss %.4g, Cauchy %.4g\n", error(a), error(b));
     EXPECT(error(b) < 0.5 * error(a));
+  }
+
+  // Gauge with priors, per group of connected images.
+  {
+    auto p = jba_test::random_problem(CameraModel::Pinhole, 6, 50, 40);
+    // Relative priors: only the reference pose is held; the priors set the scale.
+    auto rel = p;
+    jba::add_relative_priors_from_poses(rel, rel.poses, {0, 1, 1, 2});
+    auto g = jba::choose_gauge(rel);
+    EXPECT(g.fixed_images.size() == 1 && g.fixed_translations.empty() && g.fixed_set_scales.empty());
+    // A global set that is the working frame: nothing is held.
+    auto glob = p;
+    glob.glob_image = {3};
+    glob.glob_pose.assign(p.poses.begin() + 21, p.poses.begin() + 28);
+    EXPECT(jba::choose_gauge(glob).empty());
+    // A similarity set alone: the reference pose and the set's scale.
+    glob.set_relation = {jba::FrameRelation::Similarity};
+    g = jba::choose_gauge(glob);
+    EXPECT(g.fixed_images.size() == 1 && g.fixed_translations.empty() && g.fixed_set_scales == std::vector<int>{0});
+    // A rigid set fixes the scale itself.
+    glob.set_relation = {jba::FrameRelation::Rigid};
+    g = jba::choose_gauge(glob);
+    EXPECT(g.fixed_images.size() == 1 && g.fixed_translations.empty() && g.fixed_set_scales.empty());
+    // Two groups joined by nothing: a pose graph with two components gets two
+    // reference poses, and no scale is held (relative priors are metric).
+    jba::Problem two;
+    two.model = CameraModel::Pinhole;
+    two.intrinsics = p.intrinsics;
+    two.poses = p.poses;
+    jba::add_relative_priors_from_poses(two, two.poses, {0, 1, 1, 2, 3, 4, 4, 5});
+    g = jba::choose_gauge(two);
+    EXPECT((g.fixed_images == std::vector<int>{1, 4}) && g.fixed_translations.empty());  // most priors
+  }
+
+  // With priors, results are still bit-identical for any thread count, and the
+  // reference pose does not move.
+  {
+    auto base = jba_test::random_problem(CameraModel::Radial, 12, 400, 41);
+    std::vector<std::int32_t> pairs;
+    for (int i = 0; i < 12; ++i) pairs.insert(pairs.end(), {i, (i + 1) % 12});
+    jba::add_relative_priors_from_poses(base, base.poses, pairs);
+    perturb(base, 42);
+    std::vector<double> first;
+    for (int threads : {1, 3, 8}) {
+      auto p = base;
+      jba::SolverOptions o;
+      o.num_threads = threads;
+      const auto s = jba::solve(p, o);
+      EXPECT(s.final_cost < s.initial_cost);
+      if (first.empty()) first = p.poses;
+      else EXPECT(p.poses == first);
+      const auto ref = static_cast<std::size_t>(s.gauge.fixed_images.at(0));
+      for (int a = 0; a < 7; ++a) EXPECT(p.poses[7 * ref + static_cast<std::size_t>(a)] == base.poses[7 * ref + static_cast<std::size_t>(a)]);
+    }
   }
 
   // Invalid problems are refused.

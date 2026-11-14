@@ -28,6 +28,18 @@ class LeftRotationVectorQuaternion final : public ceres::Manifold {
   bool MinusJacobian(const double* x, double* J) const override;
 };
 
+// Positive scale with a log tangent: s <- s * exp(ds), as the library updates a
+// prior set's scale.
+class LogScale final : public ceres::Manifold {
+ public:
+  int AmbientSize() const override { return 1; }
+  int TangentSize() const override { return 1; }
+  bool Plus(const double* x, const double* delta, double* x_plus_delta) const override;
+  bool PlusJacobian(const double* x, double* J) const override;
+  bool Minus(const double* y, const double* x, double* y_minus_x) const override;
+  bool MinusJacobian(const double* x, double* J) const override;
+};
+
 // Geman-McClure in the library's definition; Ceres has no such loss.
 class GemanMcClureLoss final : public ceres::LossFunction {
  public:
@@ -41,6 +53,14 @@ class GemanMcClureLoss final : public ceres::LossFunction {
 // Reprojection cost function for one observation, parameters (pose 7, point 3,
 // intrinsics), residual in pixels divided by sigma.
 ceres::CostFunction* make_reprojection_cost(jba::CameraModel model, double ox, double oy, double inv_sigma);
+
+// Pose prior cost functions, written independently of the generated code with the
+// residuals of residuals/symbolic/priors.py, whitened by W (6 x 6, row-major).
+// Relative: parameters (pose i 7, pose j 7). Global: (pose 7, rigid 7, scale 1), or
+// (pose 7) when the set is the working frame.
+ceres::CostFunction* make_relative_prior_cost(const double* prior, const double* W);
+ceres::CostFunction* make_global_prior_cost(const double* q_prior, const double* c_prior, const double* W,
+                                            bool identity);
 
 // A ceres::LossFunction matching `loss`, or nullptr for none. Caller owns it.
 ceres::LossFunction* make_loss(const jba::Loss& loss);
@@ -56,6 +76,9 @@ struct Options {
   int max_linear_iterations = 500;
   double eta = 0.1;
   jba::Loss loss;
+  jba::Loss relative_prior_loss;
+  jba::Loss global_prior_loss;
+  jba::PriorDefaults prior_defaults;
   jba::Gauge gauge;  // the same freedoms the library would hold fixed
   int num_threads = 1;
 };
