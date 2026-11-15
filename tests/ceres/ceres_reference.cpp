@@ -671,7 +671,18 @@ Result solve(jba::Problem& p, const Options& o) {
       double* out = &r.pose_covariance[36 * i];
       if (std::find(o.gauge.heading_images.begin(), o.gauge.heading_images.end(), static_cast<int>(i)) !=
           o.gauge.heading_images.end()) {
-        for (int a = 0; a < 36; ++a) out[a] = std::nan("");
+        // HeadingHeldPose's tangent is (delta0, delta1), dtheta = b0 delta0 + b1 delta1,
+        // translation held: rotation block B2 C B2^T, the rest zero.
+        double C[4], B[9];
+        cov.GetCovarianceBlockInTangentSpace(pose, pose, C);
+        jba::heading_basis(pose, up, B);
+        for (int a = 0; a < 3; ++a)
+          for (int b = 0; b < 3; ++b) {
+            double v = 0;
+            for (int c = 0; c < 2; ++c)
+              for (int d = 0; d < 2; ++d) v += B[3 * a + c] * C[2 * c + d] * B[3 * b + d];
+            out[6 * a + b] = v;
+          }
         continue;
       }
       // Tangent columns present: rotation, then the translation coordinates not held.

@@ -123,6 +123,20 @@ int main() {
     perturb(p, 11);
     compare("depth, free corrections", p, {});
   }
+  {
+    // Gravity priors: the automatic gauge holds the reference image's heading and
+    // translation (D83), so its rotation covariance is rank 2, in the pose tangent.
+    auto p = jba_test::random_problem(CameraModel::Pinhole, 10, 200, 12);
+    p.gravity_world = {0.0, 1.0, 0.0};
+    for (std::size_t i = 0; i < p.num_images(); ++i) {
+      double g[3];
+      jba::quat_rotate(&p.poses[7 * i], p.gravity_world.data(), g);
+      p.grav_image.push_back(static_cast<std::int32_t>(i));
+      p.grav_dir.insert(p.grav_dir.end(), g, g + 3);
+    }
+    perturb(p, 13);
+    compare("gravity priors, heading held", p, {});
+  }
   std::printf("worst relative difference %.3g\n", worst);
   return TEST_MAIN_RESULT();
 }

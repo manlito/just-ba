@@ -591,6 +591,9 @@ struct MetalBackend::Impl {
   // Factorizes the tiles the GPU formed and solves S dx_f = b into x. False when
   // the system is not positive definite (the step is then invalid).
   bool direct_solve() {
+    // Nothing free on the camera side (only points are refined): the reduced system
+    // is empty, dx_f has no entries, and Accelerate must not see the empty structure.
+    if (sys.nf == 0) return true;
     const float* tv = host(tile_vals);
     for (std::size_t i = 0; i < csc_vals.size(); ++i) csc_vals[i] = static_cast<double>(tv[csc_src[i]]);
     SparseMatrix_Double S{};

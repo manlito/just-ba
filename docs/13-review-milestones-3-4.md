@@ -267,3 +267,30 @@ a problem that needs it is measured.
 1. Should CI's full mode run the Metal tests at all (finding 6)?
 2. Is agreement between backends on real captures a requirement, and to what
    tolerance (finding 5)?
+
+## Follow-up (2026-11-15)
+
+Done at the owner's request after the review, changes 1 to 3:
+
+- **Finding 1.** `direct_solve` returns at once when there is no camera-side
+  unknown; the step is back substitution alone. New Metal case `points_only` (every
+  image and the intrinsics fixed), with both solvers. Before the change it stopped
+  the process; it now agrees with the CPU to 3e-12 in cost.
+- **Finding 2.** The covariance of a heading-held pose is rotated back to the pose
+  tangent, P <- T P T^T with T = diag(B, I), before the camera centre is derived.
+  The Ceres reference now reports that pose too, mapping HeadingHeldPose's
+  two-coordinate tangent through the same basis, and the Ceres covariance test has a
+  case with gravity priors: 10 poses compared, 3.8e-14 relative. With the change
+  undone the case fails at 0.99.
+- **Finding 3.** `jba_metal_check --expect-fallback` fails unless some sparse_schur
+  step took more than one linear iteration. A free gauge alone did not make the
+  synthetic problems fall back (0 or 1 steps on the parity problems and on tracks
+  of three); the generator has no far points. Points seen by two neighbouring images
+  each did, since every link of the chain then has a free scale. New
+  Metal case `fallback` (12 images, 300 points, track length 2) takes the fallback
+  on 13 steps. Costs are compared (7e-11) and parameters are not, as in `no_gauge`.
+  With the fallback replaced by an invalid step, the case fails.
+
+`ctest -L gpu` now has 114 tests. All 303 tests without the slow one pass,
+including Python and the three captures. Changes 4 to 10 and the two questions are
+still open.

@@ -3,7 +3,7 @@
 //   jba_metal_check <problem> [--gauge auto|none] [--loss NAME[:SCALE]] [--<type>-loss NAME[:SCALE]]
 //                   [--max-iterations N] [--function-tolerance X] [--parameter-tolerance X]
 //                   [--max-cost-diff X] [--max-centre-diff X] [--max-rotation-diff X] [--no-repeat]
-//                   [--linear-solver iterative_schur|sparse_schur]
+//                   [--linear-solver iterative_schur|sparse_schur] [--expect-fallback]
 //
 // Solves with both backends from the same start and options (the CPU always with
 // iterative_schur, Metal with --linear-solver), then checks:
@@ -11,7 +11,9 @@
 // - median camera centre difference relative to the scene scale, and median rotation
 //   difference in radians, at most --max-centre-diff and --max-rotation-diff
 //   (defaults 1e-4); 0 skips a check;
-// - a second Metal solve gives bit-identical parameters (unless --no-repeat).
+// - a second Metal solve gives bit-identical parameters (unless --no-repeat);
+// - with --expect-fallback, at least one sparse_schur step fell back to conjugate
+//   gradients (so that path is tested; the option fails with iterative_schur).
 // Document 05 asks for 1e-3 in cost in single precision; the defaults are what the
 // backend actually reaches on the synthetic cases. Prints JSON; skips (exit 77)
 // without a Metal device.
@@ -66,12 +68,16 @@ int main(int argc, char** argv) {
     o.function_tolerance = 1e-12;
     o.parameter_tolerance = 1e-12;
     double max_cost = 1e-6, max_centre = 1e-4, max_rotation = 1e-4;
-    bool repeat = true;
+    bool repeat = true, expect_fallback = false;
     jba::LinearSolverType metal_solver = jba::LinearSolverType::IterativeSchur;  // the flag's default
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
       if (key == "--no-repeat") {
         repeat = false;
+        continue;
+      }
+      if (key == "--expect-fallback") {
+        expect_fallback = true;
         continue;
       }
       if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
@@ -157,17 +163,24 @@ int main(int argc, char** argv) {
       identical = again.poses == gpu.poses && again.points == gpu.points && again.intrinsics == gpu.intrinsics;
     }
 
-    const bool ok = cost_diff <= max_cost && (max_centre == 0 || centre_diff <= max_centre) &&
+    // sparse_schur takes one linear iteration per step when it factorizes, more when
+    // the step fell back to conjugate gradients.
+    int fallback_steps = 0;
+    if (metal_solver == jba::LinearSolverType::SparseSchur)
+      for (const jba::IterationSummary& it : sg.history) fallback_steps += it.linear_iterations > 1;
+
+    const bool ok = (!expect_fallback || fallback_steps > 0) && cost_diff <= max_cost &&
+                    (max_centre == 0 || centre_diff <= max_centre) &&
                     (max_rotation == 0 || rotation_diff <= max_rotation) && identical &&
                     sg.termination != jba::Termination::Failure;
     std::printf(
         "{\"problem\": \"%s\", \"cpu_cost\": %.12g, \"metal_cost\": %.12g, \"cost_diff\": %.3g, "
         "\"centre_diff\": %.3g, \"rotation_diff\": %.3g, \"cpu_iterations\": %d, \"metal_iterations\": %d, "
         "\"metal_termination\": \"%s\", \"metal_message\": \"%s\", \"repeatable\": %s, \"cpu_seconds\": %.3f, "
-        "\"metal_seconds\": %.3f, \"ok\": %s}\n",
+        "\"metal_seconds\": %.3f, \"fallback_steps\": %d, \"ok\": %s}\n",
         path.c_str(), sc.final_cost, sg.final_cost, cost_diff, centre_diff, rotation_diff, sc.iterations,
         sg.iterations, std::string(jba::termination_name(sg.termination)).c_str(), sg.message.c_str(),
-        repeat ? (identical ? "true" : "false") : "null", t_cpu, t_gpu, ok ? "true" : "false");
+        repeat ? (identical ? "true" : "false") : "null", t_cpu, t_gpu, fallback_steps, ok ? "true" : "false");
     return ok ? 0 : 1;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "error: %s\n", e.what());

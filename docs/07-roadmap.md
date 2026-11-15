@@ -280,9 +280,10 @@ parity included. The first CI run found a covariance test whose problem was
 singular but passed on the Mac by rounding; singular systems are now refused on
 every platform (D88). Not yet tried: real captures with segments or depth (the
 exported ARCore captures carry neither; their `refine` test still passes).
-Reviewed in document 13: every figure above reproduces. To fix: the covariance of
-a pose whose heading the gauge holds (D83) is reported in the gauge's basis, not
-the pose tangent.
+Reviewed in document 13: every figure above reproduces. Fixed after the review:
+the covariance of a pose whose heading the gauge holds (D83) was reported in the
+gauge's basis, not the pose tangent; the Ceres covariance test now has a gravity
+case that compares that pose.
 
 ## Milestone 4: Apple backend (Metal)
 
@@ -367,9 +368,9 @@ measured, 2.6 to 10.6 times. The Metal tests run where a Metal device is present
 (label `gpu`); CI's quick mode has no macOS job, and its full mode runs them on the
 hosted macOS runner as an informational step (document 08).
 Reviewed in document 13: the figures above reproduce (2.5 to 10.8 times when
-re-measured). To fix: sparse_schur stops the process when no camera-side block is
-free, and its conjugate-gradients fallback, which the real captures need, has no
-test outside them. "Same answers" is shown on the parity problems; through
+re-measured). Fixed after the review: sparse_schur stopped the process when no
+camera-side block was free, and its conjugate-gradients fallback, which the real
+captures need, had no test outside them; both now have Metal cases. "Same answers" is shown on the parity problems; through
 `refine` on the captures the backends agree to about 1e-3 of the scene scale, and
 no test compares them there.
 

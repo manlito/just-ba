@@ -59,3 +59,17 @@ jba_metal_case(depth_outliers "--model SIMPLE_RADIAL --depth 0.5 --depth-outlier
 jba_metal_case(depth_huber "--model SIMPLE_RADIAL --depth 0.5 --depth-outliers 0.1" "--depth-loss huber:2")
 jba_metal_case(depth_priors "--model PINHOLE --depth 0.3 --depth-free 3 --relative-priors 2 --gravity-priors" "")
 jba_metal_case(depth_fixed_blocks "--model PINHOLE --depth 0.5 --depth-free 3 --fix-images 2 --fix-points 20" "")
+
+# Not a parity case: every image fixed and the intrinsics too, so only points are
+# refined and the reduced camera system is empty (review of milestones 3 and 4,
+# finding 1).
+jba_metal_case(points_only "--model PINHOLE --images 12 --fix-images 12" "")
+
+# Not a parity case: each point seen by two neighbouring images only, so the scale
+# of every link of the chain is free. The reduced camera system, formed in single
+# precision, then loses definiteness on many steps, and sparse_schur must fall back
+# to conjugate gradients (D92; review of milestones 3 and 4, finding 3). Costs are
+# compared; parameters are not, since the end point along the free scales depends on
+# the path, as in no_gauge.
+jba_metal_sparse_case(fallback "--model RADIAL --images 12 --points 300 --track-length 2"
+                      "--expect-fallback --max-centre-diff 0 --max-rotation-diff 0")

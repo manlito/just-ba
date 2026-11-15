@@ -45,6 +45,17 @@ if(JBA_WITH_METAL)
     set_tests_properties(metal_${name} metal_sparse_${name} PROPERTIES FIXTURES_REQUIRED metal_${name} LABELS gpu
                          SKIP_RETURN_CODE 77)
   endfunction()
+  # A case for sparse_schur only, with extra checks (metal_cases.cmake).
+  function(jba_metal_sparse_case name gen check)
+    set(file ${CMAKE_CURRENT_BINARY_DIR}/metal_${name}.jba)
+    separate_arguments(gen_list UNIX_COMMAND "${gen}")
+    separate_arguments(check_list UNIX_COMMAND "${check}")
+    add_test(NAME metal_make_${name} COMMAND jba_make_problem ${file} ${gen_list})
+    add_test(NAME metal_sparse_${name} COMMAND jba_metal_check ${file} ${check_list} --linear-solver sparse_schur)
+    set_tests_properties(metal_make_${name} PROPERTIES FIXTURES_SETUP metal_${name})
+    set_tests_properties(metal_sparse_${name} PROPERTIES FIXTURES_REQUIRED metal_${name} LABELS gpu
+                         SKIP_RETURN_CODE 77)
+  endfunction()
   include(metal_cases.cmake)
 endif()
 

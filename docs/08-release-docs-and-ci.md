@@ -84,7 +84,7 @@ Current state (after milestone 1): the workflow is started by hand while the
 repository is private (D49), in a quick mode (Linux and Windows, Ceres parity
 without the slow test) or a full mode that adds macOS and venice-52 (D61). A third
 job checks that the generated residual code is current. Since milestone 4 the full
-mode's macOS job also runs the 111 Metal tests (`ctest -L gpu`) as an informational
+mode's macOS job also runs the 114 Metal tests (`ctest -L gpu`) as an informational
 step that cannot fail the run. That sits between the table below (hosted macOS "if
 it proves reliable") and the decision at the end of this document (by hand, never
 in CI); which one holds is open (document 00). The table below is the plan for the

@@ -26,7 +26,8 @@ struct CovarianceOptions {
 struct Covariance {
   // Per image, 6 x 6 row-major in the pose tangent of D46: rotation (radians, camera
   // axes, R <- Exp(dtheta) R), then translation t. Zeros for images that are not
-  // variables, and in held coordinates.
+  // variables, and in held coordinates. For an image whose heading the gauge holds
+  // (D83) the rotation block is singular along the vertical in camera axes.
   std::vector<double> pose;
   // Per image, 3 x 3: the camera centre C = -R^T t, working frame, metres.
   std::vector<double> centre;

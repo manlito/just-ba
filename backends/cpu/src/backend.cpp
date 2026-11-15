@@ -908,9 +908,22 @@ struct CpuBackend::Impl : System {
     for (std::size_t i = 0; i < n_img; ++i) {
       const int o = pose_off[i];
       if (o < 0) continue;
+      double* P = &pose_cov[36 * i];
       for (int a = 0; a < 6; ++a)
         for (int b = 0; b < 6; ++b)
-          pose_cov[36 * i + static_cast<std::size_t>(6 * a + b)] = S[static_cast<std::size_t>(o + a) * n + static_cast<std::size_t>(o + b)];
+          P[6 * a + b] = S[static_cast<std::size_t>(o + a) * n + static_cast<std::size_t>(o + b)];
+      // A pose whose heading the gauge holds (D83) has its rotation in the basis B of
+      // heading_basis, dtheta = B delta; back to the pose tangent: P <- T P T^T with
+      // T = diag(B, I). Its rotation block is then singular along the vertical.
+      if (basis_image.empty() || basis_of[i] < 0) continue;
+      const double* B = &basis[9 * static_cast<std::size_t>(basis_of[i])];
+      double Q[36];
+      for (int a = 0; a < 6; ++a)  // Q = T P
+        for (int b = 0; b < 6; ++b)
+          Q[6 * a + b] = a < 3 ? B[3 * a] * P[b] + B[3 * a + 1] * P[6 + b] + B[3 * a + 2] * P[12 + b] : P[6 * a + b];
+      for (int a = 0; a < 6; ++a)  // P = Q T^T
+        for (int b = 0; b < 6; ++b)
+          P[6 * a + b] = b < 3 ? Q[6 * a] * B[3 * b] + Q[6 * a + 1] * B[3 * b + 1] + Q[6 * a + 2] * B[3 * b + 2] : Q[6 * a + b];
     }
     // Points: C^-1 + C^-1 E^T Sigma_f E C^-1.
     point_cov.assign(9 * want_points.size(), 0.0);
