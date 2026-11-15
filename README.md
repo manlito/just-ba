@@ -2,8 +2,10 @@
 
 A minimal, high-performance bundle adjustment library in C++ with Python bindings,
 for refining reconstructions that come with noisy camera poses from ARKit, ARCore
-or another tracker. Early development: milestone 2, pose priors and the main use
-case on the CPU (`jba::refine`), checked against Ceres and synthetic ground truth.
+or another tracker. Early development: milestone 3, the main use case on the CPU
+(`jba::refine`) with gravity, the Manhattan prior from line segments, depth at
+keypoints, covariances and export to COLMAP, checked against Ceres and synthetic
+ground truth.
 The plan is in [docs/](docs/README.md).
 
 ## Build
@@ -46,8 +48,12 @@ PYTHONPATH=build/bindings/python bindings/python/.venv/bin/python -c "import jus
 The main entry point is `just_ba.refine(scene, keypoints, matches=...)`: a `Problem`
 holding the camera and the pose priors, one `(n, 2)` keypoint array per image, and
 pairwise matches `(m, 4)`. `just_ba.poses_from_camera_to_world(T, "arkit")` converts
-ARKit or ARCore camera-to-world matrices to the library's poses. Packaging for
-PyPI is milestone 6.
+ARKit or ARCore camera-to-world matrices to the library's poses. Optional inputs:
+gravity priors (`grav_image`, `grav_dir`), line segments for the Manhattan prior
+(`line_image`, `line_xy`, with `RefineOptions.use_manhattan`), and a depth reading per
+keypoint (`refine(..., keypoint_depth=...)`). `just_ba.covariance(problem)` gives pose
+and point covariances; `export_colmap` and `write_result` write the result. Packaging
+for PyPI is milestone 6.
 
 ## Reference solver (test-only)
 

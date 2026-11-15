@@ -223,6 +223,61 @@ drift and is refused on non-Manhattan scenes; depth-assisted refinement beats
 pose-and-reprojection-only refinement on synthetic data with known truth; all match
 Ceres on the same formulation.
 
+Results (2026-11-14, M5 Pro):
+
+- Built: the gravity prior (D82) with a gauge that holds only the reference's
+  position and heading when gravity is known (D83); line segments, their assignment
+  and the support test (D85), the Manhattan residual (D84) with the frame as the
+  rotation gauge of every group it ties (D86); depth at keypoints with per-image
+  scale and offset, compared in the reading's units (D87); cost by residual type in
+  every solve summary; covariances of poses and points (D88); export to COLMAP's
+  text model and `result.*` sections in the own format (D89). Python bindings for
+  all of it. The CPU backend takes the new camera-side residuals as factor sets and
+  the depth rows next to the reprojection rows.
+- Level 1: the gravity, line and depth residuals agree with finite differences to
+  6e-11 and with Ceres's automatic differentiation of independent functors to
+  2e-15.
+- Level 2: 26 new synthetic cases against Ceres (gravity with outliers and the
+  heading-held gauge; lines with one and three freedoms, outliers, gravity,
+  priors, two groups tied only by the frame; depth along the axis and the ray,
+  linear and inverse, free scale and offset, outliers, priors, fixed blocks). Final
+  costs agree to about 1e-15, 1e-13 for pose graphs without points, whose
+  histories differ from Ceres's from the first inner solve already in milestone 2.
+- Covariances agree with Ceres's dense SVD covariance to 2e-11 or better, and with
+  the spread of 300 noisy runs (observed over predicted variance: median 0.92,
+  range 0.78 to 1.19).
+- Line assignment on a synthetic room seen from the true poses: frame within 0.05
+  degrees, no segment assigned to a wrong axis, 8% left out (nearly horizontal
+  planes, which hold both horizontal axes). Support: 1.0 in a Manhattan room, 0.52
+  in a mixed one (40% off-axis segments, a wing 30 degrees off), 0.12 for random
+  directions, which is refused (threshold 0.35).
+- Through `refine`, median camera centre and rotation error after alignment to the
+  truth:
+
+  | Scene | Without | With |
+  |---|---|---|
+  | Room, strong heading drift, Manhattan | 8.9 mm, 0.161 deg | 5.7 mm, 0.062 deg |
+  | Two rooms joined by a doorway, strong heading drift, Manhattan | 12 cm, 1.73 deg | 3.6 cm, 0.22 deg |
+  | Room, mixed segments, Manhattan | 8.9 mm, 0.161 deg | 5.7 mm, 0.073 deg |
+  | Room, random segments, Manhattan | 8.9 mm, 0.161 deg | refused; identical result |
+  | Room, drift, metric depth on half the keypoints | 7.6 mm, 0.115 deg | 4.3 mm, 0.092 deg |
+  | The same with 5% gross depth errors | 7.6 mm, 0.115 deg | 4.3 mm, 0.084 deg |
+  | The same with network depth (10% scale, 5 cm offset per image, both estimated) | 7.6 mm, 0.115 deg | 5.1 mm, 0.108 deg |
+
+  At the pose-only stage, before anything is triangulated, the segments about halve
+  the heading drift; the relative priors, weighted for ARCore (D77), still pull
+  toward this tracker's larger drift. The images finish the job.
+- Iteration histories of the milestone 2 cases (four BAL problems, seven prior
+  cases) are bit-identical to milestone 2's. Benchmark: counts and costs unchanged;
+  time per iteration, best of ten interleaved runs against a milestone 2 build on
+  the same machine, from 12% faster to 2% slower. The machine ran about 10% slower
+  than when the baseline was taken, so the baseline file was not replaced.
+
+Status: exit conditions met on synthetic data, on the owner's Mac. Not yet done: a CI
+run on Linux and Windows (manual trigger, D49); real captures with segments or
+depth (the exported ARCore captures carry neither yet; their `refine` test still
+passes).
+
 ## Milestone 4: Apple backend (Metal)
 
 - Developed on the owner's Apple Silicon machine, the main development machine, so
