@@ -118,13 +118,22 @@ jobs:
           sudo apt-get install -y -q cuda-nvcc-${CUDA_VERSION} cuda-cudart-dev-${CUDA_VERSION} libcublas-dev-${CUDA_VERSION} cuda-nvrtc-${CUDA_VERSION}
           echo "${CUDA_DIR}/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=${CUDA_DIR}/lib64" >> "$GITHUB_ENV"
+      # The runner's CMake and GCC 13 do not give nvcc C++23 ("CUDA23", first CI run):
+      # a current CMake, and GCC 14 as the host compiler.
+      - name: Install CMake and GCC 14
+        run: |
+          python3 -m pip install --user "cmake>=4.0"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y -q g++-14
       - name: Fetch cuDSS
         run: |
           wget -q https://developer.download.nvidia.com/compute/cudss/redist/libcudss/linux-x86_64/${CUDSS_ARCHIVE}.tar.xz
           tar xf ${CUDSS_ARCHIVE}.tar.xz
       - name: Configure
         run: >
+          cmake --version &&
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CUDA=ON -DJBA_WITH_CUDSS=ON
+          -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_CUDA_HOST_COMPILER=g++-14
           -DCMAKE_CUDA_COMPILER=${CUDA_DIR}/bin/nvcc -DCMAKE_CUDA_ARCHITECTURES=75 -Dcudss_DIR=${{ github.workspace }}/${{ env.CUDSS_ARCHIVE }}/lib/cmake/cudss
       - name: Build
         run: cmake --build build --parallel
