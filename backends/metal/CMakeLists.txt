@@ -19,5 +19,5 @@ jba_embed_metal(${CMAKE_CURRENT_SOURCE_DIR}/kernels/solver.metal kJbaMetalSolver
 
 add_library(jba_metal STATIC src/reprojection.mm src/backend.mm ${_spike} ${_solver})
 target_compile_options(jba_metal PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
-target_link_libraries(jba_metal PUBLIC jba_core jba_cpu "-framework Metal" "-framework Foundation"
+target_link_libraries(jba_metal PUBLIC jba_core jba_cpu "-framework Metal" "-framework Foundation" "-framework Accelerate"
                       PRIVATE jba_internal jba_warnings)

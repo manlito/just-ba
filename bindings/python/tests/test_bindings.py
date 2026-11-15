@@ -359,3 +359,32 @@ def test_export(tmp_path):
                          obs_point=[0, 1, 2, 0, 1, 2], obs_xy=p.obs_xy[np.r_[0:3, 8:11]])
     with pytest.raises(RuntimeError, match="singular"):
         jba.covariance(q)
+
+
+def test_metal_backend():
+    if not jba.backend_available(jba.Backend.METAL):
+        pytest.skip("no Metal device")
+    p, _, _ = small_problem()
+    perturb(p)
+    results = {}
+    for name, backend, solver in [
+        ("cpu", jba.Backend.CPU, jba.LinearSolver.ITERATIVE_SCHUR),
+        ("metal", jba.Backend.METAL, jba.LinearSolver.ITERATIVE_SCHUR),
+        ("metal_sparse", jba.Backend.METAL, jba.LinearSolver.SPARSE_SCHUR),
+    ]:
+        q = p.copy()
+        o = jba.SolverOptions()
+        o.backend = backend
+        o.linear_solver = solver
+        o.function_tolerance = 1e-12
+        o.parameter_tolerance = 1e-12
+        o.max_iterations = 200
+        s = jba.solve(q, o)
+        assert s.termination == jba.Termination.CONVERGENCE, s.message
+        results[name] = s.final_cost
+    for name in ("metal", "metal_sparse"):
+        assert abs(results[name] - results["cpu"]) <= 1e-6 * results["cpu"]
+    o = jba.SolverOptions()
+    o.linear_solver = jba.LinearSolver.SPARSE_SCHUR
+    with pytest.raises(ValueError):
+        jba.solve(p.copy(), o)  # sparse_schur needs the Metal backend

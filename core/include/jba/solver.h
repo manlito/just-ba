@@ -76,6 +76,22 @@ std::optional<BackendKind> backend_from_name(std::string_view name);
 // Whether this build has the backend and the machine can run it.
 bool backend_available(BackendKind kind);
 
+// The linear solver of each step (document 03, strategies A and B). Both eliminate
+// the points by the Schur complement.
+enum class LinearSolverType {
+  // A: the reduced camera system applied implicitly, preconditioned conjugate
+  // gradients, preconditioner its camera blocks (Ceres's ITERATIVE_SCHUR with
+  // SCHUR_JACOBI). Every backend.
+  IterativeSchur,
+  // B: the reduced camera system formed and factorized by sparse Cholesky (Ceres's
+  // SPARSE_SCHUR): exact steps, so fewer and dearer iterations. Metal backend only
+  // for now: formed on the GPU, factorized in double by Accelerate.
+  SparseSchur,
+};
+
+std::string_view linear_solver_name(LinearSolverType type);  // "iterative_schur", "sparse_schur"
+std::optional<LinearSolverType> linear_solver_from_name(std::string_view name);
+
 struct SolverOptions {
   // Trust region (Levenberg-Marquardt). Defaults are Ceres's, so the two solvers
   // can be compared iteration by iteration.
@@ -89,8 +105,8 @@ struct SolverOptions {
   double min_relative_decrease = 1e-3;
   int max_consecutive_invalid_steps = 5;  // the solve fails on reaching this count
 
-  // Linear solver: implicit Schur complement, preconditioned conjugate gradients,
-  // preconditioner = camera blocks of the Schur complement.
+  LinearSolverType linear_solver = LinearSolverType::IterativeSchur;
+  // Conjugate gradients (IterativeSchur only).
   int max_linear_iterations = 500;
   int min_linear_iterations = 0;
   double eta = 0.1;  // forcing parameter of the conjugate gradients stopping test

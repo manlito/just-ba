@@ -1,18 +1,19 @@
 # Metal cases: the problems of the Ceres parity cases (tests/ceres/CMakeLists.txt),
 # each solved on both backends to tight tolerances and compared (metal_check.cpp).
-# Losses and gauge as in the parity case; checks at the metal_check defaults unless
-# stated.
+# Losses and gauge as in the parity case. Where the parity case does not compare
+# parameters (no gauge: the end point along the free directions depends on the
+# path; per-image intrinsics), neither does this one.
 
 jba_metal_case(simple_pinhole "--model SIMPLE_PINHOLE" "")
 jba_metal_case(pinhole "--model PINHOLE" "")
 jba_metal_case(simple_radial "--model SIMPLE_RADIAL" "")
 jba_metal_case(radial "--model RADIAL" "")
-jba_metal_case(no_gauge "--model RADIAL" "--gauge none")
+jba_metal_case(no_gauge "--model RADIAL" "--gauge none --max-centre-diff 0 --max-rotation-diff 0")
 jba_metal_case(fixed_blocks "--model PINHOLE --fix-images 2 --fix-points 20" "")
 jba_metal_case(sigma "--model SIMPLE_RADIAL --sigma 0.7" "")
 jba_metal_case(shared_focal "--model RADIAL --free-intrinsics 1" "")
 jba_metal_case(shared_all_intrinsics "--model PINHOLE --free-intrinsics 7" "")
-jba_metal_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --free-intrinsics 5" "")
+jba_metal_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --free-intrinsics 5" "--max-centre-diff 0 --max-rotation-diff 0")
 jba_metal_case(huber "--model SIMPLE_RADIAL --outliers 0.05" "--loss huber:2")
 jba_metal_case(cauchy "--model SIMPLE_RADIAL --outliers 0.05" "--loss cauchy:2")
 jba_metal_case(geman_mcclure "--model SIMPLE_RADIAL --outliers 0.05" "--loss geman_mcclure:2")

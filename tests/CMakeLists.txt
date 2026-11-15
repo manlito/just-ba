@@ -31,7 +31,7 @@ if(JBA_WITH_METAL)
   set_tests_properties(test_metal_reprojection PROPERTIES LABELS gpu)
 
   # The Metal backend against the CPU reference (milestone 4), on the parity cases'
-  # problems (tests/ceres) and the BAL test set when present. Label gpu.
+  # problems (tests/ceres), with each of its linear solvers. Label gpu.
   add_executable(jba_metal_check metal_check.cpp)
   target_link_libraries(jba_metal_check PRIVATE jba jba_internal jba_warnings)
   function(jba_metal_case name gen check)
@@ -40,8 +40,10 @@ if(JBA_WITH_METAL)
     separate_arguments(check_list UNIX_COMMAND "${check}")
     add_test(NAME metal_make_${name} COMMAND jba_make_problem ${file} ${gen_list})
     add_test(NAME metal_${name} COMMAND jba_metal_check ${file} ${check_list})
+    add_test(NAME metal_sparse_${name} COMMAND jba_metal_check ${file} ${check_list} --linear-solver sparse_schur)
     set_tests_properties(metal_make_${name} PROPERTIES FIXTURES_SETUP metal_${name})
-    set_tests_properties(metal_${name} PROPERTIES FIXTURES_REQUIRED metal_${name} LABELS gpu SKIP_RETURN_CODE 77)
+    set_tests_properties(metal_${name} metal_sparse_${name} PROPERTIES FIXTURES_REQUIRED metal_${name} LABELS gpu
+                         SKIP_RETURN_CODE 77)
   endfunction()
   include(metal_cases.cmake)
 endif()

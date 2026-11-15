@@ -2,6 +2,7 @@
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <Accelerate/Accelerate.h>
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,18 @@ struct Factor {
   std::int32_t off[3], base[3], size[3];
 };
 
+struct Tile {
+  std::uint32_t a, b, c0, c1, voff;
+};
+
+struct TileChunk {
+  std::uint32_t tile, e0, e1;
+};
+
+struct TileEntry {
+  std::uint32_t ka, kb, info;
+};
+
 struct Args {
   Ptr o_img, o_pt, o_xy, o_w, o_pose, o_intr, o_dw, o_dep;
   Ptr pt_begin, point_off, image_block, pose_off, intr_off, pose_mask, intr_mask, basis_of;
@@ -49,7 +62,8 @@ struct Args {
   Ptr poses, rc, points, intr, basis, f_scale, e_scale, hres;
   Ptr r, Jp, Jx, Jk, dr, dJp, dJx, dJc, fr, fJ, fm, diag_f, g_f, diag_e, g_e;
   Ptr d2_f, d2_e, Cinv, Pinv, t, td, partial, vals, b, x, res, z, p, q, dx_e;
-  std::uint32_t nobs, npts, nf, ne, nfb, nchunks, nfac, np;
+  Ptr tiles, tile_chunks, entries, tile_partial, tile_vals;
+  std::uint32_t nobs, npts, nf, ne, nfb, nchunks, nfac, np, ntiles, ntile_chunks;
   std::int32_t has_depth, has_intr, loss_type;
   float loss_scale, pivot_floor;
 };
@@ -85,6 +99,9 @@ constexpr float kPivotFloor = 1e-6f;
 constexpr std::size_t kChunkFloats = 64;
 constexpr std::size_t kChunkObservations = 32;
 constexpr NSUInteger kReduceThreads = 256;
+constexpr NSUInteger kGatherThreads = 256;  // solver.metal, block_gather
+constexpr NSUInteger kTileThreads = 64;     // solver.metal, schur_tiles
+constexpr std::size_t kTileChunk = 1024;   // entries per threadgroup of schur_tiles
 constexpr int kResidualResetPeriod = 10;  // Ceres's conjugate gradients default
 
 [[noreturn]] void fail(const std::string& what, NSError* error) {
@@ -108,9 +125,9 @@ const char* model_suffix(CameraModel model) {
 constexpr const char* kKernels[] = {
     "linearize_simple_pinhole", "linearize_pinhole", "linearize_simple_radial", "linearize_radial",
     "linearize_opencv", "linearize_opencv_fisheye", "scale_observations", "scale_factors", "chunk_partial",
-    "block_finish", "point_colnorm", "damping", "point_blocks", "schur_points", "factors_times", "rhs_points",
+    "block_finish", "block_gather", "point_colnorm", "damping", "point_blocks", "schur_points", "factors_times", "rhs_points",
     "back_substitute", "factor_model", "reduce", "pcg_vectors_init", "pcg_init", "pcg_precondition", "pcg_rho",
-    "pcg_direction", "pcg_alpha", "pcg_update", "pcg_reset", "pcg_test", "layout_sizes"};
+    "pcg_direction", "pcg_alpha", "pcg_update", "pcg_reset", "pcg_test", "schur_tiles", "tile_finish", "layout_sizes"};
 
 // The compiled kernels, once per process (D50: compiled at run time from embedded
 // source; pipelines are cached so a second solve pays nothing).
@@ -164,8 +181,8 @@ const Library& library() {
         [cb waitUntilCompleted];
         const auto* s = static_cast<const std::uint32_t*>(sizes.contents);
         const std::uint32_t want[] = {sizeof(Args), sizeof(State), sizeof(Op), sizeof(Factor), sizeof(Chunk),
-                                      sizeof(FBlockDesc)};
-        for (int i = 0; i < 6; ++i)
+                                      sizeof(FBlockDesc), sizeof(Tile), sizeof(TileEntry), sizeof(TileChunk)};
+        for (int i = 0; i < 9; ++i)
           if (s[i] != want[i])
             fail("structure " + std::to_string(i) + " is " + std::to_string(s[i]) + " bytes in the kernels, " +
                      std::to_string(want[i]) + " on the host",
@@ -193,7 +210,7 @@ struct MetalBackend::Impl {
   // Buffers the host writes or reads.
   id<MTLBuffer> poses, rc, points, intr, basis, f_scale, e_scale, hres;
   id<MTLBuffer> dr, dJp, dJx, dJc, fr, fJ;
-  id<MTLBuffer> diag_f, g_f, diag_e, g_e, x, dx_e;
+  id<MTLBuffer> diag_f, g_f, diag_e, g_e, x, dx_e, bvec;
   Args args{};
 
   double centre[3] = {0, 0, 0};
@@ -206,8 +223,25 @@ struct MetalBackend::Impl {
   std::vector<float> res_cur, res_cand;
   bool res_cur_valid = false;
 
+  // Strategy B: the reduced camera system's tiles on the GPU, its lower triangle in
+  // compressed columns for Accelerate (csc_src: each value's place among the tiles'),
+  // and the symbolic factorization, computed once.
+  bool direct = false;
+  std::size_t ntiles = 0, ntile_chunks = 0;
+  id<MTLBuffer> tile_vals;
+  std::vector<long> csc_begin;
+  std::vector<int> csc_rows;
+  std::vector<std::uint32_t> csc_src;
+  std::vector<double> csc_vals, rhs;
+  SparseOpaqueSymbolicFactorization symbolic{};
+  bool have_symbolic = false;
+
+  ~Impl() {
+    if (have_symbolic) SparseCleanup(symbolic);
+  }
+
   Impl(const Problem& p, const SolverOptions& o, const Gauge& gauge)
-      : sys(p, o, gauge), lib(library()) {
+      : sys(p, o, gauge), lib(library()), direct(o.linear_solver == LinearSolverType::SparseSchur) {
     @autoreleasepool {
       queue = [lib.device newCommandQueue];
       if (queue == nil) fail("no command queue", nil);
@@ -394,13 +428,22 @@ struct MetalBackend::Impl {
     buffer<float>(nd, args.td);
     buffer<float>(kChunkFloats * nchunks, args.partial);
     buffer<float>(2 * (npts + nfac), args.vals);
-    buffer<float>(sys.nf, args.b);
+    bvec = buffer<float>(sys.nf, args.b);
     x = buffer<float>(sys.nf, args.x);
     buffer<float>(sys.nf, args.res);
     buffer<float>(sys.nf, args.z);
     buffer<float>(sys.nf, args.p);
     buffer<float>(sys.nf, args.q);
     dx_e = buffer<float>(sys.ne, args.dx_e);
+
+    if (direct) setup_direct();
+    else {
+      buffer<Tile>(1, args.tiles);
+      buffer<TileChunk>(1, args.tile_chunks);
+      buffer<TileEntry>(1, args.entries);
+      buffer<float>(1, args.tile_partial);
+      tile_vals = buffer<float>(1, args.tile_vals);
+    }
 
     args.nobs = static_cast<std::uint32_t>(nobs);
     args.npts = static_cast<std::uint32_t>(npts);
@@ -410,6 +453,8 @@ struct MetalBackend::Impl {
     args.nchunks = static_cast<std::uint32_t>(nchunks);
     args.nfac = static_cast<std::uint32_t>(nfac);
     args.np = static_cast<std::uint32_t>(np);
+    args.ntiles = static_cast<std::uint32_t>(ntiles);
+    args.ntile_chunks = static_cast<std::uint32_t>(ntile_chunks);
     args.has_depth = sys.has_depth ? 1 : 0;
     args.has_intr = any_intr ? 1 : 0;
     args.loss_type = static_cast<std::int32_t>(sys.loss.type);
@@ -419,6 +464,152 @@ struct MetalBackend::Impl {
     args_buf = buffer<Args>(1, unused, &args);
     state_buf = buffer<State>(1, unused);
     linearize_pso = lib.pipelines.at(std::string("linearize_") + model_suffix(sys.model));
+  }
+
+  void setup_direct() {
+    const std::size_t nfb = sys.fblocks.size();
+    std::vector<int> block_at(sys.nf + 1, -1);  // f offset -> block
+    for (std::size_t b = 0; b < nfb; ++b) block_at[static_cast<std::size_t>(sys.fblocks[b].offset)] = static_cast<int>(b);
+    // Blocks an observation touches, with their roles.
+    auto touched = [&](std::size_t k, int* blocks) {
+      blocks[0] = sys.o_pose[k] >= 0 ? block_at[static_cast<std::size_t>(sys.o_pose[k])] : -1;
+      blocks[1] = sys.o_intr[k] >= 0 ? block_at[static_cast<std::size_t>(sys.o_intr[k])] : -1;
+      blocks[2] = sys.has_depth && sys.o_dw[k] != 0 && sys.o_dep[k] >= 0
+                      ? block_at[static_cast<std::size_t>(sys.o_dep[k])]
+                      : -1;
+    };
+    std::map<std::pair<int, int>, std::vector<TileEntry>> lists;
+    auto add = [&](int A, int B, TileEntry e) {
+      if (A > B) return;
+      lists[{A, B}].push_back(e);
+    };
+    for (std::size_t j = 0; j < npts; ++j) {
+      const bool eliminated = sys.point_off[j] >= 0;
+      for (std::size_t ka = sys.pt_begin[j]; ka < sys.pt_begin[j + 1]; ++ka) {
+        int ba[3];
+        touched(ka, ba);
+        for (std::size_t kb = sys.pt_begin[j]; kb < sys.pt_begin[j + 1]; ++kb) {
+          if (!eliminated && ka != kb) continue;
+          int bb[3];
+          touched(kb, bb);
+          for (std::uint32_t ra = 0; ra < 3; ++ra)
+            for (std::uint32_t rb = 0; rb < 3; ++rb) {
+              if (ba[ra] < 0 || bb[rb] < 0) continue;
+              add(ba[ra], bb[rb], {static_cast<std::uint32_t>(ka), static_cast<std::uint32_t>(kb), ra | (rb << 2)});
+            }
+        }
+      }
+    }
+    std::size_t f_global = 0;
+    for (const auto& fs : sys.fsets) {
+      for (std::size_t f = 0; f < fs.count; ++f, ++f_global) {
+        for (int sa = 0; sa < fs.nslots; ++sa)
+          for (int sb = 0; sb < fs.nslots; ++sb) {
+            const int oa = fs.off(f, sa), ob = fs.off(f, sb);
+            if (oa < 0 || ob < 0) continue;
+            add(block_at[static_cast<std::size_t>(oa)], block_at[static_cast<std::size_t>(ob)],
+                {static_cast<std::uint32_t>(f_global), 0,
+                 static_cast<std::uint32_t>(sa) | (static_cast<std::uint32_t>(sb) << 2) | 16u});
+          }
+      }
+    }
+    for (std::size_t b = 0; b < nfb; ++b) lists[{static_cast<int>(b), static_cast<int>(b)}];  // every diagonal
+
+    std::vector<Tile> tiles;
+    std::vector<TileChunk> tchunks;
+    std::vector<TileEntry> entries;
+    std::size_t nvals = 0;
+    // Tiles by column block, then row block: the order of the compressed columns.
+    std::vector<std::vector<std::pair<int, std::size_t>>> by_col(nfb);  // (row block, tile)
+    for (auto& [ab, list] : lists) {
+      Tile T{};
+      T.a = static_cast<std::uint32_t>(ab.first);
+      T.b = static_cast<std::uint32_t>(ab.second);
+      T.c0 = static_cast<std::uint32_t>(tchunks.size());
+      const std::size_t e0 = entries.size();
+      entries.insert(entries.end(), list.begin(), list.end());
+      for (std::size_t e = e0; e < entries.size(); e += kTileChunk)
+        tchunks.push_back({static_cast<std::uint32_t>(tiles.size()), static_cast<std::uint32_t>(e),
+                           static_cast<std::uint32_t>(std::min(entries.size(), e + kTileChunk))});
+      T.c1 = static_cast<std::uint32_t>(tchunks.size());
+      T.voff = static_cast<std::uint32_t>(nvals);
+      nvals += static_cast<std::size_t>(sys.fblocks[T.a].size * sys.fblocks[T.b].size);
+      by_col[T.a].push_back({ab.second, tiles.size()});
+      tiles.push_back(T);
+      list.clear();
+      list.shrink_to_fit();
+    }
+    ntiles = tiles.size();
+    ntile_chunks = tchunks.size();
+    buffer<Tile>(tiles.size(), args.tiles, tiles.data());
+    buffer<TileChunk>(tchunks.size(), args.tile_chunks, tchunks.data());
+    buffer<TileEntry>(entries.size(), args.entries, entries.data());
+    buffer<float>(kChunkFloats * tchunks.size(), args.tile_partial);
+    tile_vals = buffer<float>(nvals, args.tile_vals);
+
+    // Lower triangle, compressed columns: column c of block A holds rows r >= c of
+    // every tile (A, B), B >= A, in increasing B.
+    csc_begin.assign(sys.nf + 1, 0);
+    for (std::size_t A = 0; A < nfb; ++A) {
+      const auto& fa = sys.fblocks[A];
+      for (int col = 0; col < fa.size; ++col) {
+        const std::size_t c = static_cast<std::size_t>(fa.offset + col);
+        for (const auto& [B, ti] : by_col[A]) {
+          const Tile& T = tiles[ti];
+          const auto& fb = sys.fblocks[static_cast<std::size_t>(B)];
+          for (int y = 0; y < fb.size; ++y) {
+            const int r = fb.offset + y;
+            if (r < static_cast<int>(c)) continue;
+            csc_rows.push_back(r);
+            csc_src.push_back(T.voff + static_cast<std::uint32_t>(col * fb.size + y));
+          }
+        }
+        csc_begin[c + 1] = static_cast<long>(csc_rows.size());
+      }
+    }
+    csc_vals.assign(csc_rows.size(), 0.0);
+    rhs.assign(sys.nf, 0.0);
+    if (sys.nf == 0) return;
+    SparseSymbolicFactorOptions opts = _SparseDefaultSymbolicFactorOptions;
+    symbolic = SparseFactor(SparseFactorizationCholesky, structure(), opts);
+    if (symbolic.status != SparseStatusOK) fail("Accelerate symbolic factorization failed", nil);
+    have_symbolic = true;
+  }
+
+  SparseMatrixStructure structure() {
+    SparseMatrixStructure s{};
+    s.rowCount = static_cast<int>(sys.nf);
+    s.columnCount = static_cast<int>(sys.nf);
+    s.columnStarts = csc_begin.data();
+    s.rowIndices = csc_rows.data();
+    s.attributes.kind = SparseSymmetric;
+    s.attributes.triangle = SparseLowerTriangle;
+    s.blockSize = 1;
+    return s;
+  }
+
+  // Factorizes the tiles the GPU formed and solves S dx_f = b into x. False when
+  // the system is not positive definite (the step is then invalid).
+  bool direct_solve() {
+    const float* tv = host(tile_vals);
+    for (std::size_t i = 0; i < csc_vals.size(); ++i) csc_vals[i] = static_cast<double>(tv[csc_src[i]]);
+    SparseMatrix_Double S{};
+    S.structure = structure();
+    S.data = csc_vals.data();
+    SparseOpaqueFactorization_Double f = SparseFactor(symbolic, S);
+    const bool ok = f.status == SparseStatusOK;
+    if (ok) {
+      const float* bf = host(bvec);
+      for (std::size_t c = 0; c < sys.nf; ++c) rhs[c] = static_cast<double>(bf[c]);
+      DenseVector_Double v{};
+      v.count = static_cast<int>(sys.nf);
+      v.data = rhs.data();
+      SparseSolve(f, v);
+      float* xf = host(x);
+      for (std::size_t c = 0; c < sys.nf; ++c) xf[c] = static_cast<float>(rhs[c]);
+    }
+    SparseCleanup(f);
+    return ok;
   }
 
   State& state() { return *static_cast<State*>(state_buf.contents); }
@@ -461,6 +652,29 @@ struct MetalBackend::Impl {
       [enc setBytes:&op length:sizeof(Op) atIndex:2];
       [enc dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(kReduceThreads, 1, 1)];
     }
+    // One threadgroup per camera-side block.
+    void gather(int mode, Ptr vx = 0, Ptr vy = 0, int iter = 0) {
+      const std::size_t nfb = impl.sys.fblocks.size();
+      if (nfb == 0) return;
+      Op op;
+      op.x = vx;
+      op.y = vy;
+      op.mode = mode;
+      op.iter = iter;
+      [enc setComputePipelineState:impl.lib.pipelines.at("block_gather")];
+      [enc setBytes:&op length:sizeof(Op) atIndex:2];
+      [enc dispatchThreadgroups:MTLSizeMake(nfb, 1, 1) threadsPerThreadgroup:MTLSizeMake(kGatherThreads, 1, 1)];
+    }
+    // One threadgroup per tile of the reduced camera system.
+    void tiles() {
+      if (impl.ntiles == 0) return;
+      if (impl.ntile_chunks > 0) {
+        [enc setComputePipelineState:impl.lib.pipelines.at("schur_tiles")];
+        [enc dispatchThreadgroups:MTLSizeMake(impl.ntile_chunks, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(kTileThreads, 1, 1)];
+      }
+      run("tile_finish", kChunkFloats * impl.ntiles);
+    }
     void finish() {
       [enc endEncoding];
       [cb commit];
@@ -471,10 +685,7 @@ struct MetalBackend::Impl {
 
   // Squared column norms and the gradient, both sides.
   void encode_colnorm(Encoder& e) {
-    Op op;
-    op.mode = 0;
-    e.run("chunk_partial", nchunks, op);
-    e.run("block_finish", sys.fblocks.size(), op);
+    e.gather(0);
     e.run("point_colnorm", npts);
   }
 
@@ -487,8 +698,7 @@ struct MetalBackend::Impl {
     op.mode = 1;
     e.run("schur_points", npts, op);
     e.run("factors_times", nfac, op);
-    e.run("chunk_partial", nchunks, op);
-    e.run("block_finish", sys.fblocks.size(), op);
+    e.gather(1, vx, vy, iter);
   }
 
   void encode_pcg_iteration(Encoder& e, int i) {
@@ -649,31 +859,44 @@ struct MetalBackend::Impl {
         damp.radius = static_cast<float>(radius);
         e.run("damping", sys.nf + sys.ne, damp);
         e.run("point_blocks", npts);
-        Op pre;
-        pre.mode = 2;
-        e.run("chunk_partial", nchunks, pre);
-        e.run("block_finish", sys.fblocks.size(), pre);
         e.run("rhs_points", npts);
-        Op rhs;
-        rhs.mode = 1;
-        e.run("chunk_partial", nchunks, rhs);
-        rhs.mode = 3;
-        e.run("block_finish", sys.fblocks.size(), rhs);
-        e.run("pcg_vectors_init", sys.nf);
-        e.reduce(1, args.b, args.b, sys.nf, kSlotBB, 0);
-        e.run("pcg_init", 1);
+        e.gather(3);
+        if (direct) e.tiles();
         e.finish();
       }
-      // Conjugate gradients in batches of iterations; after the loop has stopped,
-      // the rest of a batch does nothing.
-      int i = 1, batch = 4;
-      while (!s.done && i <= max_it) {
-        Encoder e(*this);
-        for (int n = 0; n < batch && i <= max_it; ++n, ++i) encode_pcg_iteration(e, i);
-        e.finish();
-        batch = std::min(batch * 2, 64);
+      bool iterative = !direct;
+      if (direct) {
+        // Strategy B: factorize the reduced camera system on the host. Formed in
+        // single precision, it can lose definiteness where points have a degenerate
+        // depth direction; that step then falls back to conjugate gradients on the
+        // implicit system, which tolerates it.
+        out.linear_iterations = 1;
+        if (s.bad) return out;
+        if (!direct_solve()) iterative = true;
       }
-      out.linear_iterations = s.iterations;
+      if (iterative) {
+        {
+          Encoder e(*this);
+          Op pre;
+          pre.mode = 2;
+          e.run("chunk_partial", nchunks, pre);
+          e.run("block_finish", sys.fblocks.size(), pre);
+          e.run("pcg_vectors_init", sys.nf);
+          e.reduce(1, args.b, args.b, sys.nf, kSlotBB, 0);
+          e.run("pcg_init", 1);
+          e.finish();
+        }
+        // Conjugate gradients in batches of iterations; after the loop has stopped,
+        // the rest of a batch does nothing.
+        int i = 1, batch = 4;
+        while (!s.done && i <= max_it) {
+          Encoder e(*this);
+          for (int n = 0; n < batch && i <= max_it; ++n, ++i) encode_pcg_iteration(e, i);
+          e.finish();
+          batch = std::min(batch * 2, 64);
+        }
+        out.linear_iterations = s.iterations;
+      }
       if (s.failed) return out;
       {
         Encoder e(*this);

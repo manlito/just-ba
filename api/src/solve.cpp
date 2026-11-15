@@ -40,6 +40,20 @@ bool backend_available(BackendKind kind) {
   return false;
 }
 
+std::string_view linear_solver_name(LinearSolverType type) {
+  switch (type) {
+    case LinearSolverType::IterativeSchur: return "iterative_schur";
+    case LinearSolverType::SparseSchur: return "sparse_schur";
+  }
+  return "iterative_schur";
+}
+
+std::optional<LinearSolverType> linear_solver_from_name(std::string_view name) {
+  for (LinearSolverType t : {LinearSolverType::IterativeSchur, LinearSolverType::SparseSchur})
+    if (linear_solver_name(t) == name) return t;
+  return std::nullopt;
+}
+
 namespace {
 
 template <typename B>
@@ -63,6 +77,9 @@ SolverSummary solve(Problem& problem, const SolverOptions& options, const Iterat
   if (!backend_available(options.backend))
     throw std::invalid_argument("backend " + std::string(backend_name(options.backend)) +
                                 " is not available in this build or on this machine");
+
+  if (options.linear_solver == LinearSolverType::SparseSchur && options.backend != BackendKind::Metal)
+    throw std::invalid_argument("linear solver sparse_schur needs the metal backend");
 
   const Gauge gauge = options.gauge == GaugeMode::Auto ? choose_gauge(problem) : Gauge{};
 #ifdef JBA_HAVE_METAL

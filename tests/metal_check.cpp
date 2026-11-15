@@ -3,8 +3,10 @@
 //   jba_metal_check <problem> [--gauge auto|none] [--loss NAME[:SCALE]] [--<type>-loss NAME[:SCALE]]
 //                   [--max-iterations N] [--function-tolerance X] [--parameter-tolerance X]
 //                   [--max-cost-diff X] [--max-centre-diff X] [--max-rotation-diff X] [--no-repeat]
+//                   [--linear-solver iterative_schur|sparse_schur]
 //
-// Solves with both backends from the same start and options, then checks:
+// Solves with both backends from the same start and options (the CPU always with
+// iterative_schur, Metal with --linear-solver), then checks:
 // - final costs: relative difference at most --max-cost-diff (default 1e-6);
 // - median camera centre difference relative to the scene scale, and median rotation
 //   difference in radians, at most --max-centre-diff and --max-rotation-diff
@@ -65,6 +67,7 @@ int main(int argc, char** argv) {
     o.parameter_tolerance = 1e-12;
     double max_cost = 1e-6, max_centre = 1e-4, max_rotation = 1e-4;
     bool repeat = true;
+    jba::LinearSolverType metal_solver = jba::LinearSolverType::IterativeSchur;
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
       if (key == "--no-repeat") {
@@ -87,6 +90,11 @@ int main(int argc, char** argv) {
       else if (key == "--max-centre-diff") max_centre = std::stod(val);
       else if (key == "--max-rotation-diff") max_rotation = std::stod(val);
       else if (key == "--loss") o.loss = loss();
+      else if (key == "--linear-solver") {
+        const auto l = jba::linear_solver_from_name(val);
+        if (!l) throw std::invalid_argument("unknown linear solver " + val);
+        metal_solver = *l;
+      }
       else {
         bool found = false;
         for (std::size_t t = 1; t < jba::kNumLossTypes; ++t) {
@@ -105,6 +113,7 @@ int main(int argc, char** argv) {
     auto run = [&](jba::BackendKind kind, jba::Problem& p, double& seconds) {
       jba::SolverOptions opts = o;
       opts.backend = kind;
+      if (kind == jba::BackendKind::Metal) opts.linear_solver = metal_solver;
       const auto t0 = std::chrono::steady_clock::now();
       const jba::SolverSummary s = jba::solve(p, opts);
       seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();

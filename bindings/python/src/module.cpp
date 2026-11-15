@@ -210,6 +210,15 @@ NB_MODULE(_core, m) {
   m.attr("DEPTH_SCALE") = jba::kDepthScale;
   m.attr("DEPTH_OFFSET") = jba::kDepthOffset;
   nb::enum_<jba::GaugeMode>(m, "GaugeMode").value("AUTO", jba::GaugeMode::Auto).value("NONE", jba::GaugeMode::None);
+  nb::enum_<jba::BackendKind>(m, "Backend", "Where a solve runs: CPU (double, the reference) or Metal (Apple GPUs).")
+      .value("CPU", jba::BackendKind::Cpu)
+      .value("METAL", jba::BackendKind::Metal);
+  nb::enum_<jba::LinearSolverType>(m, "LinearSolver",
+                                   "Inner solve: ITERATIVE_SCHUR (every backend) or SPARSE_SCHUR (Metal).")
+      .value("ITERATIVE_SCHUR", jba::LinearSolverType::IterativeSchur)
+      .value("SPARSE_SCHUR", jba::LinearSolverType::SparseSchur);
+  m.def("backend_available", &jba::backend_available, "kind"_a,
+        "Whether this build has the backend and the machine can run it.");
   nb::enum_<jba::Termination>(m, "Termination")
       .value("CONVERGENCE", jba::Termination::Convergence)
       .value("NO_CONVERGENCE", jba::Termination::NoConvergence)
@@ -392,6 +401,8 @@ NB_MODULE(_core, m) {
       .def_rw("depth_loss", &jba::SolverOptions::depth_loss)
       .def_rw("prior_defaults", &jba::SolverOptions::prior_defaults)
       .def_rw("gauge", &jba::SolverOptions::gauge)
+      .def_rw("backend", &jba::SolverOptions::backend)
+      .def_rw("linear_solver", &jba::SolverOptions::linear_solver)
       .def_rw("num_threads", &jba::SolverOptions::num_threads, "0: all hardware threads. Results do not depend on it.");
 
   // --- Solve ---------------------------------------------------------------

@@ -47,6 +47,28 @@ struct Factor {
   int size[3];
 };
 
+// The explicit reduced camera system (strategy B), by tiles: one per pair of
+// camera-side blocks (a <= b) that share a point or a factor, plus every diagonal
+// block. A tile's entries are the pairs of observations (of one point) or the
+// factors that add to it, in a fixed order.
+struct Tile {
+  uint a, b;    // camera-side blocks
+  uint c0, c1;  // its chunks of entries
+  uint voff;    // values: size(a) x size(b), row-major
+};
+
+// A run of at most kTileChunk entries of one tile, for one threadgroup.
+struct TileChunk {
+  uint tile, e0, e1;
+};
+
+// kind 0: observations ka, kb of one point, in the roles (pose 0, intrinsics 1,
+// depth 2) that touch blocks a and b; kind 1: factor ka, slots role_a, role_b.
+struct TileEntry {
+  uint ka, kb;
+  uint info;  // bits 0-1 role_a, 2-3 role_b, 4 kind
+};
+
 struct Args {
   // Observations, point-major.
   device const int* o_img;
@@ -116,8 +138,13 @@ struct Args {
   device float* p;
   device float* q;
   device float* dx_e;
+  device const Tile* tiles;
+  device const TileChunk* tile_chunks;
+  device const TileEntry* entries;
+  device float* tile_partial;  // kChunkFloats per tile chunk
+  device float* tile_vals;
   // Sizes and options.
-  uint nobs, npts, nf, ne, nfb, nchunks, nfac, np;
+  uint nobs, npts, nf, ne, nfb, nchunks, nfac, np, ntiles, ntile_chunks;
   int has_depth, has_intr, loss_type;
   float loss_scale, pivot_floor;
 };
@@ -149,6 +176,9 @@ kernel void layout_sizes(device uint* out [[buffer(0)]], uint tid [[thread_posit
   out[3] = sizeof(Factor);
   out[4] = sizeof(Chunk);
   out[5] = sizeof(FBlockDesc);
+  out[6] = sizeof(Tile);
+  out[7] = sizeof(TileEntry);
+  out[8] = sizeof(TileChunk);
 }
 
 // ---------------------------------------------------------------------------
@@ -557,6 +587,208 @@ kernel void block_finish(constant Args& a [[buffer(0)]], device State& s [[buffe
     device float* P = a.Pinv + fb.pinv_offset;
     for (int i = 0; i < n * n; ++i) P[i] = acc[i];
   }
+}
+
+// Per camera-side block, one threadgroup of kGatherThreads: thread i takes the
+// block's observations i, i + T, ... in order, then a fixed tree adds the threads'
+// sums; thread 0 adds the factors. Deterministic, and it hides memory latency that
+// one thread per block cannot.
+// mode 0: diag_f and g_f (squared column norms, J^T r).
+// mode 1: y = J^T t + J_factor^T m + d2 x (the Schur product; skipped once done).
+// mode 3: b = J^T t - g_f (right-hand side; no factors).
+constant uint kGatherThreads = 256;
+
+kernel void block_gather(constant Args& a [[buffer(0)]], device State& s [[buffer(1)]],
+                         constant Op& op [[buffer(2)]], uint b [[threadgroup_position_in_grid]],
+                         uint i [[thread_position_in_threadgroup]]) {
+  threadgroup float buf[kGatherThreads * 16];
+  if (op.mode == 1 && s.done) return;
+  const FBlockDesc fb = a.fblocks[b];
+  const int n = fb.size;
+  const int width = op.mode == 0 ? 16 : 8;
+  float acc[16];
+  for (int c = 0; c < 16; ++c) acc[c] = 0;
+  const uint c0 = a.block_chunks[b], c1 = a.block_chunks[b + 1];
+  if (c0 < c1) {
+    const Chunk first = a.chunks[c0];
+    const uint q0 = first.q0, q1 = a.chunks[c1 - 1].q1;
+    device const uint* list = first.list == 0 ? a.img_list : a.ib_list;
+    const bool use_t = op.mode != 0;
+    device const float* v2 = use_t ? a.t : a.r;
+    device const float* v1 = use_t ? a.td : a.dr;
+    const int np = int(a.np);
+    for (uint q = q0 + i; q < q1; q += kGatherThreads) {
+      const uint k = list[q];
+      const float r0 = v2[2 * k], r1 = v2[2 * k + 1];
+      if (fb.kind == kPose) {
+        device const float* J = a.Jp + 12 * k;
+        for (int c = 0; c < 6; ++c) {
+          const float j0 = J[c], j1 = J[6 + c];
+          if (op.mode == 0) {
+            acc[c] += j0 * j0 + j1 * j1;
+            acc[8 + c] += j0 * r0 + j1 * r1;
+          } else {
+            acc[c] += j0 * r0 + j1 * r1;
+          }
+        }
+        if (a.has_depth && a.o_dw[k] != 0) {
+          const float rd = v1[k];
+          for (int c = 0; c < 6; ++c) {
+            const float jd = a.dJp[6 * k + c];
+            if (op.mode == 0) {
+              acc[c] += jd * jd;
+              acc[8 + c] += jd * rd;
+            } else {
+              acc[c] += jd * rd;
+            }
+          }
+        }
+      } else if (fb.kind == kIntrinsics) {
+        device const float* J = a.Jk + 2 * np * k;
+        for (int c = 0; c < np; ++c) {
+          const float j0 = J[c], j1 = J[np + c];
+          if (op.mode == 0) {
+            acc[c] += j0 * j0 + j1 * j1;
+            acc[8 + c] += j0 * r0 + j1 * r1;
+          } else {
+            acc[c] += j0 * r0 + j1 * r1;
+          }
+        }
+      } else if (fb.kind == kDepth && a.has_depth && a.o_dw[k] != 0) {
+        const float rd = v1[k];
+        for (int c = 0; c < 2; ++c) {
+          const float jd = a.dJc[2 * k + c];
+          if (op.mode == 0) {
+            acc[c] += jd * jd;
+            acc[8 + c] += jd * rd;
+          } else {
+            acc[c] += jd * rd;
+          }
+        }
+      }
+    }
+  }
+  for (int c = 0; c < width; ++c) buf[c * kGatherThreads + i] = acc[c];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint w = kGatherThreads / 2; w > 0; w /= 2) {
+    if (i < w)
+      for (int c = 0; c < width; ++c) buf[c * kGatherThreads + i] += buf[c * kGatherThreads + i + w];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  if (i != 0) return;
+  for (int c = 0; c < width; ++c) acc[c] = buf[c * kGatherThreads];
+  if (op.mode != 3) {
+    for (uint e = a.fb_fac_begin[b]; e < a.fb_fac_begin[b + 1]; ++e) {
+      const uint2 fs = a.fb_fac[e];
+      const Factor F = a.factors[fs.x];
+      const int base = F.base[fs.y];
+      device const float* J = a.fJ + F.joff;
+      for (int row = 0; row < F.rows; ++row) {
+        const float m = op.mode == 0 ? a.fr[F.roff + row] : a.fm[F.roff + row];
+        for (int c = 0; c < n; ++c) {
+          const float v = J[row * F.cols + base + c];
+          if (op.mode == 0) {
+            acc[c] += v * v;
+            acc[8 + c] += v * m;
+          } else {
+            acc[c] += v * m;
+          }
+        }
+      }
+    }
+  }
+  const int off = fb.offset;
+  if (op.mode == 0) {
+    for (int c = 0; c < n; ++c) {
+      a.diag_f[off + c] = acc[c];
+      a.g_f[off + c] = acc[8 + c];
+    }
+  } else if (op.mode == 1) {
+    for (int c = 0; c < n; ++c) op.y[off + c] = acc[c] + a.d2_f[off + c] * op.x[off + c];
+  } else {
+    for (int c = 0; c < n; ++c) a.b[off + c] = acc[c] - a.g_f[off + c];
+  }
+}
+
+// The reduced camera system: S_ab = sum of J_a^T J_b over observations and factors
+// - sum over points of E_aj C_j^-1 E_bj^T, plus D^2 on a diagonal tile. One
+// threadgroup per chunk of a tile's entries: threads take entries i, i + T, ... in
+// order and a fixed tree adds their sums (schur_tiles); then each tile adds its
+// chunks in order (tile_finish).
+constant uint kTileThreads = 64;
+
+kernel void schur_tiles(constant Args& a [[buffer(0)]], uint tc [[threadgroup_position_in_grid]],
+                        uint i [[thread_position_in_threadgroup]]) {
+  threadgroup float buf[kTileThreads * kChunkFloats];
+  const TileChunk TC = a.tile_chunks[tc];
+  const Tile T = a.tiles[TC.tile];
+  const FBlockDesc A = a.fblocks[T.a], B = a.fblocks[T.b];
+  const int na = A.size, nb = B.size, nv = na * nb;
+  float acc[kChunkFloats];
+  for (int c = 0; c < kChunkFloats; ++c) acc[c] = 0;
+  for (uint e = TC.e0 + i; e < TC.e1; e += kTileThreads) {
+    const TileEntry E = a.entries[e];
+    const int ra = int(E.info & 3), rb = int((E.info >> 2) & 3);
+    if ((E.info >> 4) & 1) {
+      const Factor F = a.factors[E.ka];
+      device const float* J = a.fJ + F.joff;
+      const int ba = F.base[ra], bb = F.base[rb];
+      for (int row = 0; row < F.rows; ++row)
+        for (int x = 0; x < na; ++x)
+          for (int y = 0; y < nb; ++y) acc[x * nb + y] += J[row * F.cols + ba + x] * J[row * F.cols + bb + y];
+      continue;
+    }
+    const int kinds[3] = {kPose, kIntrinsics, kDepth};
+    const Rows oa = rows_of(a, kinds[ra], E.ka, false);
+    const Rows ob = rows_of(a, kinds[rb], E.kb, false);
+    const int a0 = ra == 2 ? 2 : 0, b0 = rb == 2 ? 2 : 0;
+    if (E.ka == E.kb) {
+      for (int row = max(a0, b0); row < min(oa.n, ob.n); ++row)
+        for (int x = 0; x < na; ++x)
+          for (int y = 0; y < nb; ++y) acc[x * nb + y] += oa.J[row][x] * ob.J[row][y];
+    }
+    const int j = a.o_pt[E.ka];
+    if (a.point_off[j] < 0) continue;
+    // G = E_a C^-1 (na x 3), E_b (nb x 3); acc -= G E_b^T.
+    float Ea[kMaxParams * 3], Eb[kMaxParams * 3];
+    for (int c = 0; c < 3 * kMaxParams; ++c) Ea[c] = Eb[c] = 0;
+    for (int row = a0; row < oa.n; ++row)
+      for (int x = 0; x < na; ++x)
+        for (int c = 0; c < 3; ++c) Ea[3 * x + c] += oa.J[row][x] * oa.X[row][c];
+    for (int row = b0; row < ob.n; ++row)
+      for (int y = 0; y < nb; ++y)
+        for (int c = 0; c < 3; ++c) Eb[3 * y + c] += ob.J[row][y] * ob.X[row][c];
+    device const float* Ci = a.Cinv + 9 * j;
+    for (int x = 0; x < na; ++x) {
+      float G[3];
+      for (int c = 0; c < 3; ++c) G[c] = Ea[3 * x] * Ci[c] + Ea[3 * x + 1] * Ci[3 + c] + Ea[3 * x + 2] * Ci[6 + c];
+      for (int y = 0; y < nb; ++y) acc[x * nb + y] -= G[0] * Eb[3 * y] + G[1] * Eb[3 * y + 1] + G[2] * Eb[3 * y + 2];
+    }
+  }
+  for (int c = 0; c < nv; ++c) buf[c * kTileThreads + i] = acc[c];
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  for (uint w = kTileThreads / 2; w > 0; w /= 2) {
+    if (i < w)
+      for (int c = 0; c < nv; ++c) buf[c * kTileThreads + i] += buf[c * kTileThreads + i + w];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+  }
+  for (int c = int(i); c < nv; c += int(kTileThreads)) a.tile_partial[kChunkFloats * tc + c] = buf[c * kTileThreads];
+}
+
+// A tile's values: its chunks' sums in order, with D^2 on a diagonal tile. One
+// thread per value.
+kernel void tile_finish(constant Args& a [[buffer(0)]], constant Op& op [[buffer(2)]],
+                        uint id [[thread_position_in_grid]]) {
+  const uint t = id / kChunkFloats, c = id % kChunkFloats;
+  if (t >= a.ntiles) return;
+  const Tile T = a.tiles[t];
+  const FBlockDesc A = a.fblocks[T.a], B = a.fblocks[T.b];
+  const int nb = B.size;
+  if (int(c) >= A.size * nb) return;
+  float v = 0;
+  for (uint k = T.c0; k < T.c1; ++k) v += a.tile_partial[kChunkFloats * k + c];
+  if (T.a == T.b && int(c) / nb == int(c) % nb) v += a.d2_f[A.offset + int(c) / nb];
+  a.tile_vals[T.voff + c] = v;
 }
 
 // Point side of the column norms and the gradient.

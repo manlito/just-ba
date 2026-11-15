@@ -36,6 +36,8 @@ constexpr const char* kUsage =
     "                               the file's loss.* sections, else the library's defaults\n"
     "  --gauge <auto|none>          default auto\n"
     "  --backend <cpu|metal>        default cpu\n"
+    "  --linear-solver <iterative_schur|sparse_schur>  default iterative_schur; sparse_schur\n"
+    "                               needs the metal backend\n"
     "  --threads <n>                default 0 (all hardware threads)\n";
 
 // A string as a JSON string literal, quotes included.
@@ -140,6 +142,10 @@ int solve(int argc, char** argv) {
       const auto b = jba::backend_from_name(val);
       if (!b) throw std::invalid_argument("unknown backend " + val);
       o.backend = *b;
+    } else if (key == "--linear-solver") {
+      const auto l = jba::linear_solver_from_name(val);
+      if (!l) throw std::invalid_argument("unknown linear solver " + val);
+      o.linear_solver = *l;
     } else if (key == "--gauge") {
       if (val == "auto") o.gauge = jba::GaugeMode::Auto;
       else if (val == "none") o.gauge = jba::GaugeMode::None;
