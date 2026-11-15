@@ -283,7 +283,7 @@ runtime types. CI checks that the checked-in generated files are current.
 | Backend | Kernels | Precision | Direct solver (option B) | Runtime dependencies |
 |---|---|---|---|---|
 | CPU (reference) | Host language, threads, SIMD | double | Not built yet (D92). Planned: Accelerate on Apple; a small built-in dense Cholesky elsewhere | None beyond the system |
-| CUDA (as built, milestone 5) | The shared kernel source, compiled by nvcc for the build machine's GPU unless architectures are given | single, with host double for decisions; double kernels not built | cuDSS's sparse Cholesky in double on the GPU, optional (`JBA_WITH_CUDSS`, D98); then the default | CUDA runtime, linked statically; cuDSS only when built with it |
+| CUDA (as built, milestone 5) | The shared kernel source, compiled by nvcc for the build machine's GPU unless architectures are given | single, with host double for decisions; double kernels not built | cuDSS's sparse Cholesky in double on the GPU, optional (`JBA_WITH_CUDSS`, D98); then the default | CUDA runtime, linked statically; when built with cuDSS, cuDSS and the cuBLAS and NVRTC it loads |
 | Apple (as built, milestone 4) | Metal Shading Language: the shared kernel source behind the Metal prelude (D96), compiled at run time from embedded source | single, with host double for decisions | Accelerate's sparse Cholesky in double (the default there, D92) | System frameworks only (Metal, Foundation, Accelerate) |
 | WebGPU (stretch) | WGSL | single | none | Browser |
 

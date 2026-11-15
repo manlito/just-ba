@@ -15,7 +15,11 @@ owner's laptop, venice-52 excepted (document 07); the Windows check is outstandi
 [07-roadmap.md](07-roadmap.md). Milestones 0 and 1 were reviewed before milestone 2;
 the findings are in [12-review-milestones-0-1.md](12-review-milestones-0-1.md).
 Milestones 3 and 4 were reviewed after milestone 4: the results hold, and the three
-defects it found are fixed ([13-review-milestones-3-4.md](13-review-milestones-3-4.md)). Build instructions:
+defects it found are fixed ([13-review-milestones-3-4.md](13-review-milestones-3-4.md)).
+Milestone 5 was reviewed on both machines: the CUDA backend's answers, repeatability
+and baseline hold and Metal is bit-identical to before, but the speed figures leave
+out the backend's set-up, and the comparison with Caspar and bae has to be repeated
+with it ([14-review-milestone-5.md](14-review-milestone-5.md)). Build instructions:
 [../README.md](../README.md).
 
 ## Documents
@@ -36,6 +40,7 @@ defects it found are fixed ([13-review-milestones-3-4.md](13-review-milestones-3
 | 11 | [Problem file format](11-problem-file-format.md) | The on-disk format used by the CLI and tests |
 | 12 | [Review of milestones 0 and 1](12-review-milestones-0-1.md) | What was checked, what was found, what changes before milestone 2 |
 | 13 | [Review of milestones 3 and 4](13-review-milestones-3-4.md) | What was checked and re-measured, what was found, what changes before milestone 5 |
+| 14 | [Review of milestone 5](14-review-milestone-5.md) | The CUDA backend and the shared GPU layer: what was checked on the Mac and the laptop, what was found, what changes before milestone 6 |
 
 ## Decisions waiting on the owner
 
@@ -66,6 +71,10 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
 2. **From the review of milestones 3 and 4** (document 13): whether CI's full mode
    keeps its Metal step, and what agreement between backends `refine` must give on
    real captures.
+3. **From the review of milestone 5** (document 14): whether the speed claim is
+   about the call to `solve()` or about the iterations alone; whether `Auto` may
+   fail for lack of GPU memory where the iterative solver would run; and whether
+   the invalid steps on venice-52 are fixed before milestone 6.
 
 ## Reference material
 

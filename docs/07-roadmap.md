@@ -414,8 +414,8 @@ CUDA 13.4; the M5 Pro for Metal):
   both solvers agrees with the CPU within the Metal tests' limits and repeats bit for
   bit; all 300 tests pass on Linux, all 303 on the Mac.
 - Against Ceres 2.2.0 (SuiteSparse, 12 threads) on the same problems: 3.5 to 17.6
-  times faster at the same cost (BAL 3.5 to 9.6, the 500- and 2,000-image walks 13.2
-  and 17.6). Against Ceres master on the same GPU (cuDSS): 2.6 to 14.6 times.
+  times faster at the same cost (BAL 4.0 to 9.6, the 500- and 2,000-image walks 13.2
+  and 17.6). Against Ceres master on the same GPU (cuDSS): 2.6 to 14.9 times.
 - Against COLMAP's Caspar (reprojection-only problems: BAL reduced to SIMPLE_RADIAL,
   walks without priors): to Caspar's final cost, 6.8 to 41 times faster; end to end,
   1.7 to 18.5 times, with a lower final cost on every problem (Caspar's fixed 200
@@ -436,6 +436,16 @@ CUDA 13.4; the M5 Pro for Metal):
 
 Status: exit met on Linux, venice-52 excepted as above; the Windows confirmation is
 outstanding.
+
+Reviewed in document 14: the tests, the repeatability, Metal's bit-identical results
+and the baseline reproduce. The times above are `time_seconds`, which starts after
+the backend is set up, not at the call as document 05 requires; with the set-up
+counted the range against Ceres 2.2.0 is 1.7 to 7.4 times (the 10,000-image walk:
+6.7 s, 4.8 times), and the Caspar and bae figures, whose runs were not recorded,
+could not be recomputed. The exit against Caspar is open until they are. Also
+found: an out-of-bounds read in the shared layer's buffer set-up, sparse_schur's
+set-up cost and memory under `Auto`, and what happens on venice-52 (on CUDA 19 of
+sparse_schur's 50 steps are invalid; on Metal its exact steps reach 236,658).
 
 ## Milestone 6: release to PyPI
 

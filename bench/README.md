@@ -60,5 +60,6 @@ python3 bench/run.py --build build/dev --backend metal --ceres build/accel/tests
 
 where `build/accel` is a just-ba build configured with
 `-DJBA_WITH_CERES=ON -DCMAKE_PREFIX_PATH=$PWD/build/ceres-2.2.0-accelerate`. `--large` adds two
-problems in the main size range (walks of 500 and 2,000 images); they are not in the
-baselines.
+problems in the main size range (walks of 500 and 2,000 images); they are in the CUDA
+baseline only. Every time `run.py` reports is the solver's `time_seconds`, which
+leaves out the backend's set-up (document 14, finding 1).

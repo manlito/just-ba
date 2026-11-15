@@ -32,7 +32,9 @@ columns, `-DJBA_WITH_CERES=ON` (with `-DJBA_CERES_VERSION=2.3.0` against master)
   `--BundleAdjustment.backend CASPAR` with the same intrinsics freed as in the problem
   file. Caspar always runs 200 iterations (`BundleAdjustmentCaspar.solver_iter_max`).
   Its time is taken from glog's timestamps, from "Creating Caspar bundle adjuster" to
-  its termination line, which is set-up and solve, as just-ba's `time_seconds` is. Its
+  its termination line, which is set-up and solve. just-ba's `time_seconds` is not: it
+  starts after the backend is set up (document 14, finding 1), so the end-to-end
+  ratios in document 07 leave just-ba's set-up out. Its
   final cost is recomputed in double from the model it writes (`colmap_cost.py`).
   Caspar's results differ from run to run.
 - **bae:** `bae_bal.py`, the BAL example with its own settings: 20 LM steps, PCG
