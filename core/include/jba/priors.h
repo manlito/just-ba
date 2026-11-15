@@ -28,6 +28,13 @@ struct PriorDefaults {
   // sqrt(2) * endpoint sigma / length in pixels), the sine of the angle.
   double line_endpoint_sigma = 1.0;                   // pixels
   double line_min_sigma = 0.002;
+  // Depth at keypoints (provisional, D87): sigma = base + per_metre * reading, metres;
+  // for the inverse form divided by the reading squared. Prior on a free depth
+  // correction toward (1, 0); +inf leaves that part without one.
+  double depth_sigma = 0.02;
+  double depth_sigma_per_metre = 0.02;
+  double depth_scale_sigma = 0.1;
+  double depth_offset_sigma = 0.1;                    // metres
 };
 
 // Whitening matrices W (6 x 6, row-major, residual W r) for every relative and
@@ -35,6 +42,11 @@ struct PriorDefaults {
 // rows: that part is left out), else from `defaults`.
 void prior_whitening(const Problem& problem, const PriorDefaults& defaults, std::vector<double>& relative,
                      std::vector<double>& global);
+
+// Standard deviation of observation k's depth residual, in the residual's units:
+// metres for the linear form, 1 / metres for the inverse (sigma / reading^2). From
+// obs_depth_sigma when given, else base + per_metre * reading (D87).
+double depth_residual_sigma(const Problem& problem, std::size_t k, const PriorDefaults& defaults);
 
 // Builds relative priors from per-image poses and a list of image pairs, for callers
 // whose poses are already clean (document 02): each pair (i, j) gets the prior

@@ -347,7 +347,41 @@ struct Line {
   }
 };
 
+struct Depth {
+  jba::DepthKind kind;
+  jba::DepthForm form;
+  double d, w;
+
+  template <typename T>
+  bool operator()(const T* pose, const T* point, const T* c, T* out) const {
+    T p[3];
+    ceres::UnitQuaternionRotatePoint(pose, point, p);
+    for (int a = 0; a < 3; ++a) p[a] += pose[4 + a];
+    const T z = kind == jba::DepthKind::Range ? ceres::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) : p[2];
+    out[0] = (form == jba::DepthForm::Inverse ? c[0] / (z - c[1]) - T(1 / d) : (z - c[1]) / c[0] - T(d)) * w;
+    return true;
+  }
+};
+
+struct DepthPriorCost {
+  double ws, wo;
+  template <typename T>
+  bool operator()(const T* c, T* out) const {
+    out[0] = (c[0] - T(1)) * ws;
+    out[1] = c[1] * wo;
+    return true;
+  }
+};
+
 }  // namespace
+
+ceres::CostFunction* make_depth_cost(jba::DepthKind kind, jba::DepthForm form, double reading, double inv_sigma) {
+  return new ceres::AutoDiffCostFunction<Depth, 1, 7, 3, 2>(new Depth{kind, form, reading, inv_sigma});
+}
+
+ceres::CostFunction* make_depth_prior_cost(double w_scale, double w_offset) {
+  return new ceres::AutoDiffCostFunction<DepthPriorCost, 2, 2>(new DepthPriorCost{w_scale, w_offset});
+}
 
 ceres::CostFunction* make_line_cost(const double* normal, int axis, double inv_sigma) {
   auto* f = new Line;
@@ -428,6 +462,38 @@ Result solve(jba::Problem& p, const Options& o) {
     problem.AddResidualBlock(make_reprojection_cost(p.model, p.obs_xy[2 * k], p.obs_xy[2 * k + 1], 1.0 / sigma),
                              loss.get(), &p.poses[7 * i], &p.points[3 * static_cast<std::size_t>(p.obs_point[k])],
                              &p.intrinsics[static_cast<std::size_t>(np) * c]);
+  }
+
+  // Depth at keypoints, and the priors on free depth corrections.
+  std::unique_ptr<ceres::LossFunction> depth_loss(make_loss(o.losses[jba::kLossDepth]));
+  if (p.num_depth_observations() > 0 && p.depth_correction.empty()) {
+    for (std::size_t i = 0; i < p.num_images(); ++i) p.depth_correction.insert(p.depth_correction.end(), {1.0, 0.0});
+  }
+  std::vector<char> has_reading(p.num_images(), 0);
+  for (std::size_t k = 0; k < p.obs_depth.size(); ++k) {
+    if (std::isnan(p.obs_depth[k])) continue;
+    const std::size_t i = static_cast<std::size_t>(p.obs_image[k]);
+    has_reading[i] = 1;
+    problem.AddResidualBlock(
+        make_depth_cost(p.depth_kind, p.depth_form, p.obs_depth[k], 1 / jba::depth_residual_sigma(p, k, o.prior_defaults)),
+        depth_loss.get(), &p.poses[7 * i], &p.points[3 * static_cast<std::size_t>(p.obs_point[k])],
+        &p.depth_correction[2 * i]);
+  }
+  for (std::size_t i = 0; i < p.num_images(); ++i) {
+    if (!has_reading[i]) continue;
+    double* c = &p.depth_correction[2 * i];
+    const std::uint8_t mask = p.depth_correction_free.empty() ? 0 : p.depth_correction_free[i];
+    if (mask == 0) {
+      problem.SetParameterBlockConstant(c);
+      continue;
+    }
+    if (mask != 3) {
+      owned.push_back(std::make_unique<ceres::SubsetManifold>(2, std::vector<int>{mask & jba::kDepthScale ? 1 : 0}));
+      problem.SetManifold(c, owned.back().get());
+    }
+    const double ws = mask & jba::kDepthScale ? 1 / o.prior_defaults.depth_scale_sigma : 0.0;
+    const double wo = mask & jba::kDepthOffset ? 1 / o.prior_defaults.depth_offset_sigma : 0.0;
+    if (ws != 0 || wo != 0) problem.AddResidualBlock(make_depth_prior_cost(ws, wo), nullptr, c);
   }
 
   // Pose priors.
@@ -530,6 +596,8 @@ Result solve(jba::Problem& p, const Options& o) {
     ordering->AddElementToGroup(rigid + 7, 1);
   }
   if (p.has_manhattan()) ordering->AddElementToGroup(p.manhattan_frame.data(), 1);
+  for (std::size_t i = 0; i < p.num_images(); ++i)
+    if (has_reading[i]) ordering->AddElementToGroup(&p.depth_correction[2 * i], 1);
   for (std::size_t j = 0; j < p.num_points(); ++j) {
     double* X = &p.points[3 * j];
     if (!problem.HasParameterBlock(X)) continue;

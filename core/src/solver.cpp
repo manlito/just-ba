@@ -124,6 +124,7 @@ Gauge choose_gauge(const Problem& p) {
   // What each group has.
   struct Group {
     bool frame_defined = false, relative = false, rigid = false, vertical = false, gravity = false;
+    bool metric_depth = false;  // a depth reading whose scale is not estimated sets the scale
     int line_axes = 0;  // bit per building axis with an assigned segment
     int similarity_set = -1;
     int ref = -1;
@@ -140,6 +141,12 @@ Gauge choose_gauge(const Problem& p) {
         if (gr.similarity_set < 0 || static_cast<int>(s) < gr.similarity_set) gr.similarity_set = static_cast<int>(s);
         break;
     }
+  }
+  for (std::size_t k = 0; k < p.obs_depth.size(); ++k) {
+    if (std::isnan(p.obs_depth[k])) continue;
+    const auto i = static_cast<std::size_t>(p.obs_image[k]);
+    if (!p.depth_correction_free.empty() && (p.depth_correction_free[i] & kDepthScale)) continue;
+    groups[uf.find(i)].metric_depth = true;
   }
   for (auto i : p.grav_image) {
     Group& gr = groups[uf.find(static_cast<std::size_t>(i))];
@@ -207,7 +214,7 @@ Gauge choose_gauge(const Problem& p) {
     if (rotation_from_frame(gr) && static_cast<int>(root) != rotation_group) g.translation_images.push_back(gr.ref);
     else if (gr.vertical) g.heading_images.push_back(gr.ref);
     else g.fixed_images.push_back(gr.ref);
-    if (gr.relative || gr.rigid) continue;
+    if (gr.relative || gr.rigid || gr.metric_depth) continue;
     if (gr.similarity_set >= 0) {
       g.fixed_set_scales.push_back(gr.similarity_set);
       continue;
@@ -246,6 +253,7 @@ Loss* loss_of(SolverOptions& o, std::size_t t) {
     case kLossGlobalPrior: return &o.global_prior_loss;
     case kLossGravity: return &o.gravity_loss;
     case kLossLine: return &o.line_loss;
+    case kLossDepth: return &o.depth_loss;
     default: return nullptr;
   }
 }
@@ -259,6 +267,7 @@ std::string_view residual_type_name(std::size_t t) {
     case kLossGlobalPrior: return "global_prior";
     case kLossGravity: return "gravity";
     case kLossLine: return "line";
+    case kLossDepth: return "depth";
     default: return "";
   }
 }

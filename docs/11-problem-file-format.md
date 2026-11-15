@@ -97,7 +97,7 @@ Types appended later take the next indices.
 | `loss.scale` | f64 | [T] | with `loss.type` | Scale a of each loss, in whitened units (pixels for reprojection, standard deviations for priors) |
 
 Absent, or for types past T, the solver options decide. Index 3 is the gravity prior,
-4 the Manhattan line (milestone 3). The CLI and the parity tool
+4 the Manhattan line, 5 the depth term (milestone 3). The CLI and the parity tool
 start from these and let their flags override them; `refine` writes the losses it
 solved with; the library's `solve` takes its losses from its options, and
 `with_problem_losses` copies these in.
@@ -137,13 +137,16 @@ segments.
 The Manhattan term is in the problem when `manhattan.frame` is present and some
 segment has an axis.
 
-## Planned sections
+Depth at keypoints (milestone 3; all optional, D87).
 
-Reserved names, added in the milestones that need them. Each will be optional.
-
-| Prefix | Milestone | Content |
-|---|---|---|
-| `depth.*` | 3 | Depth at keypoints, confidence, per-image scale and offset |
+| Name | dtype | Shape | Required | Meaning |
+|---|---|---|---|---|
+| `depth.obs` | f64 | [K] | no | Depth reading of each observation, NaN for none |
+| `depth.obs_sigma` | f64 | [K] | no | Its standard deviation, in the reading's units. Absent: the solver's default |
+| `depth.kind` | i32 | [1] | with `depth.obs` | 0 along the optical axis, 1 along the ray |
+| `depth.form` | i32 | [1] | with `depth.obs` | 0 linear, 1 inverse |
+| `depth.correction` | f64 | [N, 2] | no | Per image (a, b); a d + b is the corrected reading. Absent: (1, 0). The estimate after a solve |
+| `depth.correction_free` | u8 | [N] | no | Bits estimated: 1 the scale, 2 the offset. Absent: none (a metric sensor) |
 
 ## BAL conversion
 

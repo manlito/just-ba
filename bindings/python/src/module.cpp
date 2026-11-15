@@ -193,6 +193,14 @@ NB_MODULE(_core, m) {
       .value("IDENTITY", jba::FrameRelation::Identity)
       .value("RIGID", jba::FrameRelation::Rigid)
       .value("SIMILARITY", jba::FrameRelation::Similarity);
+  nb::enum_<jba::DepthKind>(m, "DepthKind", "What a depth reading measures.")
+      .value("Z", jba::DepthKind::Z)
+      .value("RANGE", jba::DepthKind::Range);
+  nb::enum_<jba::DepthForm>(m, "DepthForm", "Form of the depth residual (D87).")
+      .value("LINEAR", jba::DepthForm::Linear)
+      .value("INVERSE", jba::DepthForm::Inverse);
+  m.attr("DEPTH_SCALE") = jba::kDepthScale;
+  m.attr("DEPTH_OFFSET") = jba::kDepthOffset;
   nb::enum_<jba::GaugeMode>(m, "GaugeMode").value("AUTO", jba::GaugeMode::Auto).value("NONE", jba::GaugeMode::None);
   nb::enum_<jba::Termination>(m, "Termination")
       .value("CONVERGENCE", jba::Termination::Convergence)
@@ -234,6 +242,7 @@ NB_MODULE(_core, m) {
       .def_prop_ro("num_global_priors", &jba::Problem::num_global_priors)
       .def_prop_ro("num_gravity_priors", &jba::Problem::num_gravity_priors)
       .def_prop_ro("num_lines", &jba::Problem::num_lines)
+      .def_prop_ro("num_depth_observations", &jba::Problem::num_depth_observations)
       .def("has_manhattan", &jba::Problem::has_manhattan, "Whether solve() includes the Manhattan term.")
       .def_prop_ro("num_prior_sets", &jba::Problem::num_prior_sets)
       .def("validate", [](const jba::Problem& p) { return jba::validate(p); },
@@ -273,6 +282,14 @@ NB_MODULE(_core, m) {
               "(Q, 3) direction of gravity measured in each image's camera axes (x right, y down, z forward); "
               "normalised on the way in.", false, Normalise::Vector);
   array_field(problem, "grav_sigma", &jba::Problem::grav_sigma, {}, "(Q,) gravity prior standard deviations, rad.");
+  array_field(problem, "obs_depth", &jba::Problem::obs_depth, {},
+              "(K,) depth reading of each observation, NaN for none; empty: no depth.");
+  array_field(problem, "obs_depth_sigma", &jba::Problem::obs_depth_sigma, {}, "(K,) depth reading sigmas.");
+  problem.def_rw("depth_kind", &jba::Problem::depth_kind).def_rw("depth_form", &jba::Problem::depth_form);
+  array_field(problem, "depth_correction", &jba::Problem::depth_correction, {2},
+              "(N, 2) per image (a, b): a d + b is the corrected reading; empty: (1, 0).");
+  array_field(problem, "depth_correction_free", &jba::Problem::depth_correction_free, {},
+              "(N,) bits of the correction that are estimated: DEPTH_SCALE, DEPTH_OFFSET.");
   array_field(problem, "line_image", &jba::Problem::line_image, {}, "(L,) image of each line segment.");
   array_field(problem, "line_xy", &jba::Problem::line_xy, {4}, "(L, 4) segment endpoints x0 y0 x1 y1, pixels.");
   array_field(problem, "line_sigma", &jba::Problem::line_sigma, {}, "(L,) endpoint standard deviations, pixels.");
@@ -339,7 +356,11 @@ NB_MODULE(_core, m) {
       .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma)
       .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma)
       .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma)
-      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma);
+      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma)
+      .def_rw("depth_sigma", &jba::PriorDefaults::depth_sigma)
+      .def_rw("depth_sigma_per_metre", &jba::PriorDefaults::depth_sigma_per_metre)
+      .def_rw("depth_scale_sigma", &jba::PriorDefaults::depth_scale_sigma)
+      .def_rw("depth_offset_sigma", &jba::PriorDefaults::depth_offset_sigma);
 
   nb::class_<jba::SolverOptions>(m, "SolverOptions", "Levenberg-Marquardt options; defaults are Ceres's.")
       .def(nb::init<>())
@@ -360,6 +381,7 @@ NB_MODULE(_core, m) {
       .def_rw("global_prior_loss", &jba::SolverOptions::global_prior_loss)
       .def_rw("gravity_loss", &jba::SolverOptions::gravity_loss)
       .def_rw("line_loss", &jba::SolverOptions::line_loss)
+      .def_rw("depth_loss", &jba::SolverOptions::depth_loss)
       .def_rw("prior_defaults", &jba::SolverOptions::prior_defaults)
       .def_rw("gauge", &jba::SolverOptions::gauge)
       .def_rw("num_threads", &jba::SolverOptions::num_threads, "0: all hardware threads. Results do not depend on it.");
@@ -435,6 +457,12 @@ NB_MODULE(_core, m) {
       .def_ro("global_prior_cost", &jba::ResidualReport::global_prior_cost)
       .def_ro("gravity_cost", &jba::ResidualReport::gravity_cost)
       .def_ro("line_cost", &jba::ResidualReport::line_cost)
+      .def_ro("depth_cost", &jba::ResidualReport::depth_cost)
+      .def_prop_ro("depth_refined", [](const jba::ResidualReport& r) { return to_numpy(r.depth_refined); },
+                   "Per observation: refined depth of its point, NaN without a reading.", nb::rv_policy::move)
+      .def_prop_ro("depth_corrected", [](const jba::ResidualReport& r) { return to_numpy(r.depth_corrected); },
+                   "Per observation: the corrected reading a d + b.", nb::rv_policy::move)
+      .def_prop_ro("depth_weight", [](const jba::ResidualReport& r) { return to_numpy(r.depth_weight); }, nb::rv_policy::move)
       .def_prop_ro("line_angle", [](const jba::ResidualReport& r) { return to_numpy(r.line_angle); },
                    "Per segment: angle by which its axis misses its plane, rad; NaN when not in the term.",
                    nb::rv_policy::move)
@@ -624,7 +652,20 @@ NB_MODULE(_core, m) {
       "refine",
       [keypoints_of](const jba::Problem& scene, nb::handle keypoints, nb::handle matches,
                      std::optional<const jba::Tracks*> tracks, nb::handle keypoint_sigma,
-                     const jba::RefineOptions& o) {
+                     const jba::RefineOptions& o, nb::handle keypoint_depth, nb::handle keypoint_depth_sigma) {
+        // Per keypoint, flat in image order, or one array per image.
+        auto per_keypoint = [](nb::handle h, const char* name) {
+          std::vector<double> out;
+          if (nb::isinstance<nb::list>(h) || nb::isinstance<nb::tuple>(h)) {
+            for (nb::handle item : h) {
+              const auto v = from_numpy(as_array<double>(item, name), {}, name);
+              out.insert(out.end(), v.begin(), v.end());
+            }
+          } else {
+            out = from_numpy(as_array<double>(h, name), {}, name);
+          }
+          return out;
+        };
         jba::RefineInput in;
         in.scene = scene;
         in.keypoints = keypoints_of(keypoints);
@@ -635,11 +676,15 @@ NB_MODULE(_core, m) {
         if (in.matches.empty() && in.tracks.size() == 0) throw nb::value_error("refine: give matches or tracks");
         if (!keypoint_sigma.is_none())
           in.keypoint_sigma = from_numpy(as_array<double>(keypoint_sigma, "keypoint_sigma"), {}, "keypoint_sigma");
+        if (!keypoint_depth.is_none()) in.keypoint_depth = per_keypoint(keypoint_depth, "keypoint_depth");
+        if (!keypoint_depth_sigma.is_none())
+          in.keypoint_depth_sigma = per_keypoint(keypoint_depth_sigma, "keypoint_depth_sigma");
         nb::gil_scoped_release release;
         return jba::refine(in, o);
       },
       "scene"_a, "keypoints"_a, "matches"_a = nb::none(), "tracks"_a = nb::none(), "keypoint_sigma"_a = nb::none(),
-      "options"_a = jba::RefineOptions{},
+      "options"_a = jba::RefineOptions{}, "keypoint_depth"_a = nb::none(), "keypoint_depth_sigma"_a = nb::none(),
       "The main use case end to end: starting poses from the priors in `scene`, tracks from the matches, "
-      "triangulation, solve, outlier removal, repeated (D71).");
+      "triangulation, solve, outlier removal, repeated (D71). keypoint_depth: a reading per keypoint (NaN for "
+      "none), flat or one array per image; scene.depth_* say what they are.");
 }

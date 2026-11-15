@@ -34,6 +34,14 @@ void spit(const std::string& path, const std::vector<char>& bytes) {
   out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
+// Equal, NaN equal to NaN.
+bool same_nan(const std::vector<double>& a, const std::vector<double>& b) {
+  if (a.size() != b.size()) return false;
+  for (std::size_t i = 0; i < a.size(); ++i)
+    if (!(a[i] == b[i] || (std::isnan(a[i]) && std::isnan(b[i])))) return false;
+  return true;
+}
+
 bool same(const jba::Problem& a, const jba::Problem& b) {
   bool extra_same = a.extra.size() == b.extra.size();
   for (std::size_t i = 0; extra_same && i < a.extra.size(); ++i) {
@@ -51,7 +59,10 @@ bool same(const jba::Problem& a, const jba::Problem& b) {
          a.loss_scale == b.loss_scale && a.gravity_world == b.gravity_world && a.grav_image == b.grav_image &&
          a.grav_dir == b.grav_dir && a.grav_sigma == b.grav_sigma && a.line_image == b.line_image &&
          a.line_xy == b.line_xy && a.line_sigma == b.line_sigma && a.line_axis == b.line_axis &&
-         a.manhattan_frame == b.manhattan_frame && a.manhattan_dof == b.manhattan_dof && extra_same;
+         a.manhattan_frame == b.manhattan_frame && a.manhattan_dof == b.manhattan_dof &&
+         same_nan(a.obs_depth, b.obs_depth) && same_nan(a.obs_depth_sigma, b.obs_depth_sigma) &&
+         a.depth_kind == b.depth_kind && a.depth_form == b.depth_form && a.depth_correction == b.depth_correction &&
+         a.depth_correction_free == b.depth_correction_free && extra_same;
 }
 
 }  // namespace
@@ -80,6 +91,16 @@ int main() {
     p.line_axis = {0, 2, -1};
     p.manhattan_frame = {0.6, 0.8, 0, 0};  // any rotation, with three freedoms
     p.manhattan_dof = 3;
+    p.obs_depth.assign(p.num_observations(), std::nan(""));
+    p.obs_depth[0] = 2.5;
+    p.obs_depth[3] = 4.0;
+    p.obs_depth_sigma.assign(p.num_observations(), std::nan(""));
+    p.obs_depth_sigma[0] = 0.05;
+    p.obs_depth_sigma[3] = 0.1;
+    p.depth_kind = jba::DepthKind::Range;
+    p.depth_form = jba::DepthForm::Inverse;
+    p.depth_correction = {1, 0, 1.1, 0.02, 0.9, -0.1, 1, 0};
+    p.depth_correction_free = {0, 3, 1, 2};
     const auto path = temp_path("priors.jba");
     jba::write_problem(path, p);
     const auto q = jba::read_problem(path);
@@ -121,6 +142,18 @@ int main() {
     bad = p;
     bad.line_xy[4] = bad.line_xy[6];
     bad.line_xy[5] = bad.line_xy[7];  // zero length
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.obs_depth[3] = -1;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.obs_depth_sigma[3] = 0;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.depth_correction[2] = 0;  // non-positive scale
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.depth_correction_free[1] = 4;
     EXPECT(!jba::validate(bad).empty());
     bad = p;
     bad.manhattan_dof = 2;

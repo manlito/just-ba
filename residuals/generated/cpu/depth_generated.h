@@ -12,50 +12,54 @@ inline void depth_z(const Scalar* q, const Scalar* t, const Scalar* point, const
   // Operation counts:
   // add: 21
   // branch: 3
-  // multiply: 30
-  // negate: 6
-  // total: 60
+  // divide: 2
+  // multiply: 36
+  // negate: 8
+  // total: 70
 
-  const Scalar v0015 = q[3];
-  const Scalar v0014 = q[1];
-  const Scalar v0010 = q[0];
-  const Scalar v0011 = q[2];
-  const Scalar v0066 = v0014 * v0015;
-  const Scalar v0132 = -v0010;
-  const Scalar v0024 = point[2];
-  const Scalar v0074 = v0011 * v0011;
-  const Scalar v0070 = v0011 * v0015;
-  const Scalar v0073 = v0014 * v0014;
-  const Scalar v0019 = point[1];
-  const Scalar v0008 = point[0];
-  const Scalar v0134 = -static_cast<Scalar>(2);
+  const Scalar v0014 = q[3];
+  const Scalar v0013 = q[1];
+  const Scalar v0009 = q[0];
+  const Scalar v0010 = q[2];
+  const Scalar v0031 = correction[0];
+  const Scalar v0077 = v0013 * v0014;
+  const Scalar v0141 = -v0009;
+  const Scalar v0023 = point[2];
+  const Scalar v0085 = v0010 * v0010;
+  const Scalar v0081 = v0010 * v0014;
+  const Scalar v0084 = v0013 * v0013;
+  const Scalar v0018 = point[1];
+  const Scalar v0007 = point[0];
+  const Scalar v0143 = -static_cast<Scalar>(2);
+  const Scalar v0032 = static_cast<Scalar>(1) / v0031;
   if (J_pose != nullptr) {
-    const Scalar v0082 = v0010 * v0015;
-    const Scalar v0087 = v0015 * v0015;
-    J_pose[0] = v0019 * (static_cast<Scalar>(1) + (v0073 + v0087) * v0134) + static_cast<Scalar>(2) * (v0008 * (v0082 + v0011 * v0014) + v0024 * (v0070 + v0014 * v0132));
-    J_pose[1] = v0008 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * (v0074 + v0087)) + static_cast<Scalar>(2) * (v0019 * (v0082 + v0014 * -v0011) + -(v0024 * (v0066 + v0010 * v0011)));
+    const Scalar v0089 = v0009 * v0014;
+    const Scalar v0094 = v0014 * v0014;
+    J_pose[0] = v0032 * (v0018 * (static_cast<Scalar>(1) + (v0084 + v0094) * v0143) + static_cast<Scalar>(2) * (v0007 * (v0089 + v0010 * v0013) + v0023 * (v0081 + v0013 * v0141)));
+    J_pose[1] = v0032 * (v0007 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * (v0085 + v0094)) + static_cast<Scalar>(2) * (v0018 * (v0089 + v0013 * -v0010) + -(v0023 * (v0077 + v0009 * v0010))));
     J_pose[2] = static_cast<Scalar>(0);
     J_pose[3] = static_cast<Scalar>(0);
     J_pose[4] = static_cast<Scalar>(0);
-    J_pose[5] = static_cast<Scalar>(1);
+    J_pose[5] = v0032;
   }
-  const Scalar v0071 = v0070 + v0010 * v0014;
-  const Scalar v0067 = v0011 * v0132 + v0066;
-  const Scalar v0077 = static_cast<Scalar>(1) + (v0073 + v0074) * v0134;
+  const Scalar v0088 = static_cast<Scalar>(1) + (v0084 + v0085) * v0143;
+  const Scalar v0082 = v0081 + v0009 * v0013;
+  const Scalar v0078 = v0010 * v0141 + v0077;
   if (J_point != nullptr) {
-    J_point[0] = static_cast<Scalar>(2) * v0067;
-    J_point[1] = static_cast<Scalar>(2) * v0071;
-    J_point[2] = v0077;
+    const Scalar v0137 = static_cast<Scalar>(2) * v0032;
+    J_point[0] = v0078 * v0137;
+    J_point[1] = v0082 * v0137;
+    J_point[2] = v0032 * v0088;
   }
-  const Scalar v0003 = depth_reading;
+  const Scalar v0005 = correction[1];
+  const Scalar v0004 = t[2];
+  const Scalar v0119 = v0004 + v0023 * v0088 + static_cast<Scalar>(2) * (v0007 * v0078 + v0018 * v0082) + -v0005;
   if (J_correction != nullptr) {
-    J_correction[0] = -v0003;
-    J_correction[1] = static_cast<Scalar>(-1);
+    J_correction[0] = -((static_cast<Scalar>(1) / (v0031 * v0031)) * v0119);
+    J_correction[1] = -v0032;
   }
-  const Scalar v0002 = correction[0];
-  const Scalar v0006 = correction[1];
-  const Scalar v0000 = t[2];
-  residual[0] = v0000 + v0024 * v0077 + static_cast<Scalar>(2) * (v0008 * v0067 + v0019 * v0071) + -(v0006 + v0002 * v0003);
+  const Scalar v0001 = depth_reading;
+  residual[0] = v0032 * v0119 + -v0001;
 }
 
 template <typename Scalar>
@@ -65,77 +69,79 @@ inline void depth_range(const Scalar* q, const Scalar* t, const Scalar* point, c
   // add: 46
   // branch: 3
   // call: 1
-  // divide: 1
-  // multiply: 75
-  // negate: 9
-  // total: 135
+  // divide: 3
+  // multiply: 78
+  // negate: 11
+  // total: 142
 
-  const Scalar v0011 = q[2];
-  const Scalar v0020 = q[0];
-  const Scalar v0014 = q[3];
-  const Scalar v0022 = q[1];
-  const Scalar v0356 = -v0011;
-  const Scalar v0358 = -v0014;
-  const Scalar v0348 = v0020 * v0022;
-  const Scalar v0339 = v0011 * v0014;
-  const Scalar v0346 = v0014 * v0022;
-  const Scalar v0164 = v0022 * v0022;
-  const Scalar v0146 = v0011 * v0011;
-  const Scalar v0345 = v0014 * v0020;
-  const Scalar v0341 = v0011 * v0022;
-  const Scalar v0147 = v0014 * v0014;
-  const Scalar v0340 = v0011 * v0020;
-  const Scalar v0178 = v0339 + v0348;
-  const Scalar v0019 = point[1];
-  const Scalar v0174 = v0020 * v0356 + v0346;
-  const Scalar v0008 = point[0];
-  const Scalar v0357 = -static_cast<Scalar>(2);
-  const Scalar v0182 = v0146 + v0164;
-  const Scalar v0161 = v0341 + v0345;
-  const Scalar v0170 = v0022 * -v0020 + v0339;
-  const Scalar v0026 = point[2];
-  const Scalar v0165 = v0147 + v0164;
-  const Scalar v0157 = v0340 + v0346;
-  const Scalar v0153 = v0020 * v0358 + v0341;
-  const Scalar v0148 = v0146 + v0147;
-  const Scalar v0347 = v0019 * v0178;
-  const Scalar v0338 = v0008 * v0161;
-  const Scalar v0349 = v0026 * v0157;
-  const Scalar v0184 = static_cast<Scalar>(1) + v0182 * v0357;
-  const Scalar v0167 = static_cast<Scalar>(1) + v0165 * v0357;
-  const Scalar v0150 = static_cast<Scalar>(1) + v0148 * v0357;
-  const Scalar v0353 = v0026 * v0184 + static_cast<Scalar>(2) * (v0008 * v0174 + v0347);
-  const Scalar v0046 = t[2];
-  const Scalar v0352 = v0019 * v0167 + static_cast<Scalar>(2) * (v0026 * v0170 + v0338);
-  const Scalar v0033 = t[1];
-  const Scalar v0351 = v0008 * v0150 + static_cast<Scalar>(2) * (v0019 * v0153 + v0349);
-  const Scalar v0007 = t[0];
-  const Scalar v0267 = v0046 + v0353;
-  const Scalar v0257 = v0033 + v0352;
-  const Scalar v0247 = v0007 + v0351;
-  const Scalar v0058 = std::sqrt(v0247 * v0247 + v0257 * v0257 + v0267 * v0267);
-  const Scalar v0350 = (static_cast<Scalar>(1) / v0058) * (static_cast<Scalar>(2) * static_cast<Scalar>(0.5));
+  const Scalar v0010 = q[2];
+  const Scalar v0019 = q[0];
+  const Scalar v0013 = q[3];
+  const Scalar v0021 = q[1];
+  const Scalar v0362 = -v0010;
+  const Scalar v0364 = -v0013;
+  const Scalar v0353 = v0019 * v0021;
+  const Scalar v0344 = v0010 * v0013;
+  const Scalar v0351 = v0013 * v0021;
+  const Scalar v0170 = v0021 * v0021;
+  const Scalar v0152 = v0010 * v0010;
+  const Scalar v0350 = v0013 * v0019;
+  const Scalar v0346 = v0010 * v0021;
+  const Scalar v0153 = v0013 * v0013;
+  const Scalar v0345 = v0010 * v0019;
+  const Scalar v0184 = v0344 + v0353;
+  const Scalar v0018 = point[1];
+  const Scalar v0180 = v0019 * v0362 + v0351;
+  const Scalar v0007 = point[0];
+  const Scalar v0363 = -static_cast<Scalar>(2);
+  const Scalar v0188 = v0152 + v0170;
+  const Scalar v0167 = v0346 + v0350;
+  const Scalar v0176 = v0021 * -v0019 + v0344;
+  const Scalar v0025 = point[2];
+  const Scalar v0171 = v0153 + v0170;
+  const Scalar v0163 = v0345 + v0351;
+  const Scalar v0159 = v0019 * v0364 + v0346;
+  const Scalar v0154 = v0152 + v0153;
+  const Scalar v0352 = v0018 * v0184;
+  const Scalar v0343 = v0007 * v0167;
+  const Scalar v0354 = v0025 * v0163;
+  const Scalar v0190 = static_cast<Scalar>(1) + v0188 * v0363;
+  const Scalar v0173 = static_cast<Scalar>(1) + v0171 * v0363;
+  const Scalar v0156 = static_cast<Scalar>(1) + v0154 * v0363;
+  const Scalar v0358 = v0025 * v0190 + static_cast<Scalar>(2) * (v0007 * v0180 + v0352);
+  const Scalar v0045 = t[2];
+  const Scalar v0357 = v0018 * v0173 + static_cast<Scalar>(2) * (v0025 * v0176 + v0343);
+  const Scalar v0032 = t[1];
+  const Scalar v0356 = v0007 * v0156 + static_cast<Scalar>(2) * (v0018 * v0159 + v0354);
+  const Scalar v0006 = t[0];
+  const Scalar v0269 = v0045 + v0358;
+  const Scalar v0259 = v0032 + v0357;
+  const Scalar v0249 = v0006 + v0356;
+  const Scalar v0057 = std::sqrt(v0249 * v0249 + v0259 * v0259 + v0269 * v0269);
+  const Scalar v0059 = correction[0];
+  const Scalar v0060 = static_cast<Scalar>(1) / v0059;
+  const Scalar v0355 = (static_cast<Scalar>(2) * v0060) * (static_cast<Scalar>(0.5) * (static_cast<Scalar>(1) / v0057));
   if (J_pose != nullptr) {
-    J_pose[0] = (v0267 * v0352 + v0257 * (v0026 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0182) + static_cast<Scalar>(2) * (v0008 * (v0022 * v0358 + v0340) + -v0347))) * v0350;
-    J_pose[1] = (v0247 * v0353 + v0267 * (v0008 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0148) + static_cast<Scalar>(2) * (v0019 * (v0022 * v0356 + v0345) + -v0349))) * v0350;
-    J_pose[2] = (v0247 * (v0019 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0165) + static_cast<Scalar>(2) * (v0026 * (v0014 * v0356 + v0348) + -v0338)) + v0257 * v0351) * v0350;
-    J_pose[3] = v0247 * v0350;
-    J_pose[4] = v0257 * v0350;
-    J_pose[5] = v0267 * v0350;
+    J_pose[0] = (v0269 * v0357 + v0259 * (v0025 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0188) + static_cast<Scalar>(2) * (v0007 * (v0021 * v0364 + v0345) + -v0352))) * v0355;
+    J_pose[1] = (v0249 * v0358 + v0269 * (v0007 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0154) + static_cast<Scalar>(2) * (v0018 * (v0021 * v0362 + v0350) + -v0354))) * v0355;
+    J_pose[2] = (v0249 * (v0018 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0171) + static_cast<Scalar>(2) * (v0025 * (v0013 * v0362 + v0353) + -v0343)) + v0259 * v0356) * v0355;
+    J_pose[3] = v0249 * v0355;
+    J_pose[4] = v0259 * v0355;
+    J_pose[5] = v0269 * v0355;
   }
   if (J_point != nullptr) {
-    J_point[0] = (v0150 * v0247 + static_cast<Scalar>(2) * (v0174 * v0267 + v0161 * v0257)) * v0350;
-    J_point[1] = (v0167 * v0257 + static_cast<Scalar>(2) * (v0153 * v0247 + v0178 * v0267)) * v0350;
-    J_point[2] = (v0184 * v0267 + static_cast<Scalar>(2) * (v0170 * v0257 + v0157 * v0247)) * v0350;
+    J_point[0] = (v0156 * v0249 + static_cast<Scalar>(2) * (v0180 * v0269 + v0167 * v0259)) * v0355;
+    J_point[1] = (v0173 * v0259 + static_cast<Scalar>(2) * (v0159 * v0249 + v0184 * v0269)) * v0355;
+    J_point[2] = (v0190 * v0269 + static_cast<Scalar>(2) * (v0176 * v0259 + v0163 * v0249)) * v0355;
   }
-  const Scalar v0002 = depth_reading;
+  const Scalar v0004 = correction[1];
+  const Scalar v0058 = v0057 + -v0004;
   if (J_correction != nullptr) {
-    J_correction[0] = -v0002;
-    J_correction[1] = static_cast<Scalar>(-1);
+    J_correction[0] = -(v0058 * (static_cast<Scalar>(1) / (v0059 * v0059)));
+    J_correction[1] = -v0060;
   }
-  const Scalar v0001 = correction[0];
-  const Scalar v0005 = correction[1];
-  residual[0] = v0058 + -(v0005 + v0001 * v0002);
+  const Scalar v0001 = depth_reading;
+  residual[0] = v0058 * v0060 + -v0001;
 }
 
 template <typename Scalar>
@@ -144,56 +150,56 @@ inline void depth_z_inverse(const Scalar* q, const Scalar* t, const Scalar* poin
   // Operation counts:
   // add: 21
   // branch: 3
-  // divide: 4
-  // multiply: 37
-  // negate: 6
-  // total: 71
+  // divide: 3
+  // multiply: 36
+  // negate: 7
+  // total: 70
 
-  const Scalar v0014 = q[0];
-  const Scalar v0018 = q[1];
-  const Scalar v0019 = q[3];
-  const Scalar v0015 = q[2];
-  const Scalar v0145 = -v0014;
-  const Scalar v0084 = v0015 * v0019;
-  const Scalar v0080 = v0018 * v0019;
-  const Scalar v0088 = v0015 * v0015;
-  const Scalar v0087 = v0018 * v0018;
-  const Scalar v0085 = v0084 + v0014 * v0018;
-  const Scalar v0023 = point[1];
-  const Scalar v0081 = v0015 * v0145 + v0080;
-  const Scalar v0012 = point[0];
-  const Scalar v0144 = -static_cast<Scalar>(2);
-  const Scalar v0091 = static_cast<Scalar>(1) + (v0087 + v0088) * v0144;
-  const Scalar v0028 = point[2];
-  const Scalar v0011 = t[2];
-  const Scalar v0122 = v0011 + v0028 * v0091 + static_cast<Scalar>(2) * (v0012 * v0081 + v0023 * v0085);
-  const Scalar v0149 = -(static_cast<Scalar>(1) / (v0122 * v0122));
+  const Scalar v0013 = q[0];
+  const Scalar v0017 = q[1];
+  const Scalar v0018 = q[3];
+  const Scalar v0014 = q[2];
+  const Scalar v0148 = -v0013;
+  const Scalar v0082 = v0014 * v0018;
+  const Scalar v0078 = v0017 * v0018;
+  const Scalar v0086 = v0014 * v0014;
+  const Scalar v0085 = v0017 * v0017;
+  const Scalar v0083 = v0082 + v0013 * v0017;
+  const Scalar v0022 = point[1];
+  const Scalar v0079 = v0014 * v0148 + v0078;
+  const Scalar v0011 = point[0];
+  const Scalar v0147 = -static_cast<Scalar>(2);
+  const Scalar v0009 = correction[1];
+  const Scalar v0089 = static_cast<Scalar>(1) + (v0085 + v0086) * v0147;
+  const Scalar v0027 = point[2];
+  const Scalar v0008 = t[2];
+  const Scalar v0120 = v0008 + v0027 * v0089 + static_cast<Scalar>(2) * (v0011 * v0079 + v0022 * v0083) + -v0009;
+  const Scalar v0007 = correction[0];
+  const Scalar v0131 = v0007 * (static_cast<Scalar>(1) / (v0120 * v0120));
+  const Scalar v0152 = -v0131;
   if (J_pose != nullptr) {
-    const Scalar v0092 = v0014 * v0019;
-    const Scalar v0097 = v0019 * v0019;
-    J_pose[0] = (v0023 * (static_cast<Scalar>(1) + (v0087 + v0097) * v0144) + static_cast<Scalar>(2) * (v0012 * (v0092 + v0015 * v0018) + v0028 * (v0084 + v0018 * v0145))) * v0149;
-    J_pose[1] = (v0012 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * (v0088 + v0097)) + static_cast<Scalar>(2) * (v0023 * (v0092 + v0018 * -v0015) + -(v0028 * (v0080 + v0014 * v0015)))) * v0149;
+    const Scalar v0090 = v0013 * v0018;
+    const Scalar v0095 = v0018 * v0018;
+    J_pose[0] = (v0022 * (static_cast<Scalar>(1) + (v0085 + v0095) * v0147) + static_cast<Scalar>(2) * (v0011 * (v0090 + v0014 * v0017) + v0027 * (v0082 + v0017 * v0148))) * v0152;
+    J_pose[1] = (v0011 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * (v0086 + v0095)) + static_cast<Scalar>(2) * (v0022 * (v0090 + v0017 * -v0014) + -(v0027 * (v0078 + v0013 * v0014)))) * v0152;
     J_pose[2] = static_cast<Scalar>(0);
     J_pose[3] = static_cast<Scalar>(0);
     J_pose[4] = static_cast<Scalar>(0);
-    J_pose[5] = v0149;
+    J_pose[5] = v0152;
   }
   if (J_point != nullptr) {
-    const Scalar v0142 = static_cast<Scalar>(2) * v0149;
-    J_point[0] = v0081 * v0142;
-    J_point[1] = v0085 * v0142;
-    J_point[2] = v0091 * v0149;
+    const Scalar v0144 = v0131 * v0147;
+    J_point[0] = v0079 * v0144;
+    J_point[1] = v0083 * v0144;
+    J_point[2] = v0089 * v0152;
   }
-  const Scalar v0003 = depth_reading;
-  const Scalar v0002 = correction[0];
-  const Scalar v0001 = correction[1];
-  const Scalar v0005 = v0001 + v0002 * v0003;
+  const Scalar v0033 = static_cast<Scalar>(1) / v0120;
   if (J_correction != nullptr) {
-    const Scalar v0075 = static_cast<Scalar>(1) / (v0005 * v0005);
-    J_correction[0] = v0003 * v0075;
-    J_correction[1] = v0075;
+    J_correction[0] = v0033;
+    J_correction[1] = v0131;
   }
-  residual[0] = static_cast<Scalar>(1) / v0122 + -(static_cast<Scalar>(1) / v0005);
+  const Scalar v0001 = depth_reading;
+  residual[0] = v0007 * v0033 + -(static_cast<Scalar>(1) / v0001);
 }
 
 template <typename Scalar>
@@ -204,78 +210,79 @@ inline void depth_range_inverse(const Scalar* q, const Scalar* t, const Scalar* 
   // branch: 3
   // call: 1
   // divide: 4
-  // multiply: 79
-  // negate: 8
+  // multiply: 78
+  // negate: 9
   // total: 141
 
-  const Scalar v0014 = q[2];
-  const Scalar v0022 = q[0];
-  const Scalar v0017 = q[3];
-  const Scalar v0024 = q[1];
-  const Scalar v0359 = -v0014;
-  const Scalar v0361 = -v0017;
-  const Scalar v0352 = v0022 * v0024;
-  const Scalar v0343 = v0014 * v0017;
-  const Scalar v0350 = v0017 * v0024;
-  const Scalar v0172 = v0024 * v0024;
-  const Scalar v0154 = v0014 * v0014;
-  const Scalar v0349 = v0017 * v0022;
-  const Scalar v0345 = v0014 * v0024;
-  const Scalar v0155 = v0017 * v0017;
-  const Scalar v0344 = v0014 * v0022;
-  const Scalar v0186 = v0343 + v0352;
-  const Scalar v0021 = point[1];
-  const Scalar v0182 = v0022 * v0359 + v0350;
-  const Scalar v0012 = point[0];
-  const Scalar v0360 = -static_cast<Scalar>(2);
-  const Scalar v0190 = v0154 + v0172;
-  const Scalar v0169 = v0345 + v0349;
-  const Scalar v0178 = v0024 * -v0022 + v0343;
-  const Scalar v0028 = point[2];
-  const Scalar v0173 = v0155 + v0172;
-  const Scalar v0165 = v0344 + v0350;
-  const Scalar v0161 = v0022 * v0361 + v0345;
-  const Scalar v0156 = v0154 + v0155;
-  const Scalar v0351 = v0021 * v0186;
-  const Scalar v0342 = v0012 * v0169;
-  const Scalar v0353 = v0028 * v0165;
-  const Scalar v0192 = static_cast<Scalar>(1) + v0190 * v0360;
-  const Scalar v0175 = static_cast<Scalar>(1) + v0173 * v0360;
-  const Scalar v0158 = static_cast<Scalar>(1) + v0156 * v0360;
-  const Scalar v0357 = v0028 * v0192 + static_cast<Scalar>(2) * (v0012 * v0182 + v0351);
-  const Scalar v0048 = t[2];
-  const Scalar v0356 = v0021 * v0175 + static_cast<Scalar>(2) * (v0028 * v0178 + v0342);
-  const Scalar v0035 = t[1];
-  const Scalar v0355 = v0012 * v0158 + static_cast<Scalar>(2) * (v0021 * v0161 + v0353);
-  const Scalar v0011 = t[0];
-  const Scalar v0271 = v0048 + v0357;
-  const Scalar v0261 = v0035 + v0356;
-  const Scalar v0251 = v0011 + v0355;
-  const Scalar v0060 = std::sqrt(v0251 * v0251 + v0261 * v0261 + v0271 * v0271);
-  const Scalar v0354 = (static_cast<Scalar>(1) / (v0060 * v0060 * v0060)) * (static_cast<Scalar>(2) * static_cast<Scalar>(-0.5));
+  const Scalar v0013 = q[2];
+  const Scalar v0021 = q[0];
+  const Scalar v0016 = q[3];
+  const Scalar v0023 = q[1];
+  const Scalar v0368 = -v0013;
+  const Scalar v0370 = -v0016;
+  const Scalar v0357 = v0021 * v0023;
+  const Scalar v0348 = v0013 * v0016;
+  const Scalar v0355 = v0016 * v0023;
+  const Scalar v0170 = v0023 * v0023;
+  const Scalar v0152 = v0013 * v0013;
+  const Scalar v0354 = v0016 * v0021;
+  const Scalar v0350 = v0013 * v0023;
+  const Scalar v0153 = v0016 * v0016;
+  const Scalar v0349 = v0013 * v0021;
+  const Scalar v0184 = v0348 + v0357;
+  const Scalar v0020 = point[1];
+  const Scalar v0180 = v0021 * v0368 + v0355;
+  const Scalar v0011 = point[0];
+  const Scalar v0369 = -static_cast<Scalar>(2);
+  const Scalar v0188 = v0152 + v0170;
+  const Scalar v0167 = v0350 + v0354;
+  const Scalar v0176 = v0023 * -v0021 + v0348;
+  const Scalar v0027 = point[2];
+  const Scalar v0171 = v0153 + v0170;
+  const Scalar v0163 = v0349 + v0355;
+  const Scalar v0159 = v0021 * v0370 + v0350;
+  const Scalar v0154 = v0152 + v0153;
+  const Scalar v0356 = v0020 * v0184;
+  const Scalar v0347 = v0011 * v0167;
+  const Scalar v0358 = v0027 * v0163;
+  const Scalar v0190 = static_cast<Scalar>(1) + v0188 * v0369;
+  const Scalar v0173 = static_cast<Scalar>(1) + v0171 * v0369;
+  const Scalar v0156 = static_cast<Scalar>(1) + v0154 * v0369;
+  const Scalar v0365 = v0027 * v0190 + static_cast<Scalar>(2) * (v0011 * v0180 + v0356);
+  const Scalar v0047 = t[2];
+  const Scalar v0364 = v0020 * v0173 + static_cast<Scalar>(2) * (v0027 * v0176 + v0347);
+  const Scalar v0034 = t[1];
+  const Scalar v0363 = v0011 * v0156 + static_cast<Scalar>(2) * (v0020 * v0159 + v0358);
+  const Scalar v0010 = t[0];
+  const Scalar v0269 = v0047 + v0365;
+  const Scalar v0259 = v0034 + v0364;
+  const Scalar v0249 = v0010 + v0363;
+  const Scalar v0008 = correction[1];
+  const Scalar v0059 = std::sqrt(v0249 * v0249 + v0259 * v0259 + v0269 * v0269);
+  const Scalar v0060 = v0059 + -v0008;
+  const Scalar v0007 = correction[0];
+  const Scalar v0332 = v0007 * (static_cast<Scalar>(1) / (v0060 * v0060));
+  const Scalar v0362 = (static_cast<Scalar>(2) * static_cast<Scalar>(-0.5)) * ((static_cast<Scalar>(1) / v0059) * v0332);
   if (J_pose != nullptr) {
-    J_pose[0] = (v0271 * v0356 + v0261 * (v0028 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0190) + static_cast<Scalar>(2) * (v0012 * (v0024 * v0361 + v0344) + -v0351))) * v0354;
-    J_pose[1] = (v0251 * v0357 + v0271 * (v0012 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0156) + static_cast<Scalar>(2) * (v0021 * (v0024 * v0359 + v0349) + -v0353))) * v0354;
-    J_pose[2] = (v0251 * (v0021 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0173) + static_cast<Scalar>(2) * (v0028 * (v0017 * v0359 + v0352) + -v0342)) + v0261 * v0355) * v0354;
-    J_pose[3] = v0251 * v0354;
-    J_pose[4] = v0261 * v0354;
-    J_pose[5] = v0271 * v0354;
+    J_pose[0] = (v0269 * v0364 + v0259 * (v0027 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0188) + static_cast<Scalar>(2) * (v0011 * (v0023 * v0370 + v0349) + -v0356))) * v0362;
+    J_pose[1] = (v0249 * v0365 + v0269 * (v0011 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0154) + static_cast<Scalar>(2) * (v0020 * (v0023 * v0368 + v0354) + -v0358))) * v0362;
+    J_pose[2] = (v0249 * (v0020 * (static_cast<Scalar>(-1) + static_cast<Scalar>(2) * v0171) + static_cast<Scalar>(2) * (v0027 * (v0016 * v0368 + v0357) + -v0347)) + v0259 * v0363) * v0362;
+    J_pose[3] = v0249 * v0362;
+    J_pose[4] = v0259 * v0362;
+    J_pose[5] = v0269 * v0362;
   }
   if (J_point != nullptr) {
-    J_point[0] = (v0158 * v0251 + static_cast<Scalar>(2) * (v0182 * v0271 + v0169 * v0261)) * v0354;
-    J_point[1] = (v0175 * v0261 + static_cast<Scalar>(2) * (v0161 * v0251 + v0186 * v0271)) * v0354;
-    J_point[2] = (v0192 * v0271 + static_cast<Scalar>(2) * (v0178 * v0261 + v0165 * v0251)) * v0354;
+    J_point[0] = (v0156 * v0249 + static_cast<Scalar>(2) * (v0180 * v0269 + v0167 * v0259)) * v0362;
+    J_point[1] = (v0173 * v0259 + static_cast<Scalar>(2) * (v0159 * v0249 + v0184 * v0269)) * v0362;
+    J_point[2] = (v0190 * v0269 + static_cast<Scalar>(2) * (v0176 * v0259 + v0163 * v0249)) * v0362;
   }
-  const Scalar v0003 = depth_reading;
-  const Scalar v0002 = correction[0];
-  const Scalar v0001 = correction[1];
-  const Scalar v0005 = v0001 + v0002 * v0003;
+  const Scalar v0061 = static_cast<Scalar>(1) / v0060;
   if (J_correction != nullptr) {
-    const Scalar v0150 = static_cast<Scalar>(1) / (v0005 * v0005);
-    J_correction[0] = v0003 * v0150;
-    J_correction[1] = v0150;
+    J_correction[0] = v0061;
+    J_correction[1] = v0332;
   }
-  residual[0] = static_cast<Scalar>(1) / v0060 + -(static_cast<Scalar>(1) / v0005);
+  const Scalar v0001 = depth_reading;
+  residual[0] = v0007 * v0061 + -(static_cast<Scalar>(1) / v0001);
 }
 
 }  // namespace jba::generated

@@ -68,6 +68,15 @@ struct SceneOptions {
   bool relative_priors = true;
   bool shuffle_frames = false;  // frames in random order (D12)
 
+  // Depth at keypoints (document 05): this fraction of keypoints within max_depth get
+  // a reading, with noise base + per_metre * depth, a per-image scale and offset error
+  // (a network's), and gross outliers (object edges).
+  double depth_fraction = 0;
+  double depth_noise = 0.005, depth_noise_per_m = 0.01;
+  double depth_scale_error = 0, depth_offset_error = 0;  // standard deviations per image
+  double max_depth = 5;
+  double depth_outliers = 0;
+
   LineMode lines = LineMode::None;
   int line_count = 400;        // 3-D segments; each image sees some of them
   double line_noise = 0.5;     // endpoint noise, pixels

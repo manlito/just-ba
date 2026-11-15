@@ -14,6 +14,7 @@
 #include "../check.h"
 #include "../synthetic.h"
 #include "ceres_reference.h"
+#include "jba/cpu/depth.h"
 #include "jba/cpu/priors.h"
 #include "jba/cpu/reprojection.h"
 #include "jba/geometry.h"
@@ -227,6 +228,44 @@ int main() {
     for (int a = 0; a < 18; ++a) worst_gravity = std::max(worst_gravity, std::abs(J[a] - Jc[a]) / scale);
   }
   EXPECT(worst_gravity < 1e-12);
+
+  // Depth at keypoints, every kind and form: against Ceres's automatic
+  // differentiation of the independent functor (pose, point, correction).
+  double worst_depth = 0;
+  for (int n = 0; n < 400; ++n) {
+    const auto kind = n % 2 ? jba::DepthKind::Range : jba::DepthKind::Z;
+    const auto form = (n / 2) % 2 ? jba::DepthForm::Inverse : jba::DepthForm::Linear;
+    double pose[7], X[3], c[2] = {1 + 0.2 * u(rng), 0.3 * u(rng)};
+    jba_test::random_rotation(rng, 3.1, pose);
+    for (int a = 0; a < 3; ++a) pose[4 + a] = u(rng);
+    // A point in front of the camera, 0.5 to 8 m away.
+    const double pc[3] = {2 * u(rng), 2 * u(rng), 4.25 + 3.75 * u(rng)};
+    double v[3] = {pc[0] - pose[4], pc[1] - pose[5], pc[2] - pose[6]};
+    const double qc[4] = {pose[0], -pose[1], -pose[2], -pose[3]};
+    jba::quat_rotate(qc, v, X);
+    const double reading = 0.5 + 8 * std::abs(u(rng)), w = 1 / (0.01 + 0.05 * std::abs(u(rng)));
+    std::unique_ptr<ceres::CostFunction> cost(jba_ceres::make_depth_cost(kind, form, reading, w));
+    const double* params[3] = {pose, X, c};
+    double rc, J7[7], JX[3], Jc[2];
+    double* jac[3] = {J7, JX, Jc};
+    EXPECT(cost->Evaluate(params, &rc, jac));
+    double Jt[6];
+    to_tangent(pose, J7, Jt, 1);
+    double r, Jp[6], Jx[3], Jk[2];
+    jba::cpu::depth_residual<double>(kind, form, pose, X, reading, c, &r, Jp, Jx, Jk);
+    r *= w;
+    for (double& x : Jp) x *= w;
+    for (double& x : Jx) x *= w;
+    for (double& x : Jk) x *= w;
+    double scale = std::max(1.0, std::abs(rc));
+    for (double x : Jt) scale = std::max(scale, std::abs(x));
+    worst_depth = std::max(worst_depth, std::abs(r - rc) / scale);
+    for (int a = 0; a < 6; ++a) worst_depth = std::max(worst_depth, std::abs(Jp[a] - Jt[a]) / scale);
+    for (int a = 0; a < 3; ++a) worst_depth = std::max(worst_depth, std::abs(Jx[a] - JX[a]) / scale);
+    for (int a = 0; a < 2; ++a) worst_depth = std::max(worst_depth, std::abs(Jk[a] - Jc[a]) / scale);
+  }
+  EXPECT(worst_depth < 1e-12);
+  std::printf("depth vs Ceres autodiff: worst relative difference %.3g\n", worst_depth);
   std::printf("gravity priors vs Ceres autodiff: worst relative difference %.3g\n", worst_gravity);
 
   // Losses: same rho, rho', rho'' as Ceres's (Huber, Cauchy) and as the harness's

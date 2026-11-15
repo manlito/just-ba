@@ -312,6 +312,13 @@ r = ( depth_i(X_j) - (a_i * d_ij + b_i) ) / sigma_ij          (1 value)
   by InstantSfM.
 - Loss: Cauchy. Phone depth has long-tailed errors at object edges.
 
+As built (D87): the comparison is made in the reading's units,
+`r = ((depth_i(X_j) - b_i) / a_i - d_ij) / sigma_ij`, and `a_i / (depth - b_i) - 1 / d_ij`
+for the inverse form. The two forms agree with the ones above when a = 1, b = 0;
+with a free scale the form above is biased (the scene shrinks to shrink the
+residuals), this one is not. The report gives the refined depth at each keypoint and
+the corrected reading.
+
 What "refinement" means here: the points get depths consistent with all views and
 the depth readings; each image gets a corrected scale and offset; the caller can
 apply that correction to the full depth map.

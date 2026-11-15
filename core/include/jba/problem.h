@@ -27,6 +27,16 @@ struct RawSection {
   std::vector<std::uint8_t> bytes;
 };
 
+// What a depth reading measures (document 02, section 4a).
+enum class DepthKind : std::int32_t {
+  Z = 0,      // along the optical axis
+  Range = 1,  // along the ray, the distance from the camera centre
+};
+
+// Form of the depth residual: (depth - b) / a - d, or a / (depth - b) - 1 / d for far
+// or network depth (as InstantSfM). Both in the reading's units (D87).
+enum class DepthForm : std::int32_t { Linear = 0, Inverse = 1 };
+
 // Bundle adjustment problem in structure-of-arrays form (document 03).
 //
 // Poses map world to camera, camera axes x right, y down, z forward. A pose is
@@ -55,6 +65,20 @@ struct Problem {
   std::vector<std::int32_t> obs_point;
   std::vector<double> obs_xy;                   // 2 per observation, pixels
   std::vector<double> obs_sigma;                // empty means 1 pixel
+  // Depth at keypoints (document 02, section 4a): the reading d of each observation,
+  // NaN for none; empty means no depth. Residual (depth(X in camera) - b) / a - d over
+  // sigma, (a, b) the correction of the observation's image, so a d + b is the
+  // corrected reading (D87). obs_depth_sigma is in the reading's units; empty means
+  // the default, which grows with depth.
+  std::vector<double> obs_depth;
+  std::vector<double> obs_depth_sigma;
+  DepthKind depth_kind = DepthKind::Z;
+  DepthForm depth_form = DepthForm::Linear;
+  // Per image: depth correction (a, b), empty means (1, 0) for every image; and a bit
+  // mask of what is estimated, 1 the scale a, 2 the offset b, empty means neither (a
+  // metric sensor). Free parts have a prior toward (1, 0) with the solver's sigmas.
+  std::vector<double> depth_correction;         // 2 per image
+  std::vector<std::uint8_t> depth_correction_free;
 
   // Relative pose priors (document 02). Prior k ties images i = rel_images[2k] and
   // j = rel_images[2k + 1] to the motion T_j * T_i^-1 (camera i coordinates to
@@ -133,6 +157,8 @@ struct Problem {
   std::size_t num_global_priors() const { return glob_image.size(); }
   std::size_t num_gravity_priors() const { return grav_image.size(); }
   std::size_t num_lines() const { return line_image.size(); }
+  // Observations with a depth reading.
+  std::size_t num_depth_observations() const;
   // Whether the Manhattan term is on: a frame is given and some segment is assigned.
   bool has_manhattan() const;
   std::size_t num_prior_sets() const {
@@ -146,7 +172,10 @@ struct Problem {
 
 // Positions in Problem::loss_type and loss_scale.
 inline constexpr std::size_t kLossReprojection = 0, kLossRelativePrior = 1, kLossGlobalPrior = 2, kLossGravity = 3,
-                             kLossLine = 4, kNumLossTypes = 5;
+                             kLossLine = 4, kLossDepth = 5, kNumLossTypes = 6;
+
+// Bits of Problem::depth_correction_free.
+inline constexpr std::uint8_t kDepthScale = 1, kDepthOffset = 2;
 
 // The direction of gravity in the working frame (Problem::gravity_world or its
 // default).

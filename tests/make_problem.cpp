@@ -8,6 +8,8 @@
 //                    [--prior-noise ROT,TRANS] [--prior-outliers FRACTION] [--prior-sigma ROT,TRANS]
 //                    [--gravity-priors] [--gravity-noise RAD] [--gravity-outliers FRACTION] [--gravity-sigma RAD]
 //                    [--lines N] [--line-dof 1|3] [--line-outliers FRACTION] [--prior-groups 2]
+//                    [--depth FRACTION] [--depth-kind z|range] [--depth-form linear|inverse]
+//                    [--depth-free MASK] [--depth-outliers FRACTION]
 //
 // MASK is the IntrinsicsGroup bit mask: 1 focal, 2 principal point, 4 distortion.
 // Priors come from the true poses with noise: relative priors tie each image to
@@ -47,7 +49,10 @@ int main(int argc, char** argv) {
     double noise = 0.5, outliers = 0, sigma = 0;
     bool per_image = false, global_priors = false, gravity_priors = false;
     double gravity_noise = 0.003, gravity_outliers = 0, gravity_sigma = 0;
-    int lines = 0, line_dof = 1, prior_groups = 1;
+    int lines = 0, line_dof = 1, prior_groups = 1, depth_free = 0;
+    double depth_fraction = 0, depth_outliers = 0;
+    jba::DepthKind depth_kind = jba::DepthKind::Z;
+    jba::DepthForm depth_form = jba::DepthForm::Linear;
     double line_outliers = 0;
     int relative_priors = 0;
     jba::FrameRelation relation = jba::FrameRelation::Identity;
@@ -97,6 +102,11 @@ int main(int argc, char** argv) {
       else if (key == "--lines") lines = std::stoi(val);
       else if (key == "--line-dof") line_dof = std::stoi(val);
       else if (key == "--prior-groups") prior_groups = std::stoi(val);
+      else if (key == "--depth") depth_fraction = std::stod(val);
+      else if (key == "--depth-free") depth_free = std::stoi(val);
+      else if (key == "--depth-outliers") depth_outliers = std::stod(val);
+      else if (key == "--depth-kind") depth_kind = val == "range" ? jba::DepthKind::Range : jba::DepthKind::Z;
+      else if (key == "--depth-form") depth_form = val == "inverse" ? jba::DepthForm::Inverse : jba::DepthForm::Linear;
       else if (key == "--line-outliers") line_outliers = std::stod(val);
       else if (key == "--global-relation") {
         if (val == "identity") relation = jba::FrameRelation::Identity;
@@ -291,6 +301,32 @@ int main(int argc, char** argv) {
       jba::quat_multiply(dq, qm, p.manhattan_frame.data());
       jba::quat_normalize(p.manhattan_frame.data());
       p.manhattan_dof = line_dof;
+    }
+
+    if (depth_fraction > 0) {
+      // Readings from the true depth through a per-image correction error (when that
+      // part is free), with noise growing with depth, and gross outliers.
+      std::vector<double> a(static_cast<std::size_t>(images), 1.0), b(static_cast<std::size_t>(images), 0.0);
+      for (int i = 0; i < images; ++i) {
+        if (depth_free & jba::kDepthScale) a[static_cast<std::size_t>(i)] = 1 + 0.05 * n(rng);
+        if (depth_free & jba::kDepthOffset) b[static_cast<std::size_t>(i)] = 0.05 * n(rng);
+      }
+      p.obs_depth.assign(p.num_observations(), std::nan(""));
+      for (std::size_t k = 0; k < p.num_observations(); ++k) {
+        if (!(u(rng) < depth_fraction)) continue;
+        const auto i = static_cast<std::size_t>(p.obs_image[k]);
+        const double* T = &truth[7 * i];
+        double pc[3];
+        jba::quat_rotate(T, &p.points[3 * static_cast<std::size_t>(p.obs_point[k])], pc);
+        for (int c = 0; c < 3; ++c) pc[c] += T[4 + c];
+        const double z = depth_kind == jba::DepthKind::Range ? std::sqrt(pc[0] * pc[0] + pc[1] * pc[1] + pc[2] * pc[2]) : pc[2];
+        double d = (z - b[i]) / a[i] + (0.005 + 0.005 * z) * n(rng);
+        if (u(rng) < depth_outliers) d *= 1.3 + 0.5 * u(rng);
+        p.obs_depth[k] = d;
+      }
+      p.depth_kind = depth_kind;
+      p.depth_form = depth_form;
+      if (depth_free != 0) p.depth_correction_free.assign(p.num_images(), static_cast<std::uint8_t>(depth_free));
     }
 
     if (fix_images > 0) {

@@ -19,6 +19,7 @@ struct ResidualReport {
   double global_prior_cost = 0;
   double gravity_cost = 0;
   double line_cost = 0;
+  double depth_cost = 0;  // depth readings and the priors on free corrections
 
   // Per observation: reprojection error in pixels (not divided by sigma), and
   // whether the point is in front of the camera.
@@ -36,6 +37,11 @@ struct ResidualReport {
   // plane, and the robust weight; NaN and 0 for segments not in the Manhattan term
   // (unassigned, or the term off).
   std::vector<double> line_angle, line_weight;
+  // Per observation with a depth reading (NaN elsewhere, weight 0): the refined depth
+  // of its point in the camera (as the readings measure it), the corrected reading
+  // a d + b, and the robust weight. Applying the image's correction to the whole
+  // depth map gives the refined map (document 02).
+  std::vector<double> depth_refined, depth_corrected, depth_weight;
 
   // Priors whose weight fell below the threshold given to evaluate(): what the
   // caller's cleanup let through (document 02).

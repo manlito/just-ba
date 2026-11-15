@@ -439,6 +439,26 @@ Scene make_scene(const SceneOptions& o) {
     jba::quat_from_matrix(R, sc.truth_frame);
   }
 
+  // Depth readings per keypoint (own random numbers, like the lines).
+  if (o.depth_fraction > 0) {
+    std::mt19937_64 drng(o.seed + 9999);
+    for (int i = 0; i < N; ++i) {
+      const double a = 1 + o.depth_scale_error * n(drng), b = o.depth_offset_error * n(drng);
+      const double* pose = &truth.poses[7 * static_cast<std::size_t>(i)];
+      for (const auto j : kp_point[static_cast<std::size_t>(i)]) {
+        double pc[3];
+        jba::quat_rotate(pose, &truth.points[3 * static_cast<std::size_t>(j)], pc);
+        const double z = pc[2] + pose[6];
+        double d = std::nan("");
+        if (u01(drng) < o.depth_fraction && z < o.max_depth) {
+          d = (z - b) / a + (o.depth_noise + o.depth_noise_per_m * z) * n(drng);
+          if (u01(drng) < o.depth_outliers) d *= 1.2 + 0.6 * u01(drng);
+        }
+        sc.input.keypoint_depth.push_back(d);
+      }
+    }
+  }
+
   jba::Keypoints& K = sc.input.keypoints;
   K.begin.assign(1, 0);
   for (int i = 0; i < N; ++i) {

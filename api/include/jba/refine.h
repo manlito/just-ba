@@ -34,6 +34,11 @@ struct RefineInput {
   Problem scene;
   Keypoints keypoints;
   std::vector<double> keypoint_sigma;  // per keypoint, pixels; empty means 1
+  // Depth at keypoints (document 02, section 4a): per keypoint, NaN for none; empty
+  // means no depth. scene.depth_kind, depth_form, depth_correction and
+  // depth_correction_free say what the readings are and what is estimated.
+  std::vector<double> keypoint_depth;
+  std::vector<double> keypoint_depth_sigma;  // per keypoint, metres; empty: the default
   // Either matches (4 values each: image_a, keypoint_a, image_b, keypoint_b) or
   // tracks; tracks take precedence when not empty.
   std::vector<std::int32_t> matches;

@@ -330,5 +330,46 @@ int main() {
     EXPECT(mixed_m.after.median_centre <= 1.05 * mixed_plain.after.median_centre);
   }
 
+  // Depth at keypoints (document 05): depth-assisted refinement against pose and
+  // reprojection only, on the drifting room.
+  {
+    SceneOptions so;
+    so.kind = SceneKind::Room;
+    so.drift_heading_per_m = 0.02;
+    so.drift_trans_per_m = 0.02;
+    const auto plain = run("room, drift, no depth", so);
+    so.depth_fraction = 0.5;
+    // A metric sensor (LiDAR, ARCore depth): corrections fixed.
+    const auto metric = run("room, drift, metric depth", so);
+    // With 5% gross errors at object edges, the Cauchy loss holds.
+    auto edges = so;
+    edges.depth_outliers = 0.05;
+    const auto outliers = run("room, drift, depth with edges", edges);
+    // Network depth: 10% scale and 5 cm offset error per image, both estimated.
+    auto net = so;
+    net.depth_scale_error = 0.1;
+    net.depth_offset_error = 0.05;
+    jba::RefineOptions ro;
+    auto net_run = [&](const char* name) {
+      auto sc = jba_test::make_scene(net);
+      sc.input.scene.depth_correction_free.assign(sc.input.scene.num_images(), jba::kDepthScale | jba::kDepthOffset);
+      Outcome out;
+      out.result = jba::refine(sc.input, ro);
+      out.after = jba_test::pose_error(out.result.problem.poses, sc.truth.poses, false, out.result.refined);
+      std::printf("%-28s after: centre %.4f m (max %.4f), rot %.4f deg\n", name, out.after.median_centre,
+                  out.after.max_centre, out.after.median_rotation / kDeg);
+      return out;
+    };
+    const auto network = net_run("room, drift, network depth");
+    // Without depth the scene has none of this information; the metric run must win
+    // clearly, the others must not lose.
+    EXPECT(metric.after.median_centre < 0.8 * plain.after.median_centre);
+    EXPECT(metric.after.median_rotation < plain.after.median_rotation);
+    EXPECT(outliers.after.median_centre < 0.9 * plain.after.median_centre);
+    EXPECT(network.after.median_centre <= 1.05 * plain.after.median_centre);
+    const auto& rep = metric.result.report;
+    EXPECT(rep.depth_cost > 0 && rep.depth_refined.size() == metric.result.problem.num_observations());
+  }
+
   return TEST_MAIN_RESULT();
 }

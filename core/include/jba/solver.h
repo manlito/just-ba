@@ -35,7 +35,8 @@ enum class GaugeMode {
 //   rotations of every group whose rotation its segments set: normally the frame is
 //   held and those groups hold their reference's translation alone
 //   (Gauge::translation_images, manhattan_frame_held; D86 has the exceptions);
-// - the scale is then set by relative priors or a rigid set if there are any;
+// - the scale is then set by relative priors, a rigid set or metric depth (readings
+//   whose scale is not estimated) if there are any;
 //   otherwise by holding the scale of a similarity set (the lowest index) if there
 //   is one; otherwise, as COLMAP does, by holding one translation coordinate of the
 //   image sharing the most points with the reference (its largest coordinate of
@@ -85,6 +86,7 @@ struct SolverOptions {
   Loss global_prior_loss{LossType::Cauchy, 3.0};
   Loss gravity_loss{LossType::Cauchy, 3.0};
   Loss line_loss{LossType::Cauchy, 3.0};
+  Loss depth_loss{LossType::Cauchy, 3.0};
   PriorDefaults prior_defaults;  // weights for priors that come without any
   GaugeMode gauge = GaugeMode::Auto;
 
@@ -145,7 +147,7 @@ Gauge choose_gauge(const Problem& problem);
 Loss* loss_of(SolverOptions& options, std::size_t type);
 const Loss* loss_of(const SolverOptions& options, std::size_t type);
 // Name of a residual type, as in command-line flags with '-' for '_':
-// "reprojection", "relative_prior", "global_prior", "gravity", "line".
+// "reprojection", "relative_prior", "global_prior", "gravity", "line", "depth".
 std::string_view residual_type_name(std::size_t type);
 
 // The losses stored with a problem (Problem::loss_type, loss.* sections; D80) in

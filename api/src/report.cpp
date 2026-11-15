@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "jba/cpu/depth.h"
 #include "jba/cpu/priors.h"
 #include "jba/cpu/reprojection.h"
 #include "jba/geometry.h"
@@ -109,6 +110,49 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
     r.gravity_angle[k] = 2 * std::asin(std::min(1.0, chord / 2));
     r.gravity_weight[k] = rho[1];
     if (rho[1] < threshold) r.downweighted_gravity.push_back(static_cast<std::int32_t>(k));
+  }
+
+  if (!p.obs_depth.empty()) {
+    r.depth_refined.assign(n_obs, std::nan(""));
+    r.depth_corrected.assign(n_obs, std::nan(""));
+    r.depth_weight.assign(n_obs, 0.0);
+    for (std::size_t k = 0; k < n_obs; ++k) {
+      const double d = p.obs_depth[k];
+      if (std::isnan(d)) continue;
+      const auto i = static_cast<std::size_t>(p.obs_image[k]);
+      const double c[2] = {p.depth_correction.empty() ? 1.0 : p.depth_correction[2 * i],
+                           p.depth_correction.empty() ? 0.0 : p.depth_correction[2 * i + 1]};
+      const double* pose = &p.poses[7 * i];
+      const double* X = &p.points[3 * static_cast<std::size_t>(p.obs_point[k])];
+      double res;
+      cpu::depth_residual<double>(p.depth_kind, p.depth_form, pose, X, d, c, &res, nullptr, nullptr, nullptr);
+      const double w = 1 / depth_residual_sigma(p, k, o.prior_defaults);
+      double rho[3];
+      evaluate_loss(o.depth_loss, res * res * w * w, rho);
+      r.depth_cost += 0.5 * rho[0];
+      double pc[3];
+      quat_rotate(pose, X, pc);
+      for (int a = 0; a < 3; ++a) pc[a] += pose[4 + a];
+      r.depth_refined[k] = p.depth_kind == DepthKind::Range ? std::sqrt(pc[0] * pc[0] + pc[1] * pc[1] + pc[2] * pc[2]) : pc[2];
+      r.depth_corrected[k] = c[0] * d + c[1];
+      r.depth_weight[k] = rho[1];
+    }
+    // Priors on free corrections, as in the solver: images with a reading.
+    std::vector<char> has_reading(p.num_images(), 0);
+    for (std::size_t k = 0; k < n_obs; ++k)
+      if (!std::isnan(p.obs_depth[k])) has_reading[static_cast<std::size_t>(p.obs_image[k])] = 1;
+    for (std::size_t i = 0; i < p.depth_correction_free.size(); ++i) {
+      const std::uint8_t m = p.depth_correction_free[i];
+      if (!has_reading[i] || m == 0 || p.depth_correction.empty()) continue;
+      if (m & kDepthScale) {
+        const double v = (p.depth_correction[2 * i] - 1) / o.prior_defaults.depth_scale_sigma;
+        r.depth_cost += 0.5 * v * v;
+      }
+      if (m & kDepthOffset) {
+        const double v = p.depth_correction[2 * i + 1] / o.prior_defaults.depth_offset_sigma;
+        r.depth_cost += 0.5 * v * v;
+      }
+    }
   }
 
   const std::size_t n_lines = p.num_lines();

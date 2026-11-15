@@ -79,4 +79,10 @@ void add_relative_priors_from_poses(Problem& p, const std::vector<double>& poses
   }
 }
 
+double depth_residual_sigma(const Problem& p, std::size_t k, const PriorDefaults& d) {
+  const double reading = p.obs_depth[k];
+  const double sigma = p.obs_depth_sigma.empty() ? d.depth_sigma + d.depth_sigma_per_metre * reading : p.obs_depth_sigma[k];
+  return p.depth_form == DepthForm::Inverse ? sigma / (reading * reading) : sigma;
+}
+
 }  // namespace jba

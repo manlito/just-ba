@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "jba/cpu/depth.h"
 #include "jba/cpu/priors.h"
 #include "jba/cpu/reprojection.h"
 #include "jba/geometry.h"
@@ -114,9 +115,9 @@ constexpr int kPriorRows = 6;
 constexpr int kPriorCols = 13;
 constexpr double kIdentityTransform[8] = {1, 0, 0, 0, 0, 0, 0, 1};
 
-enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale, Frame };
+enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale, Frame, Depth };
 
-enum class FactorKind : std::uint8_t { PosePrior, Gravity, Line };
+enum class FactorKind : std::uint8_t { PosePrior, Gravity, Line, DepthPrior };
 
 struct PosePrior {
   bool relative = true;
@@ -138,6 +139,11 @@ struct LineFactor {
   int axis = 0;
   double n[3];   // plane normal, camera axes
   double w = 1;  // 1 / sigma
+};
+
+struct DepthPrior {
+  int image = -1;
+  double w[2];  // 1 / sigma of scale and offset; 0 leaves that part out
 };
 
 struct FactorSet {
@@ -169,15 +175,16 @@ struct FactorSet {
 };
 
 // Parameter values: the current ones, or a candidate. `sets`: 8 per prior set
-// (q, t, s); `frame`: the Manhattan frame (q).
+// (q, t, s); `frame`: the Manhattan frame (q); `depth`: 2 per image (a, b).
 struct Params {
-  std::vector<double> poses, points, intr, sets;
+  std::vector<double> poses, points, intr, sets, depth;
   double frame[4] = {1, 0, 0, 0};
   void swap(Params& o) {
     poses.swap(o.poses);
     points.swap(o.points);
     intr.swap(o.intr);
     sets.swap(o.sets);
+    depth.swap(o.depth);
     std::swap(frame, o.frame);
   }
 };
@@ -222,6 +229,20 @@ struct CpuBackend::Impl {
   std::vector<LineFactor> lines;
   int frame_dof = 0, frame_off = -1;  // the Manhattan frame block, when there is one
   std::vector<FactorSet> fsets;
+
+  // Depth at keypoints, one row per observation that has a reading, in the
+  // observations' order (D87): reading, 1 / sigma (0 for none), the image's depth
+  // block, and the row's residual and Jacobian blocks (pose 6, point 3, block 2).
+  bool has_depth = false;
+  DepthKind depth_kind = DepthKind::Z;
+  DepthForm depth_form = DepthForm::Linear;
+  Loss depth_loss;
+  std::vector<double> o_d, o_dw;
+  std::vector<int> o_dep;
+  std::vector<int> depth_off;                   // per image, -1 when fixed or unused
+  std::vector<std::uint8_t> depth_fixed_cols;   // per image: bit 0 scale, bit 1 offset
+  std::vector<double> dr, dJp, dJx, dJc, td;
+  std::vector<DepthPrior> depth_priors;
 
   // Poses whose heading is held by the gauge (D83): rotation tangent basis, from the
   // current pose at each linearization, and its index per image (-1 for none).
@@ -274,6 +295,19 @@ struct CpuBackend::Impl {
       }
       std::copy_n(p.manhattan_frame.data(), 4, cur.frame);
     }
+    has_depth = p.num_depth_observations() > 0;
+    depth_kind = p.depth_kind;
+    depth_form = p.depth_form;
+    depth_loss = o.depth_loss;
+    cur.depth.resize(2 * n_img);
+    for (std::size_t i = 0; i < n_img; ++i) {
+      cur.depth[2 * i] = p.depth_correction.empty() ? 1.0 : p.depth_correction[2 * i];
+      cur.depth[2 * i + 1] = p.depth_correction.empty() ? 0.0 : p.depth_correction[2 * i + 1];
+    }
+    std::vector<char> depth_seen(n_img, 0);
+    if (has_depth)
+      for (std::size_t k = 0; k < p.num_observations(); ++k)
+        if (!std::isnan(p.obs_depth[k])) depth_seen[static_cast<std::size_t>(p.obs_image[k])] = 1;
     for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
       img_seen[static_cast<std::size_t>(p.glob_image[k])] = 1;
       set_seen[static_cast<std::size_t>(p.set_of_global_prior(k))] = 1;
@@ -345,6 +379,17 @@ struct CpuBackend::Impl {
         off += frame_dof;
       }
     }
+    // Depth corrections: (a, b) of images with readings and something free.
+    depth_off.assign(n_img, -1);
+    depth_fixed_cols.assign(n_img, 0);
+    for (std::size_t i = 0; i < n_img; ++i) {
+      const std::uint8_t mask = p.depth_correction_free.empty() ? 0 : p.depth_correction_free[i];
+      if (mask == 0 || !depth_seen[i]) continue;
+      depth_off[i] = off;
+      depth_fixed_cols[i] = static_cast<std::uint8_t>((mask & kDepthScale ? 0 : 1) | (mask & kDepthOffset ? 0 : 2));
+      fblocks.push_back({off, 2, 0, BlockKind::Depth, static_cast<int>(i)});
+      off += 2;
+    }
     nf = static_cast<std::size_t>(off);
     int pinv = 0;
     for (auto& b : fblocks) {
@@ -387,6 +432,23 @@ struct CpuBackend::Impl {
       o_w[k] = p.obs_sigma.empty() ? 1.0 : 1.0 / p.obs_sigma[s];
       o_pose[k] = pose_off[o_img[k]];
       o_intr[k] = intr_off[image_block[o_img[k]]];
+    }
+    if (has_depth) {
+      o_d.assign(nobs, 0);
+      o_dw.assign(nobs, 0);
+      o_dep.assign(nobs, -1);
+      for (std::size_t k = 0; k < nobs; ++k) {
+        const std::size_t s = order[k];
+        if (std::isnan(p.obs_depth[s])) continue;
+        o_d[k] = p.obs_depth[s];
+        o_dw[k] = 1 / depth_residual_sigma(p, s, o.prior_defaults);
+        o_dep[k] = depth_off[static_cast<std::size_t>(o_img[k])];
+      }
+      dr.assign(nobs, 0);
+      dJp.assign(6 * nobs, 0);
+      dJx.assign(3 * nobs, 0);
+      dJc.assign(2 * nobs, 0);
+      td.assign(nobs, 0);
     }
     pt_begin.assign(n_pts + 1, 0);
     for (std::size_t k = 0; k < nobs; ++k) ++pt_begin[o_pt[k] + 1];
@@ -492,6 +554,21 @@ struct CpuBackend::Impl {
     }
     if (gravity.count > 0) fsets.push_back(std::move(gravity));
 
+    FactorSet dprior = make_set(FactorKind::DepthPrior, 2, {2});
+    for (std::size_t i = 0; i < depth_off.size(); ++i) {
+      if (depth_off[i] < 0) continue;
+      const std::uint8_t mask = p.depth_correction_free[i];
+      DepthPrior f;
+      f.image = static_cast<int>(i);
+      f.w[0] = mask & kDepthScale ? 1 / o.prior_defaults.depth_scale_sigma : 0.0;
+      f.w[1] = mask & kDepthOffset ? 1 / o.prior_defaults.depth_offset_sigma : 0.0;
+      if (f.w[0] == 0 && f.w[1] == 0) continue;
+      add_factor(dprior, {{depth_off[i], -1}}, Loss{});
+      dprior.slot_mask.back() = depth_fixed_cols[i];
+      depth_priors.push_back(f);
+    }
+    if (dprior.count > 0) fsets.push_back(std::move(dprior));
+
     if (frame_dof > 0) {
       FactorSet line_set = make_set(FactorKind::Line, 1, {6, frame_dof});
       for (std::size_t k = 0; k < p.num_lines(); ++k) {
@@ -543,6 +620,19 @@ struct CpuBackend::Impl {
         for (int a = 0; a < 3; ++a) rw[a] *= g.w;
         if (J)
           for (int a = 0; a < 18; ++a) J[a] *= g.w;
+        return;
+      }
+      case FactorKind::DepthPrior: {
+        const DepthPrior& d = depth_priors[f];
+        const double* c = &P.depth[2 * static_cast<std::size_t>(d.image)];
+        rw[0] = (c[0] - 1) * d.w[0];
+        rw[1] = c[1] * d.w[1];
+        if (J) {
+          J[0] = d.w[0];
+          J[1] = 0;
+          J[2] = 0;
+          J[3] = d.w[1];
+        }
         return;
       }
       case FactorKind::Line: {
@@ -639,8 +729,23 @@ struct CpuBackend::Impl {
 
   double cost_of(const Params& P) {
     double c = reprojection_cost(P.poses, P.points, P.intr);
+    if (has_depth) c += depth_cost(P);
     for (const FactorSet& fs : fsets) c += factor_cost(fs, P);
     return c;
+  }
+
+  double depth_cost(const Params& P) {
+    return 0.5 * pool.sum(nobs, [&](std::size_t k) {
+      if (o_dw[k] == 0) return 0.0;
+      const std::size_t i = static_cast<std::size_t>(o_img[k]);
+      double res;
+      depth_residual<double>(depth_kind, depth_form, &P.poses[7 * i], &P.points[3 * static_cast<std::size_t>(o_pt[k])], o_d[k],
+                             &P.depth[2 * i], &res, nullptr, nullptr, nullptr);
+      res *= o_dw[k];
+      double rho[3];
+      evaluate_loss(depth_loss, res * res, rho);
+      return rho[0];
+    });
   }
 
   static constexpr int kMaxFactorRows = 6;
@@ -717,6 +822,7 @@ struct CpuBackend::Impl {
         if (point_off[o_pt[k]] < 0) {
           for (int a = 0; a < 6; ++a) jx[a] = 0;
         }
+        if (has_depth && o_dw[k] != 0) linearize_depth(k, pmask);
       }
     });
     linearize_factors();
@@ -751,6 +857,14 @@ struct CpuBackend::Impl {
               Jx[6 * k + 3 + c] *= e_scale[e + c];
             }
           }
+          if (has_depth && o_dw[k] != 0) {
+            if (o_pose[k] >= 0)
+              for (int c = 0; c < 6; ++c) dJp[6 * k + c] *= f_scale[o_pose[k] + c];
+            if (e >= 0)
+              for (int c = 0; c < 3; ++c) dJx[3 * k + c] *= e_scale[e + c];
+            if (o_dep[k] >= 0)
+              for (int c = 0; c < 2; ++c) dJc[2 * k + c] *= f_scale[o_dep[k] + c];
+          }
         }
       });
       for (FactorSet& fs : fsets) {
@@ -774,6 +888,38 @@ struct CpuBackend::Impl {
     for (std::size_t c = 0; c < nf; ++c) m = std::max(m, std::abs(g_f[c] / f_scale[c]));
     for (std::size_t c = 0; c < ne; ++c) m = std::max(m, std::abs(g_e[c] / e_scale[c]));
     gmax = m;
+  }
+
+  // Depth row of observation k: whitened, robustified, fixed columns zeroed.
+  void linearize_depth(std::size_t k, std::uint8_t pmask) {
+    const std::size_t i = static_cast<std::size_t>(o_img[k]);
+    double* jp = &dJp[6 * k];
+    double* jx = &dJx[3 * k];
+    double* jc = &dJc[2 * k];
+    depth_residual<double>(depth_kind, depth_form, &cur.poses[7 * i], &cur.points[3 * static_cast<std::size_t>(o_pt[k])],
+                           o_d[k], &cur.depth[2 * i], &dr[k], jp, jx, jc);
+    if (!basis_image.empty() && basis_of[i] >= 0) apply_basis(&basis[9 * static_cast<std::size_t>(basis_of[i])], jp, 1, 6);
+    const double w = o_dw[k];
+    dr[k] *= w;
+    for (int a = 0; a < 6; ++a) jp[a] *= w;
+    for (int a = 0; a < 3; ++a) jx[a] *= w;
+    for (int a = 0; a < 2; ++a) jc[a] *= w;
+    if (depth_loss.type != LossType::None) {
+      const double sq = dr[k] * dr[k];
+      double rho[3];
+      evaluate_loss(depth_loss, sq, rho);
+      const Corrector corr(sq, rho);
+      corr.jacobian_rows(&dr[k], jp, 1, 6);
+      corr.jacobian_rows(&dr[k], jx, 1, 3);
+      corr.jacobian_rows(&dr[k], jc, 1, 2);
+      dr[k] *= corr.residual_scaling;
+    }
+    for (int c = 0; c < 6; ++c)
+      if (pmask & (1u << c)) jp[c] = 0;
+    if (point_off[o_pt[k]] < 0) jx[0] = jx[1] = jx[2] = 0;
+    const std::uint8_t cmask = o_dep[k] < 0 ? 3 : depth_fixed_cols[i];
+    for (int c = 0; c < 2; ++c)
+      if (cmask & (1u << c)) jc[c] = 0;
   }
 
   void linearize_factors() {
@@ -818,7 +964,7 @@ struct CpuBackend::Impl {
   void obs_range(const FBlock& fb, std::size_t& q0, std::size_t& q1, const std::vector<std::size_t>*& list) const {
     q0 = q1 = 0;
     list = nullptr;
-    if (fb.kind == BlockKind::Pose) {
+    if (fb.kind == BlockKind::Pose || fb.kind == BlockKind::Depth) {
       list = &img_list;
       q0 = img_begin[static_cast<std::size_t>(fb.index)];
       q1 = img_begin[static_cast<std::size_t>(fb.index) + 1];
@@ -827,6 +973,15 @@ struct CpuBackend::Impl {
       q0 = ib_begin[static_cast<std::size_t>(fb.index)];
       q1 = ib_begin[static_cast<std::size_t>(fb.index) + 1];
     }
+  }
+
+  // The depth row's Jacobian block for a camera-side block kind, or nullptr when the
+  // depth residual does not depend on it (or observation k has no reading).
+  const double* depth_row(BlockKind kind, std::size_t k) const {
+    if (!has_depth || o_dw[k] == 0) return nullptr;
+    if (kind == BlockKind::Pose) return &dJp[6 * k];
+    if (kind == BlockKind::Depth) return &dJc[2 * k];
+    return nullptr;
   }
 
   // m = J_factor x for every factor.
@@ -861,12 +1016,25 @@ struct CpuBackend::Impl {
             std::size_t q0, q1;
             const std::vector<std::size_t>* list;
             obs_range(fb, q0, q1, list);
-            for (std::size_t q = q0; q < q1; ++q) {
-              const std::size_t k = (*list)[q];
-              const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
-              for (int c = 0; c < n; ++c) {
-                d[c] += J[c] * J[c] + J[n + c] * J[n + c];
-                g[c] += J[c] * r[2 * k] + J[n + c] * r[2 * k + 1];
+            if (fb.kind != BlockKind::Depth) {
+              for (std::size_t q = q0; q < q1; ++q) {
+                const std::size_t k = (*list)[q];
+                const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
+                for (int c = 0; c < n; ++c) {
+                  d[c] += J[c] * J[c] + J[n + c] * J[n + c];
+                  g[c] += J[c] * r[2 * k] + J[n + c] * r[2 * k + 1];
+                }
+              }
+            }
+            if (has_depth && fb.kind != BlockKind::Intrinsics) {
+              for (std::size_t q = q0; q < q1; ++q) {
+                const double* Jd = depth_row(fb.kind, (*list)[q]);
+                if (!Jd) continue;
+                const double rk = dr[(*list)[q]];
+                for (int c = 0; c < n; ++c) {
+                  d[c] += Jd[c] * Jd[c];
+                  g[c] += Jd[c] * rk;
+                }
               }
             }
             for (const FactorSet& fs : fsets) {
@@ -891,6 +1059,7 @@ struct CpuBackend::Impl {
         },
         1);
     pool.parallel_for(point_off.size(), [&](std::size_t j0, std::size_t j1) {
+      const bool depth = has_depth;
       for (std::size_t j = j0; j < j1; ++j) {
         const int e = point_off[j];
         if (e < 0) continue;
@@ -900,6 +1069,13 @@ struct CpuBackend::Impl {
           for (int c = 0; c < 3; ++c) {
             d[c] += J[c] * J[c] + J[3 + c] * J[3 + c];
             g[c] += J[c] * r[2 * k] + J[3 + c] * r[2 * k + 1];
+          }
+          if (depth && o_dw[k] != 0) {
+            const double* Jd = &dJx[3 * k];
+            for (int c = 0; c < 3; ++c) {
+              d[c] += Jd[c] * Jd[c];
+              g[c] += Jd[c] * dr[k];
+            }
           }
         }
         for (int c = 0; c < 3; ++c) {
@@ -934,6 +1110,23 @@ struct CpuBackend::Impl {
     }
   }
 
+  // Depth row of observation k times x (camera side): pose and depth block.
+  double jf_depth(const double* x, std::size_t k) const {
+    double out = 0;
+    if (o_pose[k] >= 0) {
+      const double* J = &dJp[6 * k];
+      const double* v = x + o_pose[k];
+      for (int c = 0; c < 6; ++c) out += J[c] * v[c];
+    }
+    if (o_dep[k] >= 0) {
+      const double* J = &dJc[2 * k];
+      const double* v = x + o_dep[k];
+      out += J[0] * v[0];
+      out += J[1] * v[1];
+    }
+    return out;
+  }
+
   // y = J_f^T t (gathered per camera-side block); with `factors_too`, plus
   // J_factor^T m.
   void jft_times_t(double* y, bool factors_too) {
@@ -947,10 +1140,19 @@ struct CpuBackend::Impl {
             std::size_t q0, q1;
             const std::vector<std::size_t>* list;
             obs_range(fb, q0, q1, list);
-            for (std::size_t q = q0; q < q1; ++q) {
-              const std::size_t k = (*list)[q];
-              const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
-              for (int c = 0; c < n; ++c) acc[c] += J[c] * t[2 * k] + J[n + c] * t[2 * k + 1];
+            if (fb.kind != BlockKind::Depth) {
+              for (std::size_t q = q0; q < q1; ++q) {
+                const std::size_t k = (*list)[q];
+                const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
+                for (int c = 0; c < n; ++c) acc[c] += J[c] * t[2 * k] + J[n + c] * t[2 * k + 1];
+              }
+            }
+            if (has_depth && fb.kind != BlockKind::Intrinsics) {
+              for (std::size_t q = q0; q < q1; ++q) {
+                const std::size_t k = (*list)[q];
+                if (const double* Jd = depth_row(fb.kind, k))
+                  for (int c = 0; c < n; ++c) acc[c] += Jd[c] * td[k];
+              }
             }
             if (factors_too) {
               for (const FactorSet& fs : fsets) {
@@ -973,6 +1175,7 @@ struct CpuBackend::Impl {
   // y = S x, S = J_f^T J_f + D_f^2 - J_f^T J_e (J_e^T J_e + D_e^2)^-1 J_e^T J_f.
   void apply_schur(const double* x, double* y) {
     pool.parallel_for(point_off.size(), [&](std::size_t j0, std::size_t j1) {
+      const bool depth = has_depth;
       for (std::size_t j = j0; j < j1; ++j) {
         double u[3] = {0, 0, 0};
         const int e = point_off[j];
@@ -981,6 +1184,11 @@ struct CpuBackend::Impl {
           if (e >= 0) {
             const double* J = &Jx[6 * k];
             for (int c = 0; c < 3; ++c) u[c] += J[c] * t[2 * k] + J[3 + c] * t[2 * k + 1];
+          }
+          if (depth && o_dw[k] != 0) {
+            td[k] = jf_depth(x, k);
+            if (e >= 0)
+              for (int c = 0; c < 3; ++c) u[c] += dJx[3 * k + c] * td[k];
           }
         }
         if (e < 0) continue;
@@ -991,6 +1199,10 @@ struct CpuBackend::Impl {
           const double* J = &Jx[6 * k];
           t[2 * k] -= J[0] * w[0] + J[1] * w[1] + J[2] * w[2];
           t[2 * k + 1] -= J[3] * w[0] + J[4] * w[1] + J[5] * w[2];
+          if (depth && o_dw[k] != 0) {
+            const double* Jd = &dJx[3 * k];
+            td[k] -= Jd[0] * w[0] + Jd[1] * w[1] + Jd[2] * w[2];
+          }
         }
       }
     });
@@ -1024,6 +1236,7 @@ struct CpuBackend::Impl {
     std::atomic<bool> ok{true};
     // Point blocks C_j = J_e^T J_e + D_e^2, inverted.
     pool.parallel_for(point_off.size(), [&](std::size_t j0, std::size_t j1) {
+      const bool depth = has_depth;
       for (std::size_t j = j0; j < j1; ++j) {
         const int e = point_off[j];
         if (e < 0) continue;
@@ -1032,6 +1245,11 @@ struct CpuBackend::Impl {
           const double* J = &Jx[6 * k];
           for (int a = 0; a < 3; ++a)
             for (int b = 0; b < 3; ++b) C[3 * a + b] += J[a] * J[b] + J[3 + a] * J[3 + b];
+          if (depth && o_dw[k] != 0) {
+            const double* Jd = &dJx[3 * k];
+            for (int a = 0; a < 3; ++a)
+              for (int b = 0; b < 3; ++b) C[3 * a + b] += Jd[a] * Jd[b];
+          }
         }
         for (int a = 0; a < 3; ++a) C[4 * a] += d2_e[e + a];
         if (!spd_inverse(C, 3)) ok = false;
@@ -1049,6 +1267,7 @@ struct CpuBackend::Impl {
           for (std::size_t b = b0; b < b1; ++b) {
             const FBlock& fb = fblocks[b];
             const int n = fb.size;
+            const bool depth_here = has_depth && fb.kind != BlockKind::Intrinsics;
             double P[kMaxParams * kMaxParams] = {};
             std::size_t q, qend;
             const std::vector<std::size_t>* lp;
@@ -1059,11 +1278,21 @@ struct CpuBackend::Impl {
               double E[kMaxParams * 3] = {};
               for (; q < qend && o_pt[list[q]] == j; ++q) {
                 const std::size_t k = list[q];
-                const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
-                const double* X = &Jx[6 * k];
-                for (int a = 0; a < n; ++a) {
-                  for (int c = 0; c < n; ++c) P[a * n + c] += J[a] * J[c] + J[n + a] * J[n + c];
-                  for (int c = 0; c < 3; ++c) E[3 * a + c] += J[a] * X[c] + J[n + a] * X[3 + c];
+                if (fb.kind != BlockKind::Depth) {
+                  const double* J = fb.kind == BlockKind::Pose ? &Jp[12 * k] : &Jk[2 * static_cast<std::size_t>(np) * k];
+                  const double* X = &Jx[6 * k];
+                  for (int a = 0; a < n; ++a) {
+                    for (int c = 0; c < n; ++c) P[a * n + c] += J[a] * J[c] + J[n + a] * J[n + c];
+                    for (int c = 0; c < 3; ++c) E[3 * a + c] += J[a] * X[c] + J[n + a] * X[3 + c];
+                  }
+                }
+                if (!depth_here) continue;
+                if (const double* Jd = depth_row(fb.kind, k)) {
+                  const double* X = &dJx[3 * k];
+                  for (int a = 0; a < n; ++a) {
+                    for (int c = 0; c < n; ++c) P[a * n + c] += Jd[a] * Jd[c];
+                    for (int c = 0; c < 3; ++c) E[3 * a + c] += Jd[a] * X[c];
+                  }
                 }
               }
               if (point_off[j] < 0) continue;
@@ -1164,6 +1393,10 @@ struct CpuBackend::Impl {
           const double* J = &Jx[6 * k];
           t[2 * k] = J[0] * w[0] + J[1] * w[1] + J[2] * w[2];
           t[2 * k + 1] = J[3] * w[0] + J[4] * w[1] + J[5] * w[2];
+          if (has_depth && o_dw[k] != 0) {
+            const double* Jd = &dJx[3 * k];
+            td[k] = Jd[0] * w[0] + Jd[1] * w[1] + Jd[2] * w[2];
+          }
         }
       }
     });
@@ -1182,9 +1415,13 @@ struct CpuBackend::Impl {
         double u[3] = {0, 0, 0};
         for (std::size_t k = pt_begin[j]; k < pt_begin[j + 1]; ++k) {
           jf_times(dx_f.data(), k, &t[2 * k]);
+          const bool depth_row_k = has_depth && o_dw[k] != 0;
+          if (depth_row_k) td[k] = jf_depth(dx_f.data(), k);
           if (e < 0) continue;
           const double* J = &Jx[6 * k];
           for (int c = 0; c < 3; ++c) u[c] += J[c] * t[2 * k] + J[3 + c] * t[2 * k + 1];
+          if (depth_row_k)
+            for (int c = 0; c < 3; ++c) u[c] += dJx[3 * k + c] * td[k];
         }
         if (e < 0) continue;
         for (int c = 0; c < 3; ++c) u[c] += g_e[e + c];
@@ -1204,6 +1441,18 @@ struct CpuBackend::Impl {
       }
       return m0 * (r[2 * k] + m0 / 2) + m1 * (r[2 * k + 1] + m1 / 2);
     });
+    if (has_depth) {
+      out.model_cost_change -= pool.sum(nobs, [&](std::size_t k) {
+        if (o_dw[k] == 0) return 0.0;
+        double m = td[k];
+        const int e = point_off[o_pt[k]];
+        if (e >= 0) {
+          const double* J = &dJx[3 * k];
+          m += J[0] * dx_e[e] + J[1] * dx_e[e + 1] + J[2] * dx_e[e + 2];
+        }
+        return m * (dr[k] + m / 2);
+      });
+    }
     if (!fsets.empty()) {
       factors_times(dx_f.data());
       for (const FactorSet& fs : fsets) {
@@ -1256,6 +1505,12 @@ struct CpuBackend::Impl {
           cand.sets[8 * idx + 7] = cur.sets[8 * idx + 7] * std::exp(delta[0]);
           add_difference(&cand.sets[8 * idx + 7], &cur.sets[8 * idx + 7], 1);
           break;
+        case BlockKind::Depth: {
+          double* c = &cand.depth[2 * idx];
+          for (int a = 0; a < 2; ++a) c[a] += delta[a];
+          add_difference(c, &cur.depth[2 * idx], 2);
+          break;
+        }
         // The Manhattan frame: R_M <- Exp(dphi) R_M, or Exp(dtheta up) R_M.
         case BlockKind::Frame: {
           double v[3];
@@ -1301,6 +1556,7 @@ struct CpuBackend::Impl {
         case BlockKind::SetRigid: v = &cur.sets[8 * idx]; n = 7; break;
         case BlockKind::SetScale: v = &cur.sets[8 * idx + 7]; n = 1; break;
         case BlockKind::Frame: v = cur.frame; n = 4; break;
+        case BlockKind::Depth: v = &cur.depth[2 * idx]; n = 2; break;
       }
       for (int a = 0; a < n; ++a) s += v[a] * v[a];
     }
@@ -1346,6 +1602,8 @@ void CpuBackend::write_back(Problem& problem) const {
                                          [](FrameRelation r) { return r != FrameRelation::Identity; });
   if (!problem.set_transform.empty() || any_transform) problem.set_transform = impl_->cur.sets;
   if (impl_->frame_dof > 0) problem.manhattan_frame.assign(impl_->cur.frame, impl_->cur.frame + 4);
+  if (!problem.depth_correction.empty() || !problem.depth_correction_free.empty())
+    problem.depth_correction = impl_->cur.depth;
 }
 
 }  // namespace jba::cpu

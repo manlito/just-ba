@@ -275,3 +275,28 @@ def test_manhattan_lines():
     q.line_xy = rng.uniform([0, 0, 0, 0], [640, 480, 640, 480], size=(p.num_lines, 4))
     r = jba.assign_lines(q)
     assert not r.accepted and "Manhattan" in r.message
+
+
+def test_depth_in_refine():
+    sc = scene.room(n_images=24, n_points=3000)
+    n = len(sc["poses"])
+    R = jba.matrix_from_quat(sc["poses"][:, :4])
+    rng = np.random.default_rng(5)
+    depth = []
+    for i in range(n):
+        pc = sc["points"][sc["point_of"][i]] @ R[i].T + sc["poses"][i, 4:]
+        d = pc[:, 2] + rng.normal(0, 0.01, pc.shape[0])
+        d[rng.random(d.size) < 0.5] = np.nan
+        depth.append(d)
+    s = jba.make_problem("PINHOLE", scene.K, poses=sc["tracked"])
+    pairs = np.array([(i, (i + 1) % n) for i in range(n)], dtype=np.int32)
+    jba.add_relative_priors_from_poses(s, sc["tracked"], pairs)
+    r = jba.refine(s, sc["keypoints"], matches=sc["matches"], keypoint_depth=depth)
+    assert r.problem.num_depth_observations > 0.3 * r.problem.num_observations
+    rep = r.report
+    has = ~np.isnan(r.problem.obs_depth)
+    assert rep.depth_cost > 0
+    np.testing.assert_allclose(rep.depth_refined[has], rep.depth_corrected[has], atol=0.1)
+    assert np.isnan(rep.depth_refined[~has]).all()
+    p = r.problem
+    assert p.depth_kind == jba.DepthKind.Z and p.depth_form == jba.DepthForm.LINEAR

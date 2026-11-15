@@ -5,8 +5,13 @@ For observation (i, j) with a depth reading d and the per-image correction
 
     p   = R_i X_j + t_i                       point in camera i
     z   = p_z            (depth along the optical axis), or |p| (range along the ray)
-    r   = z - (a d + b)                       linear form, metres
-    r   = 1 / z - 1 / (a d + b)               inverse form, 1 / metres
+    r   = (z - b) / a - d                     linear form, in the reading's units
+    r   = a / (z - b) - 1 / d                 inverse form
+
+The solved depth is mapped into the reading's units rather than the reading into
+the scene's (D87): scaling the scene by s with (a, b) -> (s a, s b) leaves r
+unchanged, so a free scale cannot shrink the scene to shrink the residuals. With
+a = 1, b = 0 both say z - d and 1 / z - 1 / d.
 
 Unwhitened; the backend divides by sigma. Tangents: the pose as in
 reprojection.py; the point and (a, b) additively. Jacobians are row-major 1 x 6,
@@ -37,8 +42,9 @@ def _make(range_depth: bool, inverse: bool):
         R = (sym.eye(3) + _skew(d)) * quat_to_rotation(q)
         p = R * (point + sym.vector(*x)) + t + sym.vector(*e)
         z = sym.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) if range_depth else p[2]
-        target = (correction[0] + c[0]) * depth_reading + correction[1] + c[1]
-        value = 1 / z - 1 / target if inverse else z - target
+        a = correction[0] + c[0]
+        b = correction[1] + c[1]
+        value = a / (z - b) - 1 / depth_reading if inverse else (z - b) / a - depth_reading
         r = sym.matrix([[value]])
         residual = _at_zero(r, all_d)
         J_pose = _at_zero(r.jacobian(list(d) + list(e)), all_d)

@@ -97,6 +97,22 @@ jba_parity_case(lines_two_groups "--model PINHOLE --points 0 --relative-priors 2
                 "--check-parameters")
 jba_parity_case(lines_two_groups_dof3 "--model PINHOLE --points 0 --relative-priors 2 --prior-groups 2 --lines 40 --line-dof 3"
                 "--check-parameters")
+# Depth at keypoints (milestone 3): what the reading measures, the residual's form,
+# free scale and offset, outliers.
+jba_parity_case(depth "--model PINHOLE --depth 0.5" "--check-parameters")
+jba_parity_case(depth_range "--model PINHOLE --depth 0.5 --depth-kind range" "--check-parameters")
+jba_parity_case(depth_inverse "--model PINHOLE --depth 0.5 --depth-form inverse" "--check-parameters")
+jba_parity_case(depth_range_inverse "--model RADIAL --depth 0.5 --depth-kind range --depth-form inverse"
+                "--check-parameters")
+jba_parity_case(depth_free "--model PINHOLE --depth 0.5 --depth-free 3" "--check-parameters")
+jba_parity_case(depth_free_scale "--model PINHOLE --depth 0.5 --depth-free 1" "--check-parameters")
+jba_parity_case(depth_free_offset "--model PINHOLE --depth 0.5 --depth-free 2" "--check-parameters")
+jba_parity_case(depth_outliers "--model SIMPLE_RADIAL --depth 0.5 --depth-outliers 0.1" "--check-parameters")
+jba_parity_case(depth_huber "--model SIMPLE_RADIAL --depth 0.5 --depth-outliers 0.1" "--depth-loss huber:2 --check-parameters")
+jba_parity_case(depth_priors "--model PINHOLE --depth 0.3 --depth-free 3 --relative-priors 2 --gravity-priors"
+                "--check-parameters")
+jba_parity_case(depth_fixed_blocks "--model PINHOLE --depth 0.5 --depth-free 3 --fix-images 2 --fix-points 20"
+                "--check-parameters")
 
 # Against Ceres's exact solver: costs must agree, but an inexact inner solve takes
 # more outer iterations by design, so the iteration ratio is not the matched one.

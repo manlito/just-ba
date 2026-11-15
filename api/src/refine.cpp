@@ -1,6 +1,7 @@
 #include "jba/refine.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <stdexcept>
@@ -112,6 +113,8 @@ std::size_t filter(Problem& p, std::vector<std::int32_t>& obs_keypoint, const So
   q.obs_point.clear();
   q.obs_xy.clear();
   q.obs_sigma.clear();
+  q.obs_depth.clear();
+  q.obs_depth_sigma.clear();
   std::vector<std::int32_t> kp;
   std::size_t removed = 0;
   for (std::size_t k = 0; k < n_obs; ++k) {
@@ -124,11 +127,74 @@ std::size_t filter(Problem& p, std::vector<std::int32_t>& obs_keypoint, const So
     q.obs_point.push_back(j);
     q.obs_xy.insert(q.obs_xy.end(), {p.obs_xy[2 * k], p.obs_xy[2 * k + 1]});
     if (!p.obs_sigma.empty()) q.obs_sigma.push_back(p.obs_sigma[k]);
+    if (!p.obs_depth.empty()) q.obs_depth.push_back(p.obs_depth[k]);
+    if (!p.obs_depth_sigma.empty()) q.obs_depth_sigma.push_back(p.obs_depth_sigma[k]);
     kp.push_back(obs_keypoint[k]);
   }
   p = std::move(q);
   obs_keypoint = std::move(kp);
   return removed;
+}
+
+// Starting depth corrections for images whose correction is free and was not given:
+// from the triangulated points, the median ratio (scale only), median difference
+// (offset only), or a line fit refit without residuals over three median absolute
+// deviations (both).
+void initialize_depth_correction(Problem& p) {
+  const std::size_t n_img = p.num_images();
+  if (p.depth_correction_free.empty() || p.obs_depth.empty()) return;
+  p.depth_correction.assign(2 * n_img, 0);
+  for (std::size_t i = 0; i < n_img; ++i) p.depth_correction[2 * i] = 1;
+  std::vector<std::vector<std::array<double, 2>>> pairs(n_img);  // (reading, solved depth)
+  for (std::size_t k = 0; k < p.num_observations(); ++k) {
+    if (std::isnan(p.obs_depth[k])) continue;
+    const auto i = static_cast<std::size_t>(p.obs_image[k]);
+    if (p.depth_correction_free[i] == 0) continue;
+    const double* pose = &p.poses[7 * i];
+    double pc[3];
+    quat_rotate(pose, &p.points[3 * static_cast<std::size_t>(p.obs_point[k])], pc);
+    for (int a = 0; a < 3; ++a) pc[a] += pose[4 + a];
+    const double z = p.depth_kind == DepthKind::Range ? std::sqrt(pc[0] * pc[0] + pc[1] * pc[1] + pc[2] * pc[2]) : pc[2];
+    if (z > 0) pairs[i].push_back({p.obs_depth[k], z});
+  }
+  auto median = [](std::vector<double> v) {
+    std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2), v.end());
+    return v[v.size() / 2];
+  };
+  for (std::size_t i = 0; i < n_img; ++i) {
+    const auto& pr = pairs[i];
+    const std::uint8_t mask = p.depth_correction_free[i];
+    if (pr.size() < 3) continue;
+    double a = 1, b = 0;
+    std::vector<double> v;
+    if (mask == kDepthScale) {
+      for (const auto& [d, z] : pr) v.push_back(z / d);
+      a = median(v);
+    } else if (mask == kDepthOffset) {
+      for (const auto& [d, z] : pr) v.push_back(z - d);
+      b = median(v);
+    } else {
+      std::vector<char> use(pr.size(), 1);
+      for (int pass = 0; pass < 2; ++pass) {
+        double sw = 0, sd = 0, sz = 0, sdd = 0, sdz = 0;
+        for (std::size_t q = 0; q < pr.size(); ++q) {
+          if (!use[q]) continue;
+          sw += 1, sd += pr[q][0], sz += pr[q][1], sdd += pr[q][0] * pr[q][0], sdz += pr[q][0] * pr[q][1];
+        }
+        const double det = sw * sdd - sd * sd;
+        if (!(sw >= 3 && det > 1e-12 * sw * sdd)) break;
+        a = (sw * sdz - sd * sz) / det;
+        b = (sz - a * sd) / sw;
+        std::vector<double> res;
+        for (const auto& [d, z] : pr) res.push_back(std::abs(z - (a * d + b)));
+        const double mad = median(res);
+        for (std::size_t q = 0; q < pr.size(); ++q) use[q] = res[q] <= 3 * mad + 1e-12;
+      }
+      if (!(a > 0)) a = 1, b = 0;
+    }
+    p.depth_correction[2 * i] = a;
+    p.depth_correction[2 * i + 1] = b;
+  }
 }
 
 }  // namespace
@@ -139,6 +205,11 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   if (!in.keypoint_sigma.empty() &&
       in.keypoint_sigma.size() != static_cast<std::size_t>(in.keypoints.begin.back()))
     throw std::invalid_argument("refine: keypoint_sigma must have one value per keypoint");
+  const auto n_kp = static_cast<std::size_t>(in.keypoints.begin.back());
+  if (!in.keypoint_depth.empty() && in.keypoint_depth.size() != n_kp)
+    throw std::invalid_argument("refine: keypoint_depth must have one value per keypoint");
+  if (!in.keypoint_depth_sigma.empty() && in.keypoint_depth_sigma.size() != in.keypoint_depth.size())
+    throw std::invalid_argument("refine: keypoint_depth_sigma must have one value per keypoint, with keypoint_depth");
 
   Problem base = in.scene;
   base.points.clear();
@@ -147,6 +218,8 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   base.obs_point.clear();
   base.obs_xy.clear();
   base.obs_sigma.clear();
+  base.obs_depth.clear();
+  base.obs_depth_sigma.clear();
   base.image_fixed.clear();
   if (base.poses.empty()) {
     for (std::size_t i = 0; i < n_img; ++i) base.poses.insert(base.poses.end(), {1, 0, 0, 0, 0, 0, 0});
@@ -252,14 +325,22 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
         problem.obs_point.push_back(j);
         const double* xy = in.keypoints.at(imgs[q], kps[q]);
         problem.obs_xy.insert(problem.obs_xy.end(), {xy[0], xy[1]});
-        if (!in.keypoint_sigma.empty())
-          problem.obs_sigma.push_back(
-              in.keypoint_sigma[static_cast<std::size_t>(in.keypoints.begin[static_cast<std::size_t>(imgs[q])] + kps[q])]);
+        const auto kp_index = static_cast<std::size_t>(in.keypoints.begin[static_cast<std::size_t>(imgs[q])] + kps[q]);
+        if (!in.keypoint_sigma.empty()) problem.obs_sigma.push_back(in.keypoint_sigma[kp_index]);
+        if (!in.keypoint_depth.empty()) {
+          const double d = in.keypoint_depth[kp_index];
+          problem.obs_depth.push_back(d > 0 && std::isfinite(d) ? d : std::nan(""));
+          if (!in.keypoint_depth_sigma.empty()) {
+            const double s = in.keypoint_depth_sigma[kp_index];
+            problem.obs_depth_sigma.push_back(s > 0 && std::isfinite(s) ? s : 1.0);
+          }
+        }
         obs_keypoint.push_back(kps[q]);
       }
     }
     if (problem.num_points() == 0 && problem.num_relative_priors() + problem.num_global_priors() == 0)
       throw std::runtime_error("refine: no point could be triangulated and there are no priors");
+    if (round == 0 && in.scene.depth_correction.empty()) initialize_depth_correction(problem);
 
     out.summaries.push_back(solve(problem, o.solver));
     out.rejected_observations = filter(problem, obs_keypoint, o.solver, o);
@@ -268,6 +349,7 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     base.intrinsics = problem.intrinsics;
     base.set_transform = problem.set_transform;
     base.manhattan_frame = problem.manhattan_frame;
+    base.depth_correction = problem.depth_correction;
   }
   if (out.manhattan.accepted) out.manhattan.frame = problem.manhattan_frame;
 

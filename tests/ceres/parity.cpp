@@ -171,6 +171,8 @@ int main(int argc, char** argv) {
       // Prior set transforms are parameters too, and the Manhattan frame.
       for (std::size_t a = 0; a < ours.set_transform.size() && a < ref.set_transform.size(); ++a)
         transform_diff = std::max(transform_diff, std::abs(ours.set_transform[a] - ref.set_transform[a]));
+      for (std::size_t a = 0; a < ours.depth_correction.size() && a < ref.depth_correction.size(); ++a)
+        transform_diff = std::max(transform_diff, std::abs(ours.depth_correction[a] - ref.depth_correction[a]));
       if (ours.manhattan_frame.size() == 4 && ref.manhattan_frame.size() == 4) {
         const double* q1 = ours.manhattan_frame.data();
         const double* q2 = ref.manhattan_frame.data();

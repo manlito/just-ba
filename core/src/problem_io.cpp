@@ -278,6 +278,32 @@ std::string validate_priors(const Problem& p) {
       return seg + " has a sigma that is not positive and finite";
     if (!p.line_axis.empty() && (p.line_axis[k] < -1 || p.line_axis[k] > 2)) return seg + " has an axis other than -1, 0, 1, 2";
   }
+  if (!p.obs_depth.empty() && p.obs_depth.size() != p.num_observations())
+    return "obs_depth must have one entry per observation";
+  if (!p.obs_depth_sigma.empty() && p.obs_depth_sigma.size() != p.obs_depth.size())
+    return "obs_depth_sigma must have one entry per observation, with obs_depth";
+  for (std::size_t k = 0; k < p.obs_depth.size(); ++k) {
+    const double d = p.obs_depth[k];
+    if (std::isnan(d)) continue;
+    if (!(d > 0 && std::isfinite(d))) return "observation " + std::to_string(k) + " has a depth that is not positive and finite";
+    if (!p.obs_depth_sigma.empty() && !(p.obs_depth_sigma[k] > 0 && std::isfinite(p.obs_depth_sigma[k])))
+      return "observation " + std::to_string(k) + " has a depth sigma that is not positive and finite";
+  }
+  if (p.depth_kind != DepthKind::Z && p.depth_kind != DepthKind::Range) return "unknown depth kind";
+  if (p.depth_form != DepthForm::Linear && p.depth_form != DepthForm::Inverse) return "unknown depth form";
+  if (!p.depth_correction.empty()) {
+    if (p.depth_correction.size() != 2 * n_img) return "depth_correction must hold 2 values per image";
+    for (std::size_t i = 0; i < n_img; ++i) {
+      if (!std::isfinite(p.depth_correction[2 * i]) || !std::isfinite(p.depth_correction[2 * i + 1]))
+        return "image " + std::to_string(i) + " has a depth correction that is not finite";
+      if (!(p.depth_correction[2 * i] > 0)) return "image " + std::to_string(i) + " has a depth scale that is not positive";
+    }
+  }
+  if (!p.depth_correction_free.empty()) {
+    if (p.depth_correction_free.size() != n_img) return "depth_correction_free must have one entry per image";
+    for (auto m : p.depth_correction_free)
+      if (m > 3) return "depth_correction_free holds bits other than 1 (scale) and 2 (offset)";
+  }
   if (p.manhattan_dof != 1 && p.manhattan_dof != 3) return "manhattan_dof must be 1 or 3";
   if (!p.manhattan_frame.empty()) {
     if (p.manhattan_frame.size() != 4) return "manhattan_frame must hold 4 values";
@@ -315,6 +341,10 @@ std::string validate_priors(const Problem& p) {
 }
 
 }  // namespace
+
+std::size_t Problem::num_depth_observations() const {
+  return static_cast<std::size_t>(std::count_if(obs_depth.begin(), obs_depth.end(), [](double d) { return !std::isnan(d); }));
+}
 
 bool Problem::has_manhattan() const {
   if (manhattan_frame.empty()) return false;
@@ -435,6 +465,16 @@ void write_problem(const std::string& path, const Problem& p) {
     if (!p.line_sigma.empty()) w.array("lines.sigma", p.line_sigma, 1);
     if (!p.line_axis.empty()) w.array("lines.axis", p.line_axis, 1);
   }
+  if (!p.obs_depth.empty()) {
+    w.array("depth.obs", p.obs_depth, 1);
+    if (!p.obs_depth_sigma.empty()) w.array("depth.obs_sigma", p.obs_depth_sigma, 1);
+    const std::vector<std::int32_t> kind = {static_cast<std::int32_t>(p.depth_kind)};
+    const std::vector<std::int32_t> form = {static_cast<std::int32_t>(p.depth_form)};
+    w.array("depth.kind", kind, 1);
+    w.array("depth.form", form, 1);
+  }
+  if (!p.depth_correction.empty()) w.array("depth.correction", p.depth_correction, 2);
+  if (!p.depth_correction_free.empty()) w.array("depth.correction_free", p.depth_correction_free, 1);
   if (!p.manhattan_frame.empty()) {
     w.array("manhattan.frame", p.manhattan_frame, 1);
     const std::vector<std::int32_t> dof = {p.manhattan_dof};
@@ -459,7 +499,9 @@ void write_problem(const std::string& path, const Problem& p) {
       "prior.global.sqrt_info", "prior.set.relation", "prior.set.transform", "loss.type",
       "loss.scale",            "gravity.world",       "prior.gravity.image",   "prior.gravity.direction",
       "prior.gravity.sigma",   "lines.image",         "lines.xy",              "lines.sigma",
-      "lines.axis",            "manhattan.frame",     "manhattan.dof"};
+      "lines.axis",            "manhattan.frame",     "manhattan.dof",         "depth.obs",
+      "depth.obs_sigma",       "depth.kind",          "depth.form",            "depth.correction",
+      "depth.correction_free"};
   for (std::size_t i = 0; i < p.extra.size(); ++i) {
     const auto& s = p.extra[i];
     bool repeated = std::find(std::begin(kKnown), std::end(kKnown), s.name) != std::end(kKnown);
@@ -565,6 +607,17 @@ Problem read_problem(const std::string& path) {
       if (dof.size() != 1) fail(path, "manhattan.dof must hold one value");
       p.manhattan_dof = dof[0];
     }
+    else if (n == "depth.obs") take(path, s, 1, p.obs_depth);
+    else if (n == "depth.obs_sigma") take(path, s, 1, p.obs_depth_sigma);
+    else if (n == "depth.kind" || n == "depth.form") {
+      std::vector<std::int32_t> v;
+      take(path, s, 1, v);
+      if (v.size() != 1) fail(path, n + " must hold one value");
+      if (n == "depth.kind") p.depth_kind = static_cast<DepthKind>(v[0]);
+      else p.depth_form = static_cast<DepthForm>(v[0]);
+    }
+    else if (n == "depth.correction") take(path, s, 2, p.depth_correction);
+    else if (n == "depth.correction_free") take(path, s, 1, p.depth_correction_free);
     else if (n == "loss.type") take(path, s, 1, p.loss_type);
     else if (n == "loss.scale") take(path, s, 1, p.loss_scale);
     else p.extra.push_back(std::move(s));
