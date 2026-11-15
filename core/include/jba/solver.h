@@ -79,6 +79,9 @@ bool backend_available(BackendKind kind);
 // The linear solver of each step (document 03, strategies A and B). Both eliminate
 // the points by the Schur complement.
 enum class LinearSolverType {
+  // The backend's fastest: SparseSchur on Metal, IterativeSchur on the CPU (the only
+  // one it has). Measured from 16 to 2,000 images (D92).
+  Auto,
   // A: the reduced camera system applied implicitly, preconditioned conjugate
   // gradients, preconditioner its camera blocks (Ceres's ITERATIVE_SCHUR with
   // SCHUR_JACOBI). Every backend.
@@ -89,7 +92,9 @@ enum class LinearSolverType {
   SparseSchur,
 };
 
-std::string_view linear_solver_name(LinearSolverType type);  // "iterative_schur", "sparse_schur"
+std::string_view linear_solver_name(LinearSolverType type);  // "auto", "iterative_schur", "sparse_schur"
+// The type Auto stands for on a backend; other types are returned as they are.
+LinearSolverType resolve_linear_solver(LinearSolverType type, BackendKind backend);
 std::optional<LinearSolverType> linear_solver_from_name(std::string_view name);
 
 struct SolverOptions {
@@ -105,7 +110,7 @@ struct SolverOptions {
   double min_relative_decrease = 1e-3;
   int max_consecutive_invalid_steps = 5;  // the solve fails on reaching this count
 
-  LinearSolverType linear_solver = LinearSolverType::IterativeSchur;
+  LinearSolverType linear_solver = LinearSolverType::Auto;
   // Conjugate gradients (IterativeSchur only).
   int max_linear_iterations = 500;
   int min_linear_iterations = 0;

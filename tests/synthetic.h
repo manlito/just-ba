@@ -104,9 +104,12 @@ inline void reference_project(jba::CameraModel model, const double* k, const dou
 }
 
 // A scene of `images` cameras around the origin looking roughly at a cloud of
-// `points` points, each point seen by every camera with pixel noise.
+// `points` points, each point seen by every camera with pixel noise. With
+// track_length > 0, point j is seen only by images j mod images and the next
+// track_length - 1 on the ring, as in a walked capture; 0 keeps every image (and the
+// same random sequence as before the option existed).
 inline jba::Problem random_problem(jba::CameraModel model, int images, int points, std::uint64_t seed,
-                                   double pixel_noise = 0.5) {
+                                   double pixel_noise = 0.5, int track_length = 0) {
   std::mt19937_64 rng(seed);
   jba_test::Uniform u(-1, 1);
   jba_test::Normal noise(0, pixel_noise);
@@ -128,6 +131,7 @@ inline jba::Problem random_problem(jba::CameraModel model, int images, int point
   for (int i = 0; i < images; ++i) {
     const double* pose = &p.poses[7 * static_cast<std::size_t>(i)];
     for (int j = 0; j < points; ++j) {
+      if (track_length > 0 && (i - j % images + images) % images >= track_length) continue;
       const double* X = &p.points[3 * static_cast<std::size_t>(j)];
       double pc[3];
       jba::quat_rotate(pose, X, pc);

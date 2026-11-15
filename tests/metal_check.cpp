@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
     o.parameter_tolerance = 1e-12;
     double max_cost = 1e-6, max_centre = 1e-4, max_rotation = 1e-4;
     bool repeat = true;
-    jba::LinearSolverType metal_solver = jba::LinearSolverType::IterativeSchur;
+    jba::LinearSolverType metal_solver = jba::LinearSolverType::IterativeSchur;  // the flag's default
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
       if (key == "--no-repeat") {
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
     auto run = [&](jba::BackendKind kind, jba::Problem& p, double& seconds) {
       jba::SolverOptions opts = o;
       opts.backend = kind;
-      if (kind == jba::BackendKind::Metal) opts.linear_solver = metal_solver;
+      opts.linear_solver = kind == jba::BackendKind::Metal ? metal_solver : jba::LinearSolverType::IterativeSchur;
       const auto t0 = std::chrono::steady_clock::now();
       const jba::SolverSummary s = jba::solve(p, opts);
       seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();

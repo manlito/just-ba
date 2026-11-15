@@ -62,6 +62,15 @@ SYNTHETIC = [
                                        "--global-priors --global-relation similarity --seed 14"),
     ("synthetic-opencv-30", "--model OPENCV --images 30 --points 3000 --seed 15"),
 ]
+# The main size range (D5: 50 to 2,000 images), with --large: a walked capture, each
+# point seen by 8 neighbouring images, relative priors to the 2 next images. Not in
+# the stored baselines; the CPU and Ceres take minutes on the largest.
+LARGE = [
+    ("synthetic-walk-500", "--model PINHOLE --images 500 --points 60000 --track-length 8 --relative-priors 2 "
+                           "--seed 21"),
+    ("synthetic-walk-2000", "--model PINHOLE --images 2000 --points 240000 --track-length 8 --relative-priors 2 "
+                            "--seed 22"),
+]
 COUNTS = ("iterations", "accepted_steps", "linear_iterations", "termination")
 
 
@@ -124,7 +133,7 @@ def run(args):
         else:
             print(f"skipping {name}: not downloaded (python3 tests/data/fetch_bal.py)", file=sys.stderr)
     tmp = tempfile.mkdtemp(prefix="jba_bench_")
-    for name, opts in SYNTHETIC:
+    for name, opts in SYNTHETIC + (LARGE if args.large else []):
         p = os.path.join(tmp, name + ".jba")
         subprocess.run([make, p, *opts.split()], check=True, capture_output=True)
         problems.append((name, p))
@@ -194,11 +203,15 @@ def main():
     ap.add_argument("--repeats", type=int, default=3, help="runs per problem; the best time is kept")
     ap.add_argument("--threads", type=int, default=0, help="solver threads (0: all)")
     ap.add_argument("--backend", default="cpu", choices=["cpu", "metal"])
-    ap.add_argument("--linear-solver", default="iterative_schur", choices=["iterative_schur", "sparse_schur"])
+    ap.add_argument("--linear-solver", default="auto", choices=["auto", "iterative_schur", "sparse_schur"],
+                    help="auto: sparse_schur on metal, iterative_schur on cpu (the library's rule)")
+    ap.add_argument("--large", action="store_true", help="add the main-size-range problems (LARGE)")
     ap.add_argument("--ceres", help="jba_ceres_solve to run on every problem too (speed reference)")
     ap.add_argument("--ceres-sparse-library", default="accelerate", choices=["eigen", "accelerate"])
     ap.add_argument("--only", help="comma-separated substrings of problem names")
     args = ap.parse_args()
+    if args.linear_solver == "auto":
+        args.linear_solver = "sparse_schur" if args.backend == "metal" else "iterative_schur"
     result = run(args)
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

@@ -1,7 +1,7 @@
 // Writes a synthetic problem for the parity tests and the benchmark, with perturbed
 // starting values.
 //
-//   jba_make_problem <out.jba> [--model NAME] [--images N] [--points N] [--seed N]
+//   jba_make_problem <out.jba> [--model NAME] [--images N] [--points N] [--seed N] [--track-length N]
 //                    [--noise PX] [--outliers FRACTION] [--free-intrinsics MASK]
 //                    [--per-image-intrinsics] [--fix-images N] [--fix-points N] [--sigma PX]
 //                    [--relative-priors N] [--global-priors] [--global-relation identity|rigid|similarity]
@@ -12,6 +12,8 @@
 //                    [--depth-free MASK] [--depth-outliers FRACTION]
 //
 // MASK is the IntrinsicsGroup bit mask: 1 focal, 2 principal point, 4 distortion.
+// --track-length N: each point is seen by N neighbouring images on the ring only (a
+// walked capture); by default every image sees every point.
 // Priors come from the true poses with noise: relative priors tie each image to
 // its N next neighbours on the ring; global priors are in a frame related to the
 // working frame by a random transform of the given kind. Outliers are gross errors
@@ -44,7 +46,7 @@ int main(int argc, char** argv) {
     }
     const std::string out = argv[1];
     jba::CameraModel model = jba::CameraModel::SimpleRadial;
-    int images = 12, points = 300, fix_images = 0, fix_points = 0, free_mask = 0;
+    int images = 12, points = 300, fix_images = 0, fix_points = 0, free_mask = 0, track_length = 0;
     std::uint64_t seed = 5;
     double noise = 0.5, outliers = 0, sigma = 0;
     bool per_image = false, global_priors = false, gravity_priors = false;
@@ -86,6 +88,7 @@ int main(int argc, char** argv) {
       } else if (key == "--images") images = std::stoi(val);
       else if (key == "--points") points = std::stoi(val);
       else if (key == "--seed") seed = std::stoull(val);
+      else if (key == "--track-length") track_length = std::stoi(val);
       else if (key == "--noise") noise = std::stod(val);
       else if (key == "--outliers") outliers = std::stod(val);
       else if (key == "--free-intrinsics") free_mask = std::stoi(val);
@@ -117,7 +120,7 @@ int main(int argc, char** argv) {
       else throw std::invalid_argument("unknown option " + key);
     }
 
-    auto p = jba_test::random_problem(model, images, points, seed, noise);
+    auto p = jba_test::random_problem(model, images, points, seed, noise, track_length);
     std::mt19937_64 rng(seed + 1000);
     jba_test::Normal n(0, 1);
     jba_test::Uniform u(0, 1);

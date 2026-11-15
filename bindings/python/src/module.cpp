@@ -214,7 +214,9 @@ NB_MODULE(_core, m) {
       .value("CPU", jba::BackendKind::Cpu)
       .value("METAL", jba::BackendKind::Metal);
   nb::enum_<jba::LinearSolverType>(m, "LinearSolver",
-                                   "Inner solve: ITERATIVE_SCHUR (every backend) or SPARSE_SCHUR (Metal).")
+                                   "Inner solve: AUTO (the backend's fastest), ITERATIVE_SCHUR (every backend) "
+                                   "or SPARSE_SCHUR (Metal).")
+      .value("AUTO", jba::LinearSolverType::Auto)
       .value("ITERATIVE_SCHUR", jba::LinearSolverType::IterativeSchur)
       .value("SPARSE_SCHUR", jba::LinearSolverType::SparseSchur);
   m.def("backend_available", &jba::backend_available, "kind"_a,

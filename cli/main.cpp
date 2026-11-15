@@ -36,8 +36,8 @@ constexpr const char* kUsage =
     "                               the file's loss.* sections, else the library's defaults\n"
     "  --gauge <auto|none>          default auto\n"
     "  --backend <cpu|metal>        default cpu\n"
-    "  --linear-solver <iterative_schur|sparse_schur>  default iterative_schur; sparse_schur\n"
-    "                               needs the metal backend\n"
+    "  --linear-solver <auto|iterative_schur|sparse_schur>  default auto: sparse_schur on\n"
+    "                               metal, iterative_schur on cpu (sparse_schur needs metal)\n"
     "  --threads <n>                default 0 (all hardware threads)\n";
 
 // A string as a JSON string literal, quotes included.
@@ -186,14 +186,15 @@ int solve(int argc, char** argv) {
   std::printf(
       "{\"input\": %s, \"model\": \"%s\", \"images\": %zu, \"points\": %zu, \"observations\": %zu, "
       "\"relative_priors\": %zu, \"global_priors\": %zu, \"gravity_priors\": %zu, \"loss\": \"%s\", "
-      "\"loss_scale\": %g, \"gauge\": %s, \"backend\": \"%s\", "
+      "\"loss_scale\": %g, \"gauge\": %s, \"backend\": \"%s\", \"linear_solver\": \"%s\", "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
       "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f, "
       "\"cost_by_type\": %s}\n",
       json_string(input).c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
       p.num_observations(), p.num_relative_priors(), p.num_global_priors(), p.num_gravity_priors(),
       std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, gauge_json(s.gauge).c_str(),
-      std::string(jba::backend_name(o.backend)).c_str(), s.initial_cost,
+      std::string(jba::backend_name(o.backend)).c_str(),
+      std::string(jba::linear_solver_name(jba::resolve_linear_solver(o.linear_solver, o.backend))).c_str(), s.initial_cost,
       s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
       std::string(jba::termination_name(s.termination)).c_str(), json_string(s.message).c_str(), s.time_seconds,
       by_type.c_str());

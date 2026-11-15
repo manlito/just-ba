@@ -42,6 +42,7 @@ bool backend_available(BackendKind kind) {
 
 std::string_view linear_solver_name(LinearSolverType type) {
   switch (type) {
+    case LinearSolverType::Auto: return "auto";
     case LinearSolverType::IterativeSchur: return "iterative_schur";
     case LinearSolverType::SparseSchur: return "sparse_schur";
   }
@@ -49,9 +50,14 @@ std::string_view linear_solver_name(LinearSolverType type) {
 }
 
 std::optional<LinearSolverType> linear_solver_from_name(std::string_view name) {
-  for (LinearSolverType t : {LinearSolverType::IterativeSchur, LinearSolverType::SparseSchur})
+  for (LinearSolverType t : {LinearSolverType::Auto, LinearSolverType::IterativeSchur, LinearSolverType::SparseSchur})
     if (linear_solver_name(t) == name) return t;
   return std::nullopt;
+}
+
+LinearSolverType resolve_linear_solver(LinearSolverType type, BackendKind backend) {
+  if (type != LinearSolverType::Auto) return type;
+  return backend == BackendKind::Metal ? LinearSolverType::SparseSchur : LinearSolverType::IterativeSchur;
 }
 
 namespace {
@@ -70,7 +76,9 @@ SolverSummary run(B& backend, Problem& problem, const SolverOptions& options, co
 
 }  // namespace
 
-SolverSummary solve(Problem& problem, const SolverOptions& options, const IterationCallback& callback) {
+SolverSummary solve(Problem& problem, const SolverOptions& requested, const IterationCallback& callback) {
+  SolverOptions options = requested;
+  options.linear_solver = resolve_linear_solver(requested.linear_solver, requested.backend);
   if (auto err = validate(problem); !err.empty()) throw std::invalid_argument("invalid problem: " + err);
   if (!has_reprojection(problem.model))
     throw std::invalid_argument("camera model " + std::string(model_name(problem.model)) + " is not implemented yet");
