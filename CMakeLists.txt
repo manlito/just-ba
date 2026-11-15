@@ -31,6 +31,14 @@ else()
   target_compile_options(jba_warnings INTERFACE -Wall -Wextra -Wpedantic -Wshadow)
 endif()
 
+# Internal headers (D79): the backend interface, the trust-region loop, the geometry
+# helpers and the backends' own headers. They are not in any public include
+# directory; the libraries, the CLI and the tests reach them through this target.
+add_library(jba_internal INTERFACE)
+target_include_directories(jba_internal INTERFACE ${PROJECT_SOURCE_DIR}/core/internal
+                           ${PROJECT_SOURCE_DIR}/backends/cpu/internal ${PROJECT_SOURCE_DIR}/backends/metal/internal)
+target_link_libraries(jba_internal INTERFACE jba_generated_cpu)  # the CPU headers include the generated code
+
 add_subdirectory(core)
 add_subdirectory(residuals)
 add_subdirectory(backends/cpu)

@@ -189,7 +189,7 @@ A backend implements roughly these, and nothing else:
 
 Keeping this list short is what makes a new backend affordable.
 
-As built after milestone 1 (`core/include/jba/backend.h`), the interface the host
+As built after milestone 1 (`core/internal/jba/backend.h`), the interface the host
 loop sees is coarser than the table: `cost`, `linearize`, `gradient_max_norm`,
 `parameter_norm`, `compute_step`, `candidate_cost`, `accept_candidate`. One call,
 `compute_step`, covers everything from the diagonal blocks to the retracted
@@ -296,6 +296,9 @@ run time. Running out of device memory is a reported error with a CPU fallback; 
 ## Repository layout
 
 Directories marked `*` do not exist yet.
+
+Each library keeps its public headers in `include/jba` and its internal ones in
+`internal/jba` (D79); only the public directories reach users of the library.
 
 ```
 docs/            this plan

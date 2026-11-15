@@ -13,7 +13,6 @@ add_custom_command(
   COMMENT "Embedding Metal reprojection source")
 
 add_library(jba_metal STATIC src/reprojection.mm ${_embedded})
-target_include_directories(jba_metal PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_options(jba_metal PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 target_link_libraries(jba_metal PUBLIC jba_core "-framework Metal" "-framework Foundation"
-                      PRIVATE jba_warnings)
+                      PRIVATE jba_internal jba_warnings)

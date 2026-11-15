@@ -13,6 +13,7 @@
 // (0.3 to 1 rad, 0.5 to 2 m).
 // Not the synthetic generator of document 05 (milestone 2).
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <random>

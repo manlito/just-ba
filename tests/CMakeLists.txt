@@ -1,6 +1,6 @@
 function(jba_test name)
   add_executable(${name} ${name}.cpp)
-  target_link_libraries(${name} PRIVATE jba jba_warnings ${ARGN})
+  target_link_libraries(${name} PRIVATE jba jba_internal jba_warnings ${ARGN})
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME ${name} COMMAND ${name})
   set_tests_properties(${name} PROPERTIES SKIP_RETURN_CODE 77)
@@ -25,3 +25,8 @@ endif()
 if(JBA_WITH_CERES)
   add_subdirectory(ceres)
 endif()
+
+# Public headers alone, without jba_internal (D79).
+add_executable(test_public_headers test_public_headers.cpp)
+target_link_libraries(test_public_headers PRIVATE jba jba_warnings)
+add_test(NAME test_public_headers COMMAND test_public_headers)

@@ -3,4 +3,4 @@
 # here too.
 add_library(jba STATIC src/solve.cpp src/report.cpp src/refine.cpp)
 target_include_directories(jba PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(jba PUBLIC jba_core jba_cpu jba_tracks PRIVATE jba_warnings)
+target_link_libraries(jba PUBLIC jba_core jba_cpu jba_tracks PRIVATE jba_internal jba_warnings)

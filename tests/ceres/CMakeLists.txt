@@ -3,14 +3,14 @@
 find_package(Ceres 2.2.0 EXACT REQUIRED CONFIG)
 
 add_library(jba_ceres_reference STATIC ceres_reference.cpp)
-target_link_libraries(jba_ceres_reference PUBLIC jba Ceres::ceres)
+target_link_libraries(jba_ceres_reference PUBLIC jba jba_internal Ceres::ceres)
 
 add_executable(jba_ceres_solve ceres_solve.cpp)
 target_link_libraries(jba_ceres_solve PRIVATE jba_ceres_reference)
 add_executable(jba_parity parity.cpp)
 target_link_libraries(jba_parity PRIVATE jba_ceres_reference)
 add_executable(jba_make_problem make_problem.cpp)
-target_link_libraries(jba_make_problem PRIVATE jba)
+target_link_libraries(jba_make_problem PRIVATE jba jba_internal)
 target_include_directories(jba_make_problem PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 add_executable(test_ceres_level1 test_ceres_level1.cpp)
 target_link_libraries(test_ceres_level1 PRIVATE jba_ceres_reference)

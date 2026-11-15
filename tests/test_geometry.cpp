@@ -1,6 +1,7 @@
 // Geometry in front of the solver: unprojection, triangulation, track building and
 // starting poses from priors.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <random>
