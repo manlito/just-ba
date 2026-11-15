@@ -72,4 +72,33 @@ void pose_retract(const T* pose, const T* step, T* out) {
   out[6] = pose[6] + step[5];
 }
 
+// Rotation tangent basis of a pose whose heading about the vertical is held, the
+// rest of its rotation free (gauge, D83). Columns (b0, b1, a) of B (3 x 3, row-major):
+// a = R up, the vertical in camera axes, and b0, b1 complete a right-handed
+// orthonormal basis chosen from a alone: e is the camera axis least aligned with a
+// (lowest index on ties), b0 = normalize(e x a), b1 = a x b0. A rotation step
+// dtheta = B delta with delta[2] = 0 leaves the heading unchanged to first order.
+template <typename T>
+void heading_basis(const T* q, const double* up, T* B) {
+  using std::abs;
+  using std::sqrt;
+  const T u[3] = {T(up[0]), T(up[1]), T(up[2])};
+  T a[3];
+  quat_rotate(q, u, a);
+  int k = 0;
+  for (int c = 1; c < 3; ++c)
+    if (abs(a[c]) < abs(a[k])) k = c;
+  T e[3] = {T(0), T(0), T(0)};
+  e[k] = T(1);
+  T b0[3] = {e[1] * a[2] - e[2] * a[1], e[2] * a[0] - e[0] * a[2], e[0] * a[1] - e[1] * a[0]};
+  const T n = sqrt(b0[0] * b0[0] + b0[1] * b0[1] + b0[2] * b0[2]);
+  for (T& v : b0) v /= n;
+  const T b1[3] = {a[1] * b0[2] - a[2] * b0[1], a[2] * b0[0] - a[0] * b0[2], a[0] * b0[1] - a[1] * b0[0]};
+  for (int r = 0; r < 3; ++r) {
+    B[3 * r] = b0[r];
+    B[3 * r + 1] = b1[r];
+    B[3 * r + 2] = a[r];
+  }
+}
+
 }  // namespace jba

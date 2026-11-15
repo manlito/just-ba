@@ -212,8 +212,12 @@ def test_refine_end_to_end(tmp_path):
     assert len(r.report.downweighted_relative) == 0
     assert all(sm.termination == jba.Termination.CONVERGENCE for sm in r.summaries)
     # The solved problem carries the losses refine used (loss.* sections, D80).
-    np.testing.assert_array_equal(r.problem.loss_type, [jba.LossType.CAUCHY.value] * 3)
-    np.testing.assert_array_equal(r.problem.loss_scale, [2.0, 3.0, 3.0])
+    # One per residual type: reprojection, relative, global, gravity prior, ...
+    o = jba.RefineOptions().solver
+    expected = [o.loss, o.relative_prior_loss, o.global_prior_loss, o.gravity_loss]
+    np.testing.assert_array_equal(r.problem.loss_type[:4], [l.type.value for l in expected])
+    np.testing.assert_array_equal(r.problem.loss_scale[:4], [l.scale for l in expected])
+    assert r.problem.loss_scale[0] == 2.0
     path = str(tmp_path / "solved.jba")
     jba.write_problem(path, r.problem)
     o = jba.with_problem_losses(jba.SolverOptions(), jba.read_problem(path))

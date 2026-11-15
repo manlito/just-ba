@@ -32,6 +32,8 @@ constexpr const char* kUsage =
     "  --parameter-tolerance <x>    default 1e-8\n"
     "  --loss <name>[:<scale>]      none, huber, cauchy, geman_mcclure, for reprojection; default\n"
     "                               the file's loss.* sections, else none, scale 1\n"
+    "  --<type>-loss <name>[:<scale>]  the same for relative-prior, global-prior, gravity; default\n"
+    "                               the file's loss.* sections, else the library's defaults\n"
     "  --gauge <auto|none>          default auto\n"
     "  --threads <n>                default 0 (all hardware threads)\n";
 
@@ -62,6 +64,9 @@ std::string json_string(std::string_view s) {
 std::string gauge_json(const jba::Gauge& g) {
   std::string out = "{\"fixed_images\": [";
   for (std::size_t a = 0; a < g.fixed_images.size(); ++a) out += (a ? ", " : "") + std::to_string(g.fixed_images[a]);
+  out += "], \"heading_images\": [";
+  for (std::size_t a = 0; a < g.heading_images.size(); ++a)
+    out += (a ? ", " : "") + std::to_string(g.heading_images[a]);
   out += "], \"fixed_translations\": [";
   for (std::size_t a = 0; a < g.fixed_translations.size(); ++a)
     out += (a ? ", [" : "[") + std::to_string(g.fixed_translations[a][0]) + ", " +
@@ -113,7 +118,7 @@ int solve(int argc, char** argv) {
   const std::string input = argv[2];
   std::string output, history;
   jba::SolverOptions o;
-  std::optional<jba::Loss> loss_flag;  // overrides the file's reprojection loss
+  std::optional<jba::Loss> loss_flags[jba::kNumLossTypes];  // override the file's loss.* sections
   for (int a = 3; a < argc; a += 2) {
     const std::string key = argv[a];
     if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
@@ -129,30 +134,39 @@ int solve(int argc, char** argv) {
       if (val == "auto") o.gauge = jba::GaugeMode::Auto;
       else if (val == "none") o.gauge = jba::GaugeMode::None;
       else throw std::invalid_argument("unknown gauge " + val);
-    } else if (key == "--loss") {
+    } else {
+      std::size_t loss_type = jba::kNumLossTypes;
+      if (key == "--loss") loss_type = jba::kLossReprojection;
+      for (std::size_t t = 1; t < jba::kNumLossTypes; ++t) {
+        std::string flag = "--" + std::string(jba::residual_type_name(t)) + "-loss";
+        for (char& c : flag)
+          if (c == '_') c = '-';
+        if (key == flag) loss_type = t;
+      }
+      if (loss_type == jba::kNumLossTypes) throw std::invalid_argument("unknown option " + key);
       const auto colon = val.find(':');
       const auto type = jba::loss_from_name(val.substr(0, colon));
       if (!type) throw std::invalid_argument("unknown loss " + val);
-      loss_flag = jba::Loss{*type, colon != std::string::npos ? std::stod(val.substr(colon + 1)) : 1.0};
-    } else {
-      throw std::invalid_argument("unknown option " + key);
+      loss_flags[loss_type] = jba::Loss{*type, colon != std::string::npos ? std::stod(val.substr(colon + 1)) : 1.0};
     }
   }
 
   jba::Problem p = load(input);
   o = jba::with_problem_losses(o, p);  // loss.* sections, if any (D80)
-  if (loss_flag) o.loss = *loss_flag;
+  for (std::size_t t = 0; t < jba::kNumLossTypes; ++t)
+    if (loss_flags[t]) *jba::loss_of(o, t) = *loss_flags[t];
   const jba::SolverSummary s = jba::solve(p, o);
   jba::store_losses(p, o);  // the output records the losses it was solved with
   if (!output.empty()) jba::write_problem(output, p);
   if (!history.empty()) write_history(history, s);
   std::printf(
       "{\"input\": %s, \"model\": \"%s\", \"images\": %zu, \"points\": %zu, \"observations\": %zu, "
-      "\"relative_priors\": %zu, \"global_priors\": %zu, \"loss\": \"%s\", \"loss_scale\": %g, \"gauge\": %s, "
+      "\"relative_priors\": %zu, \"global_priors\": %zu, \"gravity_priors\": %zu, \"loss\": \"%s\", "
+      "\"loss_scale\": %g, \"gauge\": %s, "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
       "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f}\n",
       json_string(input).c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
-      p.num_observations(), p.num_relative_priors(), p.num_global_priors(),
+      p.num_observations(), p.num_relative_priors(), p.num_global_priors(), p.num_gravity_priors(),
       std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, gauge_json(s.gauge).c_str(), s.initial_cost,
       s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
       std::string(jba::termination_name(s.termination)).c_str(), json_string(s.message).c_str(), s.time_seconds);

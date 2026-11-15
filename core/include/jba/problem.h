@@ -83,9 +83,19 @@ struct Problem {
   // solve. Empty means the identity for every set.
   std::vector<double> set_transform;
 
+  // Gravity (document 02). gravity_world: the direction of gravity in the working
+  // frame, unit; empty means (0, -1, 0), the world of ARKit and ARCore (y up), which
+  // the Python helpers keep. Gravity prior k ties image grav_image[k] to the
+  // direction of gravity measured in its camera axes, grav_dir (unit). Residual:
+  // R g_world - g_measured (3 values, about the angle in radians when small).
+  std::vector<double> gravity_world;            // 3, or empty
+  std::vector<std::int32_t> grav_image;         // 1 per prior
+  std::vector<double> grav_dir;                 // 3 per prior
+  std::vector<double> grav_sigma;               // 1 per prior, radians; empty: the default
+
   // Robust losses stored with the problem (loss.* sections, D80), one per residual
-  // type in the order reprojection, relative prior, global prior (kLossReprojection
-  // and so on). loss_type holds LossType values; loss_scale the scale a. Empty, or
+  // type in the order reprojection, relative prior, global prior, gravity prior
+  // (kLossReprojection and so on). loss_type holds LossType values; loss_scale the scale a. Empty, or
   // shorter than the number of types, means the solver options decide for the rest.
   // solve() takes its losses from the options; with_problem_losses (solver.h)
   // copies these in.
@@ -105,6 +115,7 @@ struct Problem {
   }
   std::size_t num_relative_priors() const { return rel_images.size() / 2; }
   std::size_t num_global_priors() const { return glob_image.size(); }
+  std::size_t num_gravity_priors() const { return grav_image.size(); }
   std::size_t num_prior_sets() const {
     return !set_relation.empty() ? set_relation.size() : (glob_image.empty() ? 0 : 1);
   }
@@ -115,7 +126,12 @@ struct Problem {
 };
 
 // Positions in Problem::loss_type and loss_scale.
-inline constexpr std::size_t kLossReprojection = 0, kLossRelativePrior = 1, kLossGlobalPrior = 2, kNumLossTypes = 3;
+inline constexpr std::size_t kLossReprojection = 0, kLossRelativePrior = 1, kLossGlobalPrior = 2, kLossGravity = 3,
+                             kNumLossTypes = 4;
+
+// The direction of gravity in the working frame (Problem::gravity_world or its
+// default).
+void gravity_direction(const Problem& problem, double* g);
 
 // Checks sizes and index ranges. Returns an empty string when valid, otherwise a
 // description of the first problem found.

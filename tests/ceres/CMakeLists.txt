@@ -71,6 +71,17 @@ jba_parity_case(relative_and_similarity
                 "--check-parameters")
 jba_parity_case(priors_fixed_blocks "--model PINHOLE --relative-priors 2 --global-priors --fix-images 2"
                 "--check-parameters")
+# Gravity priors (milestone 3). With gravity, the gauge holds the reference's
+# translation and heading only (D83).
+jba_parity_case(gravity "--model PINHOLE --gravity-priors" "--check-parameters")
+jba_parity_case(gravity_outliers "--model SIMPLE_RADIAL --gravity-priors --gravity-outliers 0.1" "--check-parameters")
+jba_parity_case(gravity_huber "--model SIMPLE_RADIAL --gravity-priors --gravity-outliers 0.1"
+                "--gravity-loss huber:2 --check-parameters")
+jba_parity_case(gravity_relative "--model PINHOLE --relative-priors 2 --gravity-priors --prior-outliers 0.05"
+                "--check-parameters")
+jba_parity_case(gravity_similarity "--model PINHOLE --global-priors --global-relation similarity --gravity-priors"
+                "--check-parameters")
+jba_parity_case(gravity_sigma "--model PINHOLE --gravity-priors --gravity-sigma 0.002" "--check-parameters")
 
 # Against Ceres's exact solver: costs must agree, but an inexact inner solve takes
 # more outer iterations by design, so the iteration ratio is not the matched one.

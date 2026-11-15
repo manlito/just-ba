@@ -89,10 +89,10 @@ int main() {
   // Pose priors: whitened residuals and Jacobians against the independent functors.
   // Ambient pose Jacobians (6 x 7) map to the tangent through the quaternion
   // manifold for columns 0..3 and directly for 4..6.
-  auto to_tangent = [&](const double* pose, const double* J7, double* J6) {
+  auto to_tangent = [&](const double* pose, const double* J7, double* J6, int rows = 6) {
     double P[12];
     manifold.PlusJacobian(pose, P);
-    for (int row = 0; row < 6; ++row) {
+    for (int row = 0; row < rows; ++row) {
       for (int c = 0; c < 3; ++c) {
         double v = 0;
         for (int a = 0; a < 4; ++a) v += J7[7 * row + a] * P[3 * a + c];
@@ -197,6 +197,37 @@ int main() {
     }
   }
   std::printf("pose priors vs Ceres autodiff: worst relative difference %.3g\n", worst_prior);
+
+  // Gravity priors: whitened by 1 / sigma.
+  double worst_gravity = 0;
+  for (int n = 0; n < 300; ++n) {
+    double pose[7], gw[3], gc[3];
+    jba_test::random_rotation(rng, 3.1, pose);
+    for (int a = 0; a < 3; ++a) pose[4 + a] = 3 * u(rng);
+    for (double* v : {gw, gc}) {
+      for (int a = 0; a < 3; ++a) v[a] = u(rng);
+      const double len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+      for (int a = 0; a < 3; ++a) v[a] /= len;
+    }
+    const double w = 1 / (0.001 + 0.05 * std::abs(u(rng)));
+    std::unique_ptr<ceres::CostFunction> cost(jba_ceres::make_gravity_prior_cost(gw, gc, w));
+    const double* params[1] = {pose};
+    double rc[3], J7[21];
+    double* jac[1] = {J7};
+    EXPECT(cost->Evaluate(params, rc, jac));
+    double Jc[18];
+    to_tangent(pose, J7, Jc, 3);
+    double r[3], J[18];
+    jba::cpu::gravity_prior<double>(pose, gw, gc, r, J);
+    for (double& v : r) v *= w;
+    for (double& v : J) v *= w;
+    double scale = 1;
+    for (double v : Jc) scale = std::max(scale, std::abs(v));
+    for (int a = 0; a < 3; ++a) worst_gravity = std::max(worst_gravity, std::abs(r[a] - rc[a]) / scale);
+    for (int a = 0; a < 18; ++a) worst_gravity = std::max(worst_gravity, std::abs(J[a] - Jc[a]) / scale);
+  }
+  EXPECT(worst_gravity < 1e-12);
+  std::printf("gravity priors vs Ceres autodiff: worst relative difference %.3g\n", worst_gravity);
 
   // Losses: same rho, rho', rho'' as Ceres's (Huber, Cauchy) and as the harness's
   // Geman-McClure.

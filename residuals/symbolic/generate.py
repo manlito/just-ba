@@ -15,6 +15,8 @@ import sys
 
 import wrenfold
 
+import depth
+import directions
 import emit
 import priors
 import reprojection
@@ -66,22 +68,36 @@ def render_metal() -> str:
     return "".join(parts)
 
 
-def render_priors_cpu() -> str:
+def _render_module_cpu(module, source: str) -> str:
     gen = emit.CpuGenerator()
     parts = [
-        BANNER.format(version=wrenfold.__version__, source="priors.py"),
+        BANNER.format(version=wrenfold.__version__, source=source),
         "#pragma once\n\n#include <cmath>\n\nnamespace jba::generated {\n\n",
     ]
-    for func in priors.FUNCTIONS:
+    for func in module.FUNCTIONS:
         parts.append(emit.generate(func, gen))
         parts.append("\n")
     parts.append("}  // namespace jba::generated\n")
     return "".join(parts)
 
 
+def render_priors_cpu() -> str:
+    return _render_module_cpu(priors, "priors.py")
+
+
+def render_directions_cpu() -> str:
+    return _render_module_cpu(directions, "directions.py")
+
+
+def render_depth_cpu() -> str:
+    return _render_module_cpu(depth, "depth.py")
+
+
 FILES = {
     OUT / "cpu" / "reprojection_generated.h": render_cpu,
     OUT / "cpu" / "priors_generated.h": render_priors_cpu,
+    OUT / "cpu" / "directions_generated.h": render_directions_cpu,
+    OUT / "cpu" / "depth_generated.h": render_depth_cpu,
     OUT / "metal" / "reprojection.metal.h": render_metal,
 }
 

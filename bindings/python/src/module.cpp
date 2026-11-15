@@ -120,17 +120,32 @@ void normalise_quaternions(std::vector<double>& v, std::size_t width) {
   }
 }
 
-// Problem array fields with a fixed row width. `quaternion_rows`: rows start with a
-// quaternion, normalised on the way in.
+// Normalises rows of three values (directions such as gravity, from float sensors).
+void normalise_vectors(std::vector<double>& v) {
+  for (std::size_t r = 0; r + 3 <= v.size(); r += 3) {
+    double* d = &v[r];
+    const double n = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+    if (n > 0 && std::isfinite(n))
+      for (int a = 0; a < 3; ++a) d[a] /= n;
+  }
+}
+
+enum class Normalise { None, Quaternion, Vector };
+
+// Problem array fields with a fixed row width. `normalise`: rows start with a
+// quaternion, or are 3-vectors, normalised on the way in.
 template <typename T>
 void array_field(nb::class_<jba::Problem>& c, const char* name, std::vector<T> jba::Problem::*field,
-                 std::vector<std::size_t> tail, const char* doc, bool quaternion_rows = false) {
+                 std::vector<std::size_t> tail, const char* doc, bool quaternion_rows = false,
+                 Normalise normalise = Normalise::None) {
+  if (quaternion_rows) normalise = Normalise::Quaternion;
   c.def_prop_rw(
       name, [field, tail](const jba::Problem& p) { return to_numpy(p.*field, tail); },
-      [field, tail, name, quaternion_rows](jba::Problem& p, nb::handle h) {
+      [field, tail, name, normalise](jba::Problem& p, nb::handle h) {
         p.*field = from_numpy(as_array<T>(h, name), tail, name);
         if constexpr (std::is_same_v<T, double>) {
-          if (quaternion_rows) normalise_quaternions(p.*field, tail.at(0));
+          if (normalise == Normalise::Quaternion) normalise_quaternions(p.*field, tail.at(0));
+          if (normalise == Normalise::Vector) normalise_vectors(p.*field);
         }
       },
       nb::for_getter(nb::rv_policy::move), doc);
@@ -217,6 +232,7 @@ NB_MODULE(_core, m) {
       .def_prop_ro("num_observations", &jba::Problem::num_observations)
       .def_prop_ro("num_relative_priors", &jba::Problem::num_relative_priors)
       .def_prop_ro("num_global_priors", &jba::Problem::num_global_priors)
+      .def_prop_ro("num_gravity_priors", &jba::Problem::num_gravity_priors)
       .def_prop_ro("num_prior_sets", &jba::Problem::num_prior_sets)
       .def("validate", [](const jba::Problem& p) { return jba::validate(p); },
            "Empty string when valid, otherwise the first problem found.");
@@ -247,8 +263,17 @@ NB_MODULE(_core, m) {
   array_field(problem, "glob_sqrt_info", &jba::Problem::glob_sqrt_info, {6, 6}, "(G, 6, 6) whitening matrices.");
   array_field(problem, "set_transform", &jba::Problem::set_transform, {8},
               "(S, 8) qw qx qy qz tx ty tz s per prior set: X_working = s R X_set + t.", true);
+  array_field(problem, "gravity_world", &jba::Problem::gravity_world, {},
+              "(3,) direction of gravity in the working frame; empty means (0, -1, 0), ARKit's and ARCore's world. "
+              "Normalised on the way in.", false, Normalise::Vector);
+  array_field(problem, "grav_image", &jba::Problem::grav_image, {}, "(Q,) image of each gravity prior.");
+  array_field(problem, "grav_dir", &jba::Problem::grav_dir, {3},
+              "(Q, 3) direction of gravity measured in each image's camera axes (x right, y down, z forward); "
+              "normalised on the way in.", false, Normalise::Vector);
+  array_field(problem, "grav_sigma", &jba::Problem::grav_sigma, {}, "(Q,) gravity prior standard deviations, rad.");
   array_field(problem, "loss_type", &jba::Problem::loss_type, {},
-              "Stored losses (loss.* sections): LossType values for reprojection, relative prior, global prior. "
+              "Stored losses (loss.* sections): LossType values for reprojection, relative prior, global prior, "
+              "gravity prior. "
               "Empty: the solver options decide. Applied with with_problem_losses.");
   array_field(problem, "loss_scale", &jba::Problem::loss_scale, {}, "Scale of each stored loss.");
   problem.def_prop_rw(
@@ -299,7 +324,8 @@ NB_MODULE(_core, m) {
       .def_rw("relative_translation_sigma", &jba::PriorDefaults::relative_translation_sigma)
       .def_rw("relative_translation_per_metre", &jba::PriorDefaults::relative_translation_per_metre)
       .def_rw("global_rotation_sigma", &jba::PriorDefaults::global_rotation_sigma)
-      .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma);
+      .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma)
+      .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma);
 
   nb::class_<jba::SolverOptions>(m, "SolverOptions", "Levenberg-Marquardt options; defaults are Ceres's.")
       .def(nb::init<>())
@@ -318,6 +344,7 @@ NB_MODULE(_core, m) {
       .def_rw("loss", &jba::SolverOptions::loss, "Loss on reprojection residuals.")
       .def_rw("relative_prior_loss", &jba::SolverOptions::relative_prior_loss)
       .def_rw("global_prior_loss", &jba::SolverOptions::global_prior_loss)
+      .def_rw("gravity_loss", &jba::SolverOptions::gravity_loss)
       .def_rw("prior_defaults", &jba::SolverOptions::prior_defaults)
       .def_rw("gauge", &jba::SolverOptions::gauge)
       .def_rw("num_threads", &jba::SolverOptions::num_threads, "0: all hardware threads. Results do not depend on it.");
@@ -337,6 +364,8 @@ NB_MODULE(_core, m) {
       .def_ro("time_seconds", &jba::IterationSummary::time_seconds);
   nb::class_<jba::Gauge>(m, "Gauge")
       .def_ro("fixed_images", &jba::Gauge::fixed_images)
+      .def_ro("heading_images", &jba::Gauge::heading_images,
+              "Poses whose translation and heading are held, their tilt free (gravity known, D83).")
       .def_ro("fixed_translations", &jba::Gauge::fixed_translations)
       .def_ro("fixed_set_scales", &jba::Gauge::fixed_set_scales);
   nb::class_<jba::SolverSummary>(m, "SolverSummary")
@@ -379,13 +408,14 @@ NB_MODULE(_core, m) {
   m.def("with_problem_losses", &jba::with_problem_losses, "options"_a, "problem"_a,
         "A copy of the options with the problem's stored losses (loss_type, loss_scale) in place of theirs.");
   m.def("store_losses", &jba::store_losses, "problem"_a, "options"_a,
-        "Stores the options' three losses in the problem, written as the loss.* sections.");
+        "Stores the options' losses in the problem, one per residual type, written as the loss.* sections.");
   m.def("choose_gauge", &jba::choose_gauge, "problem"_a, "The gauge GaugeMode.AUTO would hold fixed.");
 
   nb::class_<jba::ResidualReport>(m, "ResidualReport", "Per-residual diagnostics at the current parameters.")
       .def_ro("reprojection_cost", &jba::ResidualReport::reprojection_cost)
       .def_ro("relative_prior_cost", &jba::ResidualReport::relative_prior_cost)
       .def_ro("global_prior_cost", &jba::ResidualReport::global_prior_cost)
+      .def_ro("gravity_cost", &jba::ResidualReport::gravity_cost)
       .def_prop_ro("reprojection_error", [](const jba::ResidualReport& r) { return to_numpy(r.reprojection_error); }, nb::rv_policy::move)
       .def_prop_ro("in_front", [](const jba::ResidualReport& r) {
         std::vector<std::uint8_t> v(r.in_front.begin(), r.in_front.end());
@@ -396,7 +426,11 @@ NB_MODULE(_core, m) {
       .def_prop_ro("global_prior_norm", [](const jba::ResidualReport& r) { return to_numpy(r.global_prior_norm); }, nb::rv_policy::move)
       .def_prop_ro("global_prior_weight", [](const jba::ResidualReport& r) { return to_numpy(r.global_prior_weight); }, nb::rv_policy::move)
       .def_prop_ro("downweighted_relative", [](const jba::ResidualReport& r) { return to_numpy(r.downweighted_relative); }, nb::rv_policy::move)
-      .def_prop_ro("downweighted_global", [](const jba::ResidualReport& r) { return to_numpy(r.downweighted_global); }, nb::rv_policy::move);
+      .def_prop_ro("downweighted_global", [](const jba::ResidualReport& r) { return to_numpy(r.downweighted_global); }, nb::rv_policy::move)
+      .def_prop_ro("gravity_angle", [](const jba::ResidualReport& r) { return to_numpy(r.gravity_angle); },
+                   "Per gravity prior: angle between measured and solved gravity, rad.", nb::rv_policy::move)
+      .def_prop_ro("gravity_weight", [](const jba::ResidualReport& r) { return to_numpy(r.gravity_weight); }, nb::rv_policy::move)
+      .def_prop_ro("downweighted_gravity", [](const jba::ResidualReport& r) { return to_numpy(r.downweighted_gravity); }, nb::rv_policy::move);
   m.def("evaluate", &jba::evaluate, "problem"_a, "options"_a = jba::SolverOptions{}, "downweight_threshold"_a = 0.1,
         nb::call_guard<nb::gil_scoped_release>(), "Cost by residual type, reprojection errors, prior weights.");
 
@@ -520,7 +554,8 @@ NB_MODULE(_core, m) {
       .def_ro("track_stats", &jba::RefineResult::track_stats)
       .def_ro("rejected_observations", &jba::RefineResult::rejected_observations)
       .def_prop_ro("relative_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.relative_prior_index); }, nb::rv_policy::move)
-      .def_prop_ro("global_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.global_prior_index); }, nb::rv_policy::move);
+      .def_prop_ro("global_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.global_prior_index); }, nb::rv_policy::move)
+      .def_prop_ro("gravity_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.gravity_prior_index); }, nb::rv_policy::move);
 
   m.def(
       "refine",

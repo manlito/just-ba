@@ -192,6 +192,12 @@ bool unit_quaternion(const double* q) {
   return std::abs(n - 1.0) < 1e-9;
 }
 
+// Unit within the quaternion check's tolerance (NaN fails).
+bool unit_vector(const double* v) {
+  const double n = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+  return std::abs(n - 1.0) < 1e-9;
+}
+
 // Weights of one kind of prior: at most one of sigma and sqrt_info; sigmas positive
 // (+inf allowed: that part is left out); whitening finite.
 std::string validate_weights(const char* kind, std::size_t n, const std::vector<double>& sigma,
@@ -241,6 +247,21 @@ std::string validate_priors(const Problem& p) {
     if (!unit_quaternion(&p.glob_pose[7 * k])) return "global prior " + std::to_string(k) + " has a non-unit quaternion";
   }
   if (auto err = validate_weights("global", n_glob, p.glob_sigma, p.glob_sqrt_info); !err.empty()) return err;
+
+  if (!p.gravity_world.empty()) {
+    if (p.gravity_world.size() != 3) return "gravity_world must hold 3 values";
+    if (!unit_vector(p.gravity_world.data())) return "gravity_world is not a unit vector";
+  }
+  const std::size_t n_grav = p.num_gravity_priors();
+  if (p.grav_dir.size() != 3 * n_grav) return "grav_dir must hold 3 values per gravity prior";
+  if (!p.grav_sigma.empty() && p.grav_sigma.size() != n_grav) return "grav_sigma must have one entry per gravity prior";
+  for (std::size_t k = 0; k < n_grav; ++k) {
+    if (p.grav_image[k] < 0 || static_cast<std::size_t>(p.grav_image[k]) >= n_img)
+      return "gravity prior " + std::to_string(k) + " refers to a missing image";
+    if (!unit_vector(&p.grav_dir[3 * k])) return "gravity prior " + std::to_string(k) + " is not a unit vector";
+    if (!p.grav_sigma.empty() && !(p.grav_sigma[k] > 0 && std::isfinite(p.grav_sigma[k])))
+      return "gravity prior " + std::to_string(k) + " has a sigma that is not positive and finite";
+  }
   for (auto r : p.set_relation) {
     if (r != FrameRelation::Identity && r != FrameRelation::Rigid && r != FrameRelation::Similarity)
       return "unknown prior set relation " + std::to_string(static_cast<int>(r));
@@ -264,6 +285,16 @@ std::string validate_priors(const Problem& p) {
 }
 
 }  // namespace
+
+void gravity_direction(const Problem& p, double* g) {
+  if (p.gravity_world.size() == 3) {
+    std::copy_n(p.gravity_world.data(), 3, g);
+  } else {
+    g[0] = 0;
+    g[1] = -1;
+    g[2] = 0;
+  }
+}
 
 std::string validate(const Problem& p) {
   const int np = num_params(p.model);
@@ -362,6 +393,12 @@ void write_problem(const std::string& path, const Problem& p) {
     w.array("prior.set.relation", rel, 1);
   }
   if (!p.set_transform.empty()) w.array("prior.set.transform", p.set_transform, 8);
+  if (!p.gravity_world.empty()) w.array("gravity.world", p.gravity_world, 1);
+  if (p.num_gravity_priors() > 0) {
+    w.array("prior.gravity.image", p.grav_image, 1);
+    w.array("prior.gravity.direction", p.grav_dir, 3);
+    if (!p.grav_sigma.empty()) w.array("prior.gravity.sigma", p.grav_sigma, 1);
+  }
   if (!p.loss_type.empty()) {
     w.array("loss.type", p.loss_type, 1);
     w.array("loss.scale", p.loss_scale, 1);
@@ -374,7 +411,8 @@ void write_problem(const std::string& path, const Problem& p) {
       "prior.relative.images", "prior.relative.pose", "prior.relative.sigma",  "prior.relative.sqrt_info",
       "prior.global.image",    "prior.global.set",    "prior.global.pose",     "prior.global.sigma",
       "prior.global.sqrt_info", "prior.set.relation", "prior.set.transform", "loss.type",
-      "loss.scale"};
+      "loss.scale",            "gravity.world",       "prior.gravity.image",   "prior.gravity.direction",
+      "prior.gravity.sigma"};
   for (std::size_t i = 0; i < p.extra.size(); ++i) {
     const auto& s = p.extra[i];
     bool repeated = std::find(std::begin(kKnown), std::end(kKnown), s.name) != std::end(kKnown);
@@ -465,6 +503,10 @@ Problem read_problem(const std::string& path) {
       for (std::size_t a = 0; a < rel.size(); ++a) p.set_relation[a] = static_cast<FrameRelation>(rel[a]);
     }
     else if (n == "prior.set.transform") take(path, s, 8, p.set_transform);
+    else if (n == "gravity.world") take(path, s, 1, p.gravity_world);
+    else if (n == "prior.gravity.image") take(path, s, 1, p.grav_image);
+    else if (n == "prior.gravity.direction") take(path, s, 3, p.grav_dir);
+    else if (n == "prior.gravity.sigma") take(path, s, 1, p.grav_sigma);
     else if (n == "loss.type") take(path, s, 1, p.loss_type);
     else if (n == "loss.scale") take(path, s, 1, p.loss_scale);
     else p.extra.push_back(std::move(s));

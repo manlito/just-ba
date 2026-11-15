@@ -1,5 +1,6 @@
 #include "jba/report.h"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -88,6 +89,25 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
     r.global_prior_norm[k] = std::sqrt(s);
     r.global_prior_weight[k] = rho[1];
     if (rho[1] < threshold) r.downweighted_global.push_back(static_cast<std::int32_t>(k));
+  }
+
+  double gw[3];
+  gravity_direction(p, gw);
+  const std::size_t n_grav = p.num_gravity_priors();
+  r.gravity_angle.resize(n_grav);
+  r.gravity_weight.resize(n_grav);
+  for (std::size_t k = 0; k < n_grav; ++k) {
+    double res[3];
+    cpu::gravity_prior<double>(&p.poses[7 * static_cast<std::size_t>(p.grav_image[k])], gw, &p.grav_dir[3 * k], res,
+                               static_cast<double*>(nullptr));
+    const double chord = std::sqrt(res[0] * res[0] + res[1] * res[1] + res[2] * res[2]);
+    const double w = 1 / (p.grav_sigma.empty() ? o.prior_defaults.gravity_sigma : p.grav_sigma[k]);
+    double rho[3];
+    evaluate_loss(o.gravity_loss, chord * chord * w * w, rho);
+    r.gravity_cost += 0.5 * rho[0];
+    r.gravity_angle[k] = 2 * std::asin(std::min(1.0, chord / 2));
+    r.gravity_weight[k] = rho[1];
+    if (rho[1] < threshold) r.downweighted_gravity.push_back(static_cast<std::int32_t>(k));
   }
   return r;
 }

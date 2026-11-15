@@ -22,6 +22,8 @@ struct PriorDefaults {
   // Global priors (provisional).
   double global_rotation_sigma = 0.02;                // rad
   double global_position_sigma = 0.05;                // the set's own units
+  // Gravity priors (provisional, D82).
+  double gravity_sigma = 0.01;                        // rad
 };
 
 // Whitening matrices W (6 x 6, row-major, residual W r) for every relative and

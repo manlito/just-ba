@@ -6,12 +6,15 @@
 //                    [--per-image-intrinsics] [--fix-images N] [--fix-points N] [--sigma PX]
 //                    [--relative-priors N] [--global-priors] [--global-relation identity|rigid|similarity]
 //                    [--prior-noise ROT,TRANS] [--prior-outliers FRACTION] [--prior-sigma ROT,TRANS]
+//                    [--gravity-priors] [--gravity-noise RAD] [--gravity-outliers FRACTION] [--gravity-sigma RAD]
 //
 // MASK is the IntrinsicsGroup bit mask: 1 focal, 2 principal point, 4 distortion.
 // Priors come from the true poses with noise: relative priors tie each image to
 // its N next neighbours on the ring; global priors are in a frame related to the
 // working frame by a random transform of the given kind. Outliers are gross errors
-// (0.3 to 1 rad, 0.5 to 2 m).
+// (0.3 to 1 rad, 0.5 to 2 m). Gravity priors: every image, measured from the true
+// pose with noise; gravity in the working frame is a fixed oblique direction, so no
+// coordinate axis is special; outliers are 0.2 to 0.5 rad off.
 // Not the synthetic generator of document 05 (milestone 2).
 
 #include <algorithm>
@@ -37,7 +40,8 @@ int main(int argc, char** argv) {
     int images = 12, points = 300, fix_images = 0, fix_points = 0, free_mask = 0;
     std::uint64_t seed = 5;
     double noise = 0.5, outliers = 0, sigma = 0;
-    bool per_image = false, global_priors = false;
+    bool per_image = false, global_priors = false, gravity_priors = false;
+    double gravity_noise = 0.003, gravity_outliers = 0, gravity_sigma = 0;
     int relative_priors = 0;
     jba::FrameRelation relation = jba::FrameRelation::Identity;
     double prior_noise[2] = {0.002, 0.005}, prior_sigma[2] = {0, 0}, prior_outliers = 0;
@@ -55,6 +59,10 @@ int main(int argc, char** argv) {
       }
       if (key == "--global-priors") {
         global_priors = true;
+        continue;
+      }
+      if (key == "--gravity-priors") {
+        gravity_priors = true;
         continue;
       }
       if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
@@ -76,6 +84,9 @@ int main(int argc, char** argv) {
       else if (key == "--prior-noise") pair_of(val, prior_noise);
       else if (key == "--prior-sigma") pair_of(val, prior_sigma);
       else if (key == "--prior-outliers") prior_outliers = std::stod(val);
+      else if (key == "--gravity-noise") gravity_noise = std::stod(val);
+      else if (key == "--gravity-outliers") gravity_outliers = std::stod(val);
+      else if (key == "--gravity-sigma") gravity_sigma = std::stod(val);
       else if (key == "--global-relation") {
         if (val == "identity") relation = jba::FrameRelation::Identity;
         else if (val == "rigid") relation = jba::FrameRelation::Rigid;
@@ -163,6 +174,28 @@ int main(int argc, char** argv) {
         jba::pose_retract(S, step, start);
         start[7] = relation == jba::FrameRelation::Similarity ? S[7] * (1 + 0.05 * n(rng)) : 1.0;
         p.set_transform.assign(start, start + 8);
+      }
+    }
+
+    if (gravity_priors) {
+      p.gravity_world = {0.2, 0.9, -0.3};
+      const double norm = std::sqrt(0.04 + 0.81 + 0.09);
+      for (double& v : p.gravity_world) v /= norm;
+      for (int i = 0; i < images; ++i) {
+        const double* T = &truth[7 * static_cast<std::size_t>(i)];
+        const bool gross = u(rng) < gravity_outliers;
+        double rot[3] = {n(rng), n(rng), n(rng)};
+        const double len = std::sqrt(rot[0] * rot[0] + rot[1] * rot[1] + rot[2] * rot[2]);
+        const double angle = gross ? 0.2 + 0.3 * u(rng) : gravity_noise * len;
+        for (double& v : rot) v *= angle / len;
+        double dq[4], q[4], g[3];
+        jba::quat_exp(rot, dq);
+        jba::quat_multiply(dq, T, q);
+        jba::quat_rotate(q, p.gravity_world.data(), g);
+        const double gn = std::sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+        p.grav_image.push_back(i);
+        for (double v : g) p.grav_dir.push_back(v / gn);
+        if (gravity_sigma > 0) p.grav_sigma.push_back(gravity_sigma);
       }
     }
 

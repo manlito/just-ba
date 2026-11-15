@@ -65,6 +65,23 @@ class LogScale final : public ceres::Manifold {
   bool MinusJacobian(const double* x, double* J) const override;
 };
 
+// A pose (7 values) whose translation and heading about the vertical `up` are held,
+// its tilt free (the gauge's heading_images, D83): tangent (delta0, delta1), the
+// rotation step B (delta0, delta1, 0) of jba::heading_basis at the current pose.
+class HeadingHeldPose final : public ceres::Manifold {
+ public:
+  explicit HeadingHeldPose(const double* up) : up_{up[0], up[1], up[2]} {}
+  int AmbientSize() const override { return 7; }
+  int TangentSize() const override { return 2; }
+  bool Plus(const double* x, const double* delta, double* x_plus_delta) const override;
+  bool PlusJacobian(const double* x, double* J) const override;
+  bool Minus(const double* y, const double* x, double* y_minus_x) const override;
+  bool MinusJacobian(const double* x, double* J) const override;
+
+ private:
+  double up_[3];
+};
+
 // Geman-McClure in the library's definition; Ceres has no such loss.
 class GemanMcClureLoss final : public ceres::LossFunction {
  public:
@@ -87,6 +104,9 @@ ceres::CostFunction* make_relative_prior_cost(const double* prior, const double*
 ceres::CostFunction* make_global_prior_cost(const double* q_prior, const double* c_prior, const double* W,
                                             bool identity);
 
+// Gravity prior: parameters (pose 7); residual R g_world - g_camera divided by sigma.
+ceres::CostFunction* make_gravity_prior_cost(const double* g_world, const double* g_camera, double inv_sigma);
+
 // A ceres::LossFunction matching `loss`, or nullptr for none. Caller owns it.
 ceres::LossFunction* make_loss(const jba::Loss& loss);
 
@@ -100,9 +120,7 @@ struct Options {
   double parameter_tolerance = 1e-8;
   int max_linear_iterations = 500;
   double eta = 0.1;
-  jba::Loss loss;
-  jba::Loss relative_prior_loss;
-  jba::Loss global_prior_loss;
+  jba::Loss losses[jba::kNumLossTypes];  // by residual type (jba::kLossReprojection, ...)
   jba::PriorDefaults prior_defaults;
   jba::Gauge gauge;  // the same freedoms the library would hold fixed
   int num_threads = 1;

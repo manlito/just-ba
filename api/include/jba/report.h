@@ -17,6 +17,7 @@ struct ResidualReport {
   double reprojection_cost = 0;
   double relative_prior_cost = 0;
   double global_prior_cost = 0;
+  double gravity_cost = 0;
 
   // Per observation: reprojection error in pixels (not divided by sigma), and
   // whether the point is in front of the camera.
@@ -27,10 +28,13 @@ struct ResidualReport {
   // rho'(s), 1 for a prior fully trusted, near 0 for one the solve overruled.
   std::vector<double> relative_prior_norm, relative_prior_weight;
   std::vector<double> global_prior_norm, global_prior_weight;
+  // Per gravity prior: angle between the measured and the solved gravity direction
+  // (radians), and the robust weight.
+  std::vector<double> gravity_angle, gravity_weight;
 
   // Priors whose weight fell below the threshold given to evaluate(): what the
   // caller's cleanup let through (document 02).
-  std::vector<std::int32_t> downweighted_relative, downweighted_global;
+  std::vector<std::int32_t> downweighted_relative, downweighted_global, downweighted_gravity;
 };
 
 ResidualReport evaluate(const Problem& problem, const SolverOptions& options, double downweight_threshold = 0.1);

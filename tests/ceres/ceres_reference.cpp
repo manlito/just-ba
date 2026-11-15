@@ -62,6 +62,53 @@ bool LeftRotationVectorQuaternion::MinusJacobian(const double* x, double* J) con
   return true;
 }
 
+bool HeadingHeldPose::Plus(const double* x, const double* delta, double* x_plus_delta) const {
+  double B[9];
+  jba::heading_basis(x, up_, B);
+  double v[3], dq[4];
+  for (int r = 0; r < 3; ++r) v[r] = B[3 * r] * delta[0] + B[3 * r + 1] * delta[1];
+  jba::quat_exp(v, dq);
+  jba::quat_multiply(dq, x, x_plus_delta);
+  jba::quat_normalize(x_plus_delta);
+  for (int a = 4; a < 7; ++a) x_plus_delta[a] = x[a];
+  return true;
+}
+
+// Columns: 0.5 * (0, b_c) * q for the quaternion, zero for the translation.
+bool HeadingHeldPose::PlusJacobian(const double* x, double* J) const {
+  double B[9];
+  jba::heading_basis(x, up_, B);
+  for (int c = 0; c < 2; ++c) {
+    const double e[4] = {0, 0.5 * B[c], 0.5 * B[3 + c], 0.5 * B[6 + c]};
+    double col[4];
+    jba::quat_multiply(e, x, col);
+    for (int r = 0; r < 4; ++r) J[2 * r + c] = col[r];
+    for (int r = 4; r < 7; ++r) J[2 * r + c] = 0;
+  }
+  return true;
+}
+
+bool HeadingHeldPose::Minus(const double* y, const double* x, double* y_minus_x) const {
+  double v[3];
+  LeftRotationVectorQuaternion{}.Minus(y, x, v);
+  double B[9];
+  jba::heading_basis(x, up_, B);
+  for (int c = 0; c < 2; ++c) y_minus_x[c] = B[c] * v[0] + B[3 + c] * v[1] + B[6 + c] * v[2];
+  return true;
+}
+
+bool HeadingHeldPose::MinusJacobian(const double* x, double* J) const {
+  double Jq[12];
+  LeftRotationVectorQuaternion{}.MinusJacobian(x, Jq);
+  double B[9];
+  jba::heading_basis(x, up_, B);
+  for (int c = 0; c < 2; ++c) {
+    for (int a = 0; a < 4; ++a) J[7 * c + a] = B[c] * Jq[a] + B[3 + c] * Jq[4 + a] + B[6 + c] * Jq[8 + a];
+    for (int a = 4; a < 7; ++a) J[7 * c + a] = 0;
+  }
+  return true;
+}
+
 bool LogScale::Plus(const double* x, const double* delta, double* x_plus_delta) const {
   x_plus_delta[0] = x[0] * std::exp(delta[0]);
   return true;
@@ -241,7 +288,28 @@ struct GlobalPriorIdentity {
   }
 };
 
+struct GravityPrior {
+  double g_world[3], g_camera[3], w;
+
+  template <typename T>
+  bool operator()(const T* pose, T* out) const {
+    const T g[3] = {T(g_world[0]), T(g_world[1]), T(g_world[2])};
+    T Rg[3];
+    ceres::UnitQuaternionRotatePoint(pose, g, Rg);
+    for (int a = 0; a < 3; ++a) out[a] = (Rg[a] - g_camera[a]) * w;
+    return true;
+  }
+};
+
 }  // namespace
+
+ceres::CostFunction* make_gravity_prior_cost(const double* g_world, const double* g_camera, double inv_sigma) {
+  auto* f = new GravityPrior;
+  std::copy_n(g_world, 3, f->g_world);
+  std::copy_n(g_camera, 3, f->g_camera);
+  f->w = inv_sigma;
+  return new ceres::AutoDiffCostFunction<GravityPrior, 3, 7>(f);
+}
 
 ceres::CostFunction* make_relative_prior_cost(const double* prior, const double* W) {
   auto* f = new RelativePrior;
@@ -279,9 +347,7 @@ Options options_from(const jba::SolverOptions& o, const jba::Problem& problem, L
   c.parameter_tolerance = o.parameter_tolerance;
   c.max_linear_iterations = o.max_linear_iterations;
   c.eta = o.eta;
-  c.loss = o.loss;
-  c.relative_prior_loss = o.relative_prior_loss;
-  c.global_prior_loss = o.global_prior_loss;
+  for (std::size_t t = 0; t < jba::kNumLossTypes; ++t) c.losses[t] = *jba::loss_of(o, t);
   c.prior_defaults = o.prior_defaults;
   c.gauge = o.gauge == jba::GaugeMode::Auto ? jba::choose_gauge(problem) : jba::Gauge{};
   c.num_threads = o.num_threads > 0 ? o.num_threads : static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
@@ -299,7 +365,7 @@ Result solve(jba::Problem& p, const Options& o) {
   using PartialPoseManifold = ceres::ProductManifold<LeftRotationVectorQuaternion, ceres::SubsetManifold>;
   auto pose_manifold = std::make_unique<PoseManifold>(LeftRotationVectorQuaternion{}, ceres::EuclideanManifold<3>{});
   std::vector<std::unique_ptr<ceres::Manifold>> owned;
-  std::unique_ptr<ceres::LossFunction> loss(make_loss(o.loss));
+  std::unique_ptr<ceres::LossFunction> loss(make_loss(o.losses[jba::kLossReprojection]));
 
   for (std::size_t k = 0; k < p.num_observations(); ++k) {
     const std::size_t i = static_cast<std::size_t>(p.obs_image[k]);
@@ -311,8 +377,9 @@ Result solve(jba::Problem& p, const Options& o) {
   }
 
   // Pose priors.
-  std::unique_ptr<ceres::LossFunction> rel_loss(make_loss(o.relative_prior_loss));
-  std::unique_ptr<ceres::LossFunction> glob_loss(make_loss(o.global_prior_loss));
+  std::unique_ptr<ceres::LossFunction> rel_loss(make_loss(o.losses[jba::kLossRelativePrior]));
+  std::unique_ptr<ceres::LossFunction> glob_loss(make_loss(o.losses[jba::kLossGlobalPrior]));
+  std::unique_ptr<ceres::LossFunction> grav_loss(make_loss(o.losses[jba::kLossGravity]));
   std::vector<double> W_rel, W_glob;
   jba::prior_whitening(p, o.prior_defaults, W_rel, W_glob);
   if (p.set_transform.empty() && p.num_prior_sets() > 0) {
@@ -341,6 +408,17 @@ Result solve(jba::Problem& p, const Options& o) {
     }
   }
 
+  double g_world[3];
+  jba::gravity_direction(p, g_world);
+  for (std::size_t k = 0; k < p.num_gravity_priors(); ++k) {
+    const auto i = static_cast<std::size_t>(p.grav_image[k]);
+    const double sigma = p.grav_sigma.empty() ? o.prior_defaults.gravity_sigma : p.grav_sigma[k];
+    problem.AddResidualBlock(make_gravity_prior_cost(g_world, &p.grav_dir[3 * k], 1 / sigma), grav_loss.get(),
+                             &p.poses[7 * i]);
+  }
+  const double up[3] = {-g_world[0], -g_world[1], -g_world[2]};
+  auto heading_manifold = std::make_unique<HeadingHeldPose>(up);
+
   auto* ordering = new ceres::ParameterBlockOrdering;
   for (std::size_t i = 0; i < p.num_images(); ++i) {
     double* pose = &p.poses[7 * i];
@@ -348,7 +426,11 @@ Result solve(jba::Problem& p, const Options& o) {
     std::vector<int> held;
     for (const auto& [img, c] : o.gauge.fixed_translations)
       if (img == static_cast<int>(i)) held.push_back(c);
-    if (!held.empty()) {
+    const bool heading_held = std::find(o.gauge.heading_images.begin(), o.gauge.heading_images.end(),
+                                        static_cast<int>(i)) != o.gauge.heading_images.end();
+    if (heading_held) {
+      problem.SetManifold(pose, heading_manifold.get());
+    } else if (!held.empty()) {
       owned.push_back(std::make_unique<PartialPoseManifold>(LeftRotationVectorQuaternion{},
                                                             ceres::SubsetManifold(3, held)));
       problem.SetManifold(pose, owned.back().get());

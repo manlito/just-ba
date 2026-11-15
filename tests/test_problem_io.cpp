@@ -48,7 +48,8 @@ bool same(const jba::Problem& a, const jba::Problem& b) {
          a.rel_sqrt_info == b.rel_sqrt_info && a.glob_image == b.glob_image && a.glob_set == b.glob_set &&
          a.glob_pose == b.glob_pose && a.glob_sigma == b.glob_sigma && a.glob_sqrt_info == b.glob_sqrt_info &&
          a.set_relation == b.set_relation && a.set_transform == b.set_transform && a.loss_type == b.loss_type &&
-         a.loss_scale == b.loss_scale && extra_same;
+         a.loss_scale == b.loss_scale && a.gravity_world == b.gravity_world && a.grav_image == b.grav_image &&
+         a.grav_dir == b.grav_dir && a.grav_sigma == b.grav_sigma && extra_same;
 }
 
 }  // namespace
@@ -67,6 +68,10 @@ int main() {
     p.glob_sigma = {0.01, 0.1, 0.02, std::numeric_limits<double>::infinity(), 0.03, 0.3};
     p.set_relation = {jba::FrameRelation::Identity, jba::FrameRelation::Similarity};
     p.set_transform = {1, 0, 0, 0, 0, 0, 0, 1, 0.6, 0.8, 0, 0, 1, 2, 3, 1.5};
+    p.gravity_world = {0, 0.6, -0.8};
+    p.grav_image = {1, 3};
+    p.grav_dir = {0, 1, 0, 0.6, 0, 0.8};
+    p.grav_sigma = {0.01, 0.02};
     const auto path = temp_path("priors.jba");
     jba::write_problem(path, p);
     const auto q = jba::read_problem(path);
@@ -89,6 +94,18 @@ int main() {
     EXPECT(!jba::validate(bad).empty());
     bad = p;
     bad.glob_sigma[0] = 0;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.grav_dir[0] = 0.1;  // not unit
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.grav_image[1] = 4;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.gravity_world = {0, 1};
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.grav_sigma = {0.01};
     EXPECT(!jba::validate(bad).empty());
   }
 

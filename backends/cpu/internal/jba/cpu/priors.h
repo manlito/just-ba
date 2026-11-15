@@ -1,6 +1,7 @@
 #pragma once
 
-#include "priors_generated.h"  // residuals/generated/cpu
+#include "directions_generated.h"  // residuals/generated/cpu
+#include "priors_generated.h"
 
 namespace jba::cpu {
 
@@ -22,6 +23,14 @@ inline void global_prior(const Scalar* pose, const Scalar* transform, const Scal
                          Scalar* J_scale) {
   generated::global_pose_prior(pose, pose + 4, transform, transform + 4, transform[7], q_prior, c_prior, residual,
                                J_pose, J_rigid, J_scale);
+}
+
+// Gravity prior (3 values, unwhitened): pose (q, t), gravity in the working frame,
+// gravity measured in camera axes. J_pose is 3 x 6.
+template <typename Scalar>
+inline void gravity_prior(const Scalar* pose, const Scalar* g_world, const Scalar* g_camera, Scalar* residual,
+                          Scalar* J_pose) {
+  generated::gravity_prior(pose, g_world, g_camera, residual, J_pose);
 }
 
 }  // namespace jba::cpu

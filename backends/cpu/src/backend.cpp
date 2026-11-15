@@ -114,7 +114,7 @@ constexpr double kIdentityTransform[8] = {1, 0, 0, 0, 0, 0, 0, 1};
 
 enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale };
 
-enum class FactorKind : std::uint8_t { PosePrior };
+enum class FactorKind : std::uint8_t { PosePrior, Gravity };
 
 struct PosePrior {
   bool relative = true;
@@ -125,6 +125,12 @@ struct PosePrior {
   double prior[7];      // relative: T_j T_i^-1 (q, t); global: q_p, C_p
 };
 
+struct GravityPrior {
+  int image = -1;
+  double g[3];   // measured, camera axes
+  double w = 1;  // 1 / sigma
+};
+
 struct FactorSet {
   FactorKind kind{};
   int rows = 0, cols = 0, nslots = 0;
@@ -132,6 +138,7 @@ struct FactorSet {
   std::size_t count = 0;
   std::vector<int> slot_off;            // nslots per factor: f offset, -1 when fixed or absent
   std::vector<std::uint8_t> slot_mask;  // nslots per factor: columns that are not variables
+  std::vector<int> slot_image;          // nslots per factor: image of a pose slot, else -1
   std::vector<Loss> loss;               // per factor
   std::vector<double> r, J, m;          // rows, rows x cols and rows per factor
   std::vector<std::size_t> begin;       // per f-block, into `list`
@@ -140,6 +147,9 @@ struct FactorSet {
   int off(std::size_t f, int slot) const { return slot_off[static_cast<std::size_t>(nslots) * f + static_cast<std::size_t>(slot)]; }
   std::uint8_t mask(std::size_t f, int slot) const {
     return slot_mask[static_cast<std::size_t>(nslots) * f + static_cast<std::size_t>(slot)];
+  }
+  int image(std::size_t f, int slot) const {
+    return slot_image[static_cast<std::size_t>(nslots) * f + static_cast<std::size_t>(slot)];
   }
   double* Jf(std::size_t f) { return &J[static_cast<std::size_t>(rows * cols) * f]; }
   const double* Jf(std::size_t f) const { return &J[static_cast<std::size_t>(rows * cols) * f]; }
@@ -196,7 +206,15 @@ struct CpuBackend::Impl {
 
   // Factors (camera-side residuals without a point), by kind; empty kinds are left out.
   std::vector<PosePrior> pose_priors;
+  std::vector<GravityPrior> gravity_priors;
+  double g_world[3] = {0, -1, 0};
   std::vector<FactorSet> fsets;
+
+  // Poses whose heading is held by the gauge (D83): rotation tangent basis, from the
+  // current pose at each linearization, and its index per image (-1 for none).
+  double up[3] = {0, 1, 0};
+  std::vector<int> basis_of, basis_image;
+  std::vector<double> basis;  // 9 per entry of basis_image
 
   // Linearization.
   std::vector<double> r, Jp, Jx, Jk;
@@ -230,6 +248,7 @@ struct CpuBackend::Impl {
       blk_seen[image_block[p.obs_image[k]]] = 1;
     }
     for (auto i : p.rel_images) img_seen[static_cast<std::size_t>(i)] = 1;
+    for (auto i : p.grav_image) img_seen[static_cast<std::size_t>(i)] = 1;
     for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
       img_seen[static_cast<std::size_t>(p.glob_image[k])] = 1;
       set_seen[static_cast<std::size_t>(p.set_of_global_prior(k))] = 1;
@@ -242,6 +261,16 @@ struct CpuBackend::Impl {
     pose_off.assign(n_img, -1);
     pose_fixed_cols.assign(n_img, 0);
     for (const auto& [i, c] : gauge.fixed_translations) pose_fixed_cols[static_cast<std::size_t>(i)] |= std::uint8_t(1u << (3 + c));
+    // Heading held: translation and the basis's vertical column.
+    gravity_direction(p, g_world);
+    for (int c = 0; c < 3; ++c) up[c] = -g_world[c];
+    basis_of.assign(n_img, -1);
+    for (int i : gauge.heading_images) {
+      pose_fixed_cols[static_cast<std::size_t>(i)] |= std::uint8_t(0x3c);
+      basis_of[static_cast<std::size_t>(i)] = static_cast<int>(basis_image.size());
+      basis_image.push_back(i);
+    }
+    basis.assign(9 * basis_image.size(), 0);
     int off = 0;
     for (std::size_t i = 0; i < n_img; ++i) {
       const bool fixed = (!p.image_fixed.empty() && p.image_fixed[i]) || gauge_fixed[i];
@@ -376,6 +405,7 @@ struct CpuBackend::Impl {
     for (const auto& [off, image] : slots) {
       fs.slot_off.push_back(off);
       fs.slot_mask.push_back(slot_mask_of(off, image));
+      fs.slot_image.push_back(off >= 0 ? image : -1);
     }
     fs.loss.push_back(factor_loss);
     ++fs.count;
@@ -416,6 +446,17 @@ struct CpuBackend::Impl {
     }
     if (priors.count > 0) fsets.push_back(std::move(priors));
 
+    FactorSet gravity = make_set(FactorKind::Gravity, 3, {6});
+    for (std::size_t k = 0; k < p.num_gravity_priors(); ++k) {
+      GravityPrior f;
+      f.image = p.grav_image[k];
+      std::copy_n(&p.grav_dir[3 * k], 3, f.g);
+      f.w = 1 / (p.grav_sigma.empty() ? o.prior_defaults.gravity_sigma : p.grav_sigma[k]);
+      add_factor(gravity, {{pose_off[static_cast<std::size_t>(f.image)], f.image}}, o.gravity_loss);
+      gravity_priors.push_back(f);
+    }
+    if (gravity.count > 0) fsets.push_back(std::move(gravity));
+
     for (FactorSet& fs : fsets) finish_set(fs);
   }
 
@@ -446,6 +487,24 @@ struct CpuBackend::Impl {
   void eval_factor(const FactorSet& fs, std::size_t f, const Params& P, double* rw, double* J) const {
     switch (fs.kind) {
       case FactorKind::PosePrior: return eval_pose_prior(pose_priors[f], P.poses, P.sets, rw, J);
+      case FactorKind::Gravity: {
+        const GravityPrior& g = gravity_priors[f];
+        gravity_prior<double>(&P.poses[7 * static_cast<std::size_t>(g.image)], g_world, g.g, rw, J);
+        for (int a = 0; a < 3; ++a) rw[a] *= g.w;
+        if (J)
+          for (int a = 0; a < 18; ++a) J[a] *= g.w;
+        return;
+      }
+    }
+  }
+
+  // Rotation columns of a pose Jacobian (rows x stride, row-major, rotation in the
+  // first three columns) in the heading basis B: J <- J B.
+  static void apply_basis(const double* B, double* J, int rows, int stride) {
+    for (int row = 0; row < rows; ++row) {
+      double* j = J + row * stride;
+      const double j0 = j[0], j1 = j[1], j2 = j[2];
+      for (int c = 0; c < 3; ++c) j[c] = j0 * B[c] + j1 * B[3 + c] + j2 * B[6 + c];
     }
   }
 
@@ -547,6 +606,8 @@ struct CpuBackend::Impl {
   }
 
   void linearize(bool compute_scaling) {
+    for (std::size_t b = 0; b < basis_image.size(); ++b)
+      heading_basis(&cur.poses[7 * static_cast<std::size_t>(basis_image[b])], up, &basis[9 * b]);
     pool.parallel_for(nobs, [&](std::size_t k0, std::size_t k1) {
       for (std::size_t k = k0; k < k1; ++k) {
         const std::size_t i = static_cast<std::size_t>(o_img[k]);
@@ -558,6 +619,7 @@ struct CpuBackend::Impl {
         reprojection<double>(model, pose, pose + 4, &cur.points[3 * static_cast<std::size_t>(o_pt[k])],
                              &cur.intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(image_block[i])],
                              &o_xy[2 * k], rk, jp, jx, jk);
+        if (!basis_image.empty() && basis_of[i] >= 0) apply_basis(&basis[9 * static_cast<std::size_t>(basis_of[i])], jp, 2, 6);
         const double w = o_w[k];
         rk[0] *= w;
         rk[1] *= w;
@@ -654,6 +716,14 @@ struct CpuBackend::Impl {
           double* rw = fs.rf(f);
           double* J = fs.Jf(f);
           eval_factor(fs, f, cur, rw, J);
+          if (!basis_image.empty()) {
+            for (int slot = 0; slot < fs.nslots; ++slot) {
+              const int i = fs.image(f, slot);
+              if (i >= 0 && basis_of[static_cast<std::size_t>(i)] >= 0)
+                apply_basis(&basis[9 * static_cast<std::size_t>(basis_of[static_cast<std::size_t>(i)])],
+                            J + fs.slot_base[slot], fs.rows, fs.cols);
+            }
+          }
           if (fs.loss[f].type != LossType::None) {
             double sq = 0;
             for (int a = 0; a < fs.rows; ++a) sq += rw[a] * rw[a];
@@ -1094,6 +1164,11 @@ struct CpuBackend::Impl {
       const auto idx = static_cast<std::size_t>(fb.index);
       switch (fb.kind) {
         case BlockKind::Pose:
+          if (!basis_image.empty() && basis_of[idx] >= 0) {
+            const double* B = &basis[9 * static_cast<std::size_t>(basis_of[idx])];
+            const double d0 = delta[0], d1 = delta[1], d2 = delta[2];
+            for (int c = 0; c < 3; ++c) delta[c] = B[3 * c] * d0 + B[3 * c + 1] * d1 + B[3 * c + 2] * d2;
+          }
           pose_retract(&cur.poses[7 * idx], delta, &cand.poses[7 * idx]);
           add_difference(&cand.poses[7 * idx], &cur.poses[7 * idx], 7);
           break;

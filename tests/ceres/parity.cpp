@@ -63,7 +63,8 @@ int main(int argc, char** argv) {
   try {
     if (argc < 2) {
       std::fprintf(stderr, "usage: %s <problem> [--loss name:scale] [--relative-prior-loss name:scale] "
-                           "[--global-prior-loss name:scale] [--gauge auto|none] [--max-iterations n] "
+                           "[--global-prior-loss name:scale] [--gravity-loss name:scale] [--gauge auto|none] "
+                           "[--max-iterations n] "
                            "[--function-tolerance x] [--linear-solver iterative_schur|sparse_schur|dense_schur] "
                            "[--check-parameters] [--max-cost-diff x] [--max-iteration-ratio x] "
                            "[--max-centre-diff x] [--max-rotation-diff x] [--threads n] [--ceres-threads n]\n", argv[0]);
@@ -95,12 +96,15 @@ int main(int argc, char** argv) {
         if (!type) throw std::invalid_argument("unknown loss " + val);
         loss = jba::Loss{*type, colon != std::string::npos ? std::stod(val.substr(colon + 1)) : 1.0};
       };
-      if (key == "--loss") {
-        parse_loss(loss_flags[jba::kLossReprojection]);
-      } else if (key == "--relative-prior-loss") {
-        parse_loss(loss_flags[jba::kLossRelativePrior]);
-      } else if (key == "--global-prior-loss") {
-        parse_loss(loss_flags[jba::kLossGlobalPrior]);
+      std::size_t loss_type = jba::kNumLossTypes;
+      if (key == "--loss") loss_type = jba::kLossReprojection;
+      for (std::size_t t = 1; t < jba::kNumLossTypes; ++t) {
+        std::string flag = "--" + std::string(jba::residual_type_name(t)) + "-loss";
+        std::replace(flag.begin(), flag.end(), '_', '-');
+        if (key == flag) loss_type = t;
+      }
+      if (loss_type < jba::kNumLossTypes) {
+        parse_loss(loss_flags[loss_type]);
       } else if (key == "--gauge") {
         o.gauge = val == "none" ? jba::GaugeMode::None : jba::GaugeMode::Auto;
       } else if (key == "--max-iterations") {
@@ -135,9 +139,8 @@ int main(int argc, char** argv) {
 
     const jba::Problem initial = ends_with(input, ".txt") ? jba::read_bal(input) : jba::read_problem(input);
     o = jba::with_problem_losses(o, initial);  // D80
-    if (loss_flags[jba::kLossReprojection]) o.loss = *loss_flags[jba::kLossReprojection];
-    if (loss_flags[jba::kLossRelativePrior]) o.relative_prior_loss = *loss_flags[jba::kLossRelativePrior];
-    if (loss_flags[jba::kLossGlobalPrior]) o.global_prior_loss = *loss_flags[jba::kLossGlobalPrior];
+    for (std::size_t t = 0; t < jba::kNumLossTypes; ++t)
+      if (loss_flags[t]) *jba::loss_of(o, t) = *loss_flags[t];
     jba::Problem ours = initial, ref = initial;
     auto copts = jba_ceres::options_from(o, initial, linear);
     copts.num_threads = ceres_threads;
@@ -196,8 +199,9 @@ int main(int argc, char** argv) {
                 jba_ceres::json_string(input).c_str(), std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale,
                 o.gauge == jba::GaugeMode::Auto ? "auto" : "none", linear_name.c_str(), ceres_threads);
     std::printf("  \"images\": %zu, \"points\": %zu, \"observations\": %zu, \"relative_priors\": %zu, "
-                "\"global_priors\": %zu,\n", initial.num_images(), initial.num_points(), initial.num_observations(),
-                initial.num_relative_priors(), initial.num_global_priors());
+                "\"global_priors\": %zu, \"gravity_priors\": %zu,\n", initial.num_images(), initial.num_points(),
+                initial.num_observations(), initial.num_relative_priors(), initial.num_global_priors(),
+                initial.num_gravity_priors());
     std::printf("  \"jba\":   {\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, "
                 "\"linear_iterations\": %d, \"termination\": \"%s\", \"time_seconds\": %.4f},\n",
                 s.initial_cost, s.final_cost, s.iterations, s.linear_iterations,

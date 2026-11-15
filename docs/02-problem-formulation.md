@@ -87,6 +87,15 @@ position-only is the form COLMAP uses, and is what GPS will use later.
 **Gravity prior.** Ties a camera's up direction to the gravity direction reported
 for that frame. Optional.
 
+```
+r = R_i g_world - g_measured                          (3 values)
+```
+
+As built (D82): the chord between the solved and the measured direction, so about
+the angle in radians; `g_world` defaults to ARKit's and ARCore's world (y up).
+With gravity in a group, the gauge holds the reference's position and heading only
+(D83).
+
 #### The frame of a set of global priors
 
 A set of global priors lives in its source's own frame, which need not be the

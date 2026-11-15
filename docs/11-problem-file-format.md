@@ -96,7 +96,8 @@ Types appended later take the next indices.
 | `loss.type` | i32 | [T] | with `loss.scale` | 0 none, 1 Huber, 2 Cauchy, 3 Geman-McClure (definitions in document 02) |
 | `loss.scale` | f64 | [T] | with `loss.type` | Scale a of each loss, in whitened units (pixels for reprojection, standard deviations for priors) |
 
-Absent, or for types past T, the solver options decide. The CLI and the parity tool
+Absent, or for types past T, the solver options decide. Index 3 is the gravity prior
+(milestone 3). The CLI and the parity tool
 start from these and let their flags override them; `refine` writes the losses it
 solved with; the library's `solve` takes its losses from its options, and
 `with_problem_losses` copies these in.
@@ -104,7 +105,7 @@ Residual definitions: decisions D64 and D65.
 
 Validation: index ranges, array lengths, finite values, positive sigmas (prior
 sigmas may be +inf), known loss types with positive finite scales, and quaternion
-norms within 1e-9 of one. A relative prior may not tie an image to itself; a set
+and direction norms within 1e-9 of one. A relative prior may not tie an image to itself; a set
 that is the working frame must have the identity transform, and a rigid set scale
 1.
 
@@ -112,13 +113,21 @@ Normally a session has one intrinsics block (D11). Several blocks, all of the
 model in `camera.model`, are allowed so that BAL problems, which have one camera
 per image, convert without loss; the solver accepts them too (D53).
 
+Gravity priors (milestone 3; all optional, D82). `Q` gravity priors.
+
+| Name | dtype | Shape | Required | Meaning |
+|---|---|---|---|---|
+| `gravity.world` | f64 | [3] | no | Direction of gravity in the working frame, unit. Absent: (0, -1, 0), the world of ARKit and ARCore |
+| `prior.gravity.image` | i32 | [Q] | with gravity priors | Image of each prior |
+| `prior.gravity.direction` | f64 | [Q, 3] | with gravity priors | Direction of gravity measured in the image's camera axes, unit |
+| `prior.gravity.sigma` | f64 | [Q] | no | Standard deviation in radians. Absent: the solver's default |
+
 ## Planned sections
 
 Reserved names, added in the milestones that need them. Each will be optional.
 
 | Prefix | Milestone | Content |
 |---|---|---|
-| `image.gravity` | 3 | Gravity direction per image |
 | `depth.*` | 3 | Depth at keypoints, confidence, per-image scale and offset |
 | `lines.*` | 3 | Line segments per image for the Manhattan prior |
 

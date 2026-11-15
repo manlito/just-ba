@@ -71,7 +71,7 @@ struct RefineResult {
   std::size_t rejected_observations = 0;   // in the last round's filtering
   // Priors of `problem` by their index in the input (priors of images left out are
   // dropped). The report's down-weighted lists are already in input numbering.
-  std::vector<std::int32_t> relative_prior_index, global_prior_index;
+  std::vector<std::int32_t> relative_prior_index, global_prior_index, gravity_prior_index;
 };
 
 RefineResult refine(const RefineInput& input, const RefineOptions& options = {});

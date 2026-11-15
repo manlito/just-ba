@@ -15,7 +15,7 @@ constexpr double kPi = 3.141592653589793;
 
 // Keeps the priors whose images are all active; records where each came from.
 void keep_active_priors(Problem& p, const std::vector<char>& active, std::vector<std::int32_t>& rel_index,
-                        std::vector<std::int32_t>& glob_index) {
+                        std::vector<std::int32_t>& glob_index, std::vector<std::int32_t>& grav_index) {
   Problem q = p;
   q.rel_images.clear();
   q.rel_pose.clear();
@@ -26,8 +26,12 @@ void keep_active_priors(Problem& p, const std::vector<char>& active, std::vector
   q.glob_pose.clear();
   q.glob_sigma.clear();
   q.glob_sqrt_info.clear();
+  q.grav_image.clear();
+  q.grav_dir.clear();
+  q.grav_sigma.clear();
   rel_index.clear();
   glob_index.clear();
+  grav_index.clear();
   for (std::size_t k = 0; k < p.num_relative_priors(); ++k) {
     const auto i = static_cast<std::size_t>(p.rel_images[2 * k]), j = static_cast<std::size_t>(p.rel_images[2 * k + 1]);
     if (!active[i] || !active[j]) continue;
@@ -47,6 +51,13 @@ void keep_active_priors(Problem& p, const std::vector<char>& active, std::vector
     if (!p.glob_sigma.empty()) q.glob_sigma.insert(q.glob_sigma.end(), &p.glob_sigma[2 * k], &p.glob_sigma[2 * k] + 2);
     if (!p.glob_sqrt_info.empty())
       q.glob_sqrt_info.insert(q.glob_sqrt_info.end(), &p.glob_sqrt_info[36 * k], &p.glob_sqrt_info[36 * k] + 36);
+  }
+  for (std::size_t k = 0; k < p.num_gravity_priors(); ++k) {
+    if (!active[static_cast<std::size_t>(p.grav_image[k])]) continue;
+    grav_index.push_back(static_cast<std::int32_t>(k));
+    q.grav_image.push_back(p.grav_image[k]);
+    q.grav_dir.insert(q.grav_dir.end(), &p.grav_dir[3 * k], &p.grav_dir[3 * k] + 3);
+    if (!p.grav_sigma.empty()) q.grav_sigma.push_back(p.grav_sigma[k]);
   }
   // Prior sets stay as they are, so set indices are unchanged.
   p = std::move(q);
@@ -152,8 +163,8 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
 
   std::vector<char> active(n_img, 0);
   for (std::size_t i = 0; i < n_img; ++i) active[i] = init.group[i] >= 0 && (!o.largest_group_only || init.group[i] == 0);
-  std::vector<std::int32_t> rel_index, glob_index;
-  keep_active_priors(base, active, rel_index, glob_index);
+  std::vector<std::int32_t> rel_index, glob_index, grav_index;
+  keep_active_priors(base, active, rel_index, glob_index, grav_index);
 
   if (o.prior_solve && base.num_relative_priors() + base.num_global_priors() > 0) {
     out.summaries.push_back(solve(base, o.solver));
@@ -239,11 +250,13 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   // Report prior indices in the caller's numbering.
   for (auto& k : out.report.downweighted_relative) k = rel_index[static_cast<std::size_t>(k)];
   for (auto& k : out.report.downweighted_global) k = glob_index[static_cast<std::size_t>(k)];
+  for (auto& k : out.report.downweighted_gravity) k = grav_index[static_cast<std::size_t>(k)];
   store_losses(problem, o.solver);  // so the solved problem replays with them (D80)
   out.problem = std::move(problem);
   out.obs_keypoint = std::move(obs_keypoint);
   out.relative_prior_index = std::move(rel_index);
   out.global_prior_index = std::move(glob_index);
+  out.gravity_prior_index = std::move(grav_index);
   return out;
 }
 

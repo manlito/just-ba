@@ -28,7 +28,9 @@ enum class GaugeMode {
 // - a global prior from a set that is the working frame defines the frame: nothing
 //   is held;
 // - otherwise the reference image's pose is held: the one with the most
-//   observations, then the most priors, then the lowest index;
+//   observations, then the most priors, then the lowest index. When gravity priors
+//   in the group set the vertical, only its translation and its heading about the
+//   vertical are held (Gauge::heading_images);
 // - the scale is then set by relative priors or a rigid set if there are any;
 //   otherwise by holding the scale of a similarity set (the lowest index) if there
 //   is one; otherwise, as COLMAP does, by holding one translation coordinate of the
@@ -36,9 +38,14 @@ enum class GaugeMode {
 //   R2 (C2 - C1), D57).
 struct Gauge {
   std::vector<int> fixed_images;                     // poses held fixed
+  // Poses whose translation and heading about the vertical are held, their tilt left
+  // free: the reference of a group whose vertical is set by gravity priors (D83).
+  std::vector<int> heading_images;
   std::vector<std::array<int, 2>> fixed_translations;  // (image, coordinate 0..2)
   std::vector<int> fixed_set_scales;                 // prior sets whose scale is held
-  bool empty() const { return fixed_images.empty() && fixed_translations.empty() && fixed_set_scales.empty(); }
+  bool empty() const {
+    return fixed_images.empty() && heading_images.empty() && fixed_translations.empty() && fixed_set_scales.empty();
+  }
 };
 
 struct SolverOptions {
@@ -65,6 +72,7 @@ struct SolverOptions {
   // Provisional defaults, to be set from the synthetic jump tests and real captures.
   Loss relative_prior_loss{LossType::Cauchy, 3.0};
   Loss global_prior_loss{LossType::Cauchy, 3.0};
+  Loss gravity_loss{LossType::Cauchy, 3.0};
   PriorDefaults prior_defaults;  // weights for priors that come without any
   GaugeMode gauge = GaugeMode::Auto;
 
@@ -119,6 +127,14 @@ using IterationCallback = std::function<bool(const IterationSummary&)>;
 // none applies (any image or point already fixed). Exposed so reference solvers can
 // apply the same one.
 Gauge choose_gauge(const Problem& problem);
+
+// The loss of residual type `type` (kLossReprojection, ...) in the options, or
+// nullptr past the last type.
+Loss* loss_of(SolverOptions& options, std::size_t type);
+const Loss* loss_of(const SolverOptions& options, std::size_t type);
+// Name of a residual type, as in command-line flags with '-' for '_':
+// "reprojection", "relative_prior", "global_prior", "gravity".
+std::string_view residual_type_name(std::size_t type);
 
 // The losses stored with a problem (Problem::loss_type, loss.* sections; D80) in
 // place of the options' own, for the residual types the problem names.

@@ -115,10 +115,11 @@ Gauge choose_gauge(const Problem& p) {
     ++n_priors[i];
     if (p.relation_of_set(s) != FrameRelation::Identity) uf.join(i, n_img + s);
   }
+  for (auto i : p.grav_image) ++n_priors[static_cast<std::size_t>(i)];
 
   // What each group has.
   struct Group {
-    bool frame_defined = false, relative = false, rigid = false;
+    bool frame_defined = false, relative = false, rigid = false, vertical = false;
     int similarity_set = -1;
     int ref = -1;
   };
@@ -135,6 +136,7 @@ Gauge choose_gauge(const Problem& p) {
         break;
     }
   }
+  for (auto i : p.grav_image) groups[uf.find(static_cast<std::size_t>(i))].vertical = true;
   for (std::size_t i = 0; i < n_img; ++i) {
     if (n_obs[i] == 0 && n_priors[i] == 0) continue;  // not a variable
     Group& gr = groups[uf.find(i)];
@@ -146,11 +148,12 @@ Gauge choose_gauge(const Problem& p) {
     if (n_obs[i] > n_obs[r] || (n_obs[i] == n_obs[r] && n_priors[i] > n_priors[r])) gr.ref = static_cast<int>(i);
   }
 
-  // Points of each reference image, for the scale image of reprojection-only groups.
-    for (std::size_t root = 0; root < groups.size(); ++root) {
+  for (std::size_t root = 0; root < groups.size(); ++root) {
     const Group& gr = groups[root];
     if (gr.ref < 0 || gr.frame_defined) continue;
-    g.fixed_images.push_back(gr.ref);
+    // Gravity sets the vertical: hold the reference's translation and heading only.
+    if (gr.vertical) g.heading_images.push_back(gr.ref);
+    else g.fixed_images.push_back(gr.ref);
     if (gr.relative || gr.rigid) continue;
     if (gr.similarity_set >= 0) {
       g.fixed_set_scales.push_back(gr.similarity_set);
@@ -176,36 +179,47 @@ Gauge choose_gauge(const Problem& p) {
     g.fixed_translations.push_back({static_cast<int>(second), scale_coordinate(p, ref, second)});
   }
   std::sort(g.fixed_images.begin(), g.fixed_images.end());
+  std::sort(g.heading_images.begin(), g.heading_images.end());
   std::sort(g.fixed_translations.begin(), g.fixed_translations.end());
   std::sort(g.fixed_set_scales.begin(), g.fixed_set_scales.end());
   return g;
 }
 
-namespace {
-Loss* loss_slot(SolverOptions& o, std::size_t t) {
+Loss* loss_of(SolverOptions& o, std::size_t t) {
   switch (t) {
     case kLossReprojection: return &o.loss;
     case kLossRelativePrior: return &o.relative_prior_loss;
     case kLossGlobalPrior: return &o.global_prior_loss;
+    case kLossGravity: return &o.gravity_loss;
     default: return nullptr;
   }
 }
-}  // namespace
+
+const Loss* loss_of(const SolverOptions& o, std::size_t t) { return loss_of(const_cast<SolverOptions&>(o), t); }
+
+std::string_view residual_type_name(std::size_t t) {
+  switch (t) {
+    case kLossReprojection: return "reprojection";
+    case kLossRelativePrior: return "relative_prior";
+    case kLossGlobalPrior: return "global_prior";
+    case kLossGravity: return "gravity";
+    default: return "";
+  }
+}
 
 SolverOptions with_problem_losses(SolverOptions options, const Problem& problem) {
   const std::size_t n = std::min(problem.loss_type.size(), problem.loss_scale.size());
   for (std::size_t t = 0; t < n; ++t) {
-    if (Loss* l = loss_slot(options, t)) *l = {static_cast<LossType>(problem.loss_type[t]), problem.loss_scale[t]};
+    if (Loss* l = loss_of(options, t)) *l = {static_cast<LossType>(problem.loss_type[t]), problem.loss_scale[t]};
   }
   return options;
 }
 
 void store_losses(Problem& problem, const SolverOptions& options) {
-  SolverOptions o = options;
   problem.loss_type.assign(kNumLossTypes, 0);
   problem.loss_scale.assign(kNumLossTypes, 1.0);
   for (std::size_t t = 0; t < kNumLossTypes; ++t) {
-    const Loss* l = loss_slot(o, t);
+    const Loss* l = loss_of(options, t);
     problem.loss_type[t] = static_cast<std::int32_t>(l->type);
     problem.loss_scale[t] = l->scale;
   }

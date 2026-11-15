@@ -207,6 +207,58 @@ int main() {
     EXPECT((g.fixed_images == std::vector<int>{1, 4}) && g.fixed_translations.empty());  // most priors
   }
 
+  // Gravity sets the vertical (D83): a scene tilted as a whole, consistent with its
+  // observations and relative priors but not with gravity, levels itself. Only the
+  // reference's translation and heading are held, so its tilt follows gravity.
+  {
+    auto truth = jba_test::random_problem(CameraModel::Pinhole, 8, 200, 43, 0.0);
+    std::vector<std::int32_t> pairs;
+    for (int i = 0; i < 8; ++i) pairs.insert(pairs.end(), {i, (i + 1) % 8});
+    jba::add_relative_priors_from_poses(truth, truth.poses, pairs);
+    truth.gravity_world = {0, 0.6, 0.8};
+    for (int i = 0; i < 8; ++i) {
+      double g[3];
+      jba::quat_rotate(&truth.poses[7 * static_cast<std::size_t>(i)], truth.gravity_world.data(), g);
+      truth.grav_image.push_back(i);
+      truth.grav_dir.insert(truth.grav_dir.end(), g, g + 3);
+    }
+    // Tilt everything by Q about a horizontal axis: X' = Q X, R' = R Q^T, t' = t.
+    const double tilt[3] = {0.06, 0, 0};
+    double Q[4];
+    jba::quat_exp(tilt, Q);
+    const double Qc[4] = {Q[0], -Q[1], -Q[2], -Q[3]};
+    auto p = truth;
+    for (std::size_t j = 0; j < p.num_points(); ++j) jba::quat_rotate(Q, &truth.points[3 * j], &p.points[3 * j]);
+    for (std::size_t i = 0; i < p.num_images(); ++i) {
+      jba::quat_multiply(&truth.poses[7 * i], Qc, &p.poses[7 * i]);
+      jba::quat_normalize(&p.poses[7 * i]);
+    }
+    const auto g = jba::choose_gauge(p);
+    EXPECT(g.fixed_images.empty() && g.heading_images.size() == 1 && g.fixed_translations.empty());
+    jba::SolverOptions o;
+    o.function_tolerance = 1e-14;
+    o.parameter_tolerance = 1e-14;
+    o.max_iterations = 100;
+    const auto start = p;
+    const auto s = jba::solve(p, o);
+    std::printf("tilted scene with gravity priors: cost %.3g -> %.3g\n", s.initial_cost, s.final_cost);
+    EXPECT(s.final_cost < 1e-16 * s.initial_cost);
+    double worst = 0;
+    for (std::size_t k = 0; k < p.num_gravity_priors(); ++k) {
+      double gc[3];
+      jba::quat_rotate(&p.poses[7 * static_cast<std::size_t>(p.grav_image[k])], p.gravity_world.data(), gc);
+      for (int a = 0; a < 3; ++a) worst = std::max(worst, std::abs(gc[a] - p.grav_dir[3 * k + static_cast<std::size_t>(a)]));
+    }
+    EXPECT(worst < 1e-8);
+    const auto ref = static_cast<std::size_t>(g.heading_images[0]);
+    for (std::size_t a = 4; a < 7; ++a) EXPECT(p.poses[7 * ref + a] == start.poses[7 * ref + a]);
+    // Without gravity priors the same start is already a minimum: the tilt is a gauge freedom.
+    auto plain = start;
+    plain.grav_image.clear();
+    plain.grav_dir.clear();
+    EXPECT(jba::choose_gauge(plain).heading_images.empty());
+  }
+
   // With priors, results are still bit-identical for any thread count, and the
   // reference pose does not move.
   {
