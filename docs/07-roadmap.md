@@ -235,8 +235,9 @@ Results (2026-11-14, M5 Pro):
   all of it. The CPU backend takes the new camera-side residuals as factor sets and
   the depth rows next to the reprojection rows.
 - Level 1: the gravity, line and depth residuals agree with finite differences to
-  6e-11 and with Ceres's automatic differentiation of independent functors to
-  2e-15.
+  6e-11; gravity and depth also with Ceres's automatic differentiation of
+  independent functors, to 2e-15. The line residual meets Ceres at Level 2 only
+  (document 13).
 - Level 2: 26 new synthetic cases against Ceres (gravity with outliers and the
   heading-held gauge; lines with one and three freedoms, outliers, gravity,
   priors, two groups tied only by the frame; depth along the axis and the ray,
@@ -279,6 +280,9 @@ parity included. The first CI run found a covariance test whose problem was
 singular but passed on the Mac by rounding; singular systems are now refused on
 every platform (D88). Not yet tried: real captures with segments or depth (the
 exported ARCore captures carry neither; their `refine` test still passes).
+Reviewed in document 13: every figure above reproduces. To fix: the covariance of
+a pose whose heading the gauge holds (D83) is reported in the gauge's basis, not
+the pose tangent.
 
 ## Milestone 4: Apple backend (Metal)
 
@@ -362,6 +366,12 @@ single-precision tolerance, and faster than Ceres with Accelerate on every probl
 measured, 2.6 to 10.6 times. The Metal tests run where a Metal device is present
 (label `gpu`); CI's quick mode has no macOS job, and its full mode runs them on the
 hosted macOS runner as an informational step (document 08).
+Reviewed in document 13: the figures above reproduce (2.5 to 10.8 times when
+re-measured). To fix: sparse_schur stops the process when no camera-side block is
+free, and its conjugate-gradients fallback, which the real captures need, has no
+test outside them. "Same answers" is shown on the parity problems; through
+`refine` on the captures the backends agree to about 1e-3 of the scene scale, and
+no test compares them there.
 
 ## Milestone 5: CUDA backend
 
@@ -445,6 +455,6 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 |---|---|---|
 | Single precision is not accurate enough on large or badly scaled scenes | GPU results miss tolerance | Local parameterization, compensated sums, host-side double decisions; double on CUDA as fallback |
 | Conjugate gradients converge slowly with very noisy priors | Slow or stalled solves | Direct solve option; better preconditioner |
-| Three kernel targets drift apart | Backend-specific bugs | One symbolic source, cross-backend equality tests on every commit |
+| Three kernel targets drift apart | Backend-specific bugs | One symbolic source; cross-backend equality tests (`ctest -L gpu`), run by hand; CI's full mode runs them without failing on them (document 08) |
 | "Fastest" is not reached against Caspar | Core promise missed, and found late because CUDA now comes after Metal | Profile against it at the start of milestone 5; adopt full-system conjugate gradients if it wins |
 | Scope growth through new residual types | Core path slows down | The regression rule in document 05: no new residual without proof the existing benchmarks held |

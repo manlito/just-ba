@@ -196,9 +196,9 @@ loop sees is coarser than the table: `cost`, `linearize`, `gradient_max_norm`,
 candidate, including the conjugate gradients loop. The operations in the table
 exist as private functions of the CPU backend, for the reprojection residual and
 the pose priors (D75).
-As frozen in milestone 4 (D90): the coarse interface stays, plus
-`max_trust_region_radius()`, which lets a single-precision backend cap the radius
-where its damping is still resolved (D91). The inner solve belongs to each backend:
+As frozen in milestone 4 (D90): the coarse interface stays, plus `cost_by_type`
+(milestone 3) and `max_trust_region_radius()`, which lets a single-precision
+backend cap the radius where its damping is still resolved (D91). The inner solve belongs to each backend:
 on Metal the conjugate gradients loop, stopping test included, runs in batches on
 the device and never returns to the host per dot product. What every backend needs
 on the host (variable layout, observations in point-major order, the camera-side
@@ -273,7 +273,7 @@ runtime types. CI checks that the checked-in generated files are current.
 
 | Backend | Kernels | Precision | Direct solver (option B) | Runtime dependencies |
 |---|---|---|---|---|
-| CPU (reference) | Host language, threads, SIMD | double | Accelerate on Apple; a small built-in dense Cholesky elsewhere | None beyond the system |
+| CPU (reference) | Host language, threads, SIMD | double | Not built yet (D92). Planned: Accelerate on Apple; a small built-in dense Cholesky elsewhere | None beyond the system |
 | CUDA | CUDA C | single by default, double optional | cuDSS or cuSOLVER, optional | CUDA runtime; solver libraries only if option B is enabled |
 | Apple (as built, milestone 4) | Metal Shading Language, compiled at run time from embedded source | single, with host double for decisions | Accelerate's sparse Cholesky in double (the default there, D92) | System frameworks only (Metal, Foundation, Accelerate) |
 | WebGPU (stretch) | WGSL | single | none | Browser |
@@ -305,7 +305,8 @@ Notes:
 
 All backends are compiled into one binary where the platform allows and selected at
 run time. Running out of device memory is a reported error with a CPU fallback; an
-8 GB GPU is the reference consumer device.
+8 GB GPU is the reference consumer device. As built on Metal, a buffer that cannot
+be allocated is a reported error; the fallback to the CPU is not built.
 
 ## Repository layout
 

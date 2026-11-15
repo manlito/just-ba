@@ -11,7 +11,9 @@ on Linux and Windows. Milestone 4 (the Metal backend) met its exit on the owner'
 M5 Pro: the CPU's answers within single-precision tolerance, 2.6 to 10.6 times
 faster than Ceres with Accelerate; macOS wheels are left to milestone 6's packaging. Results in [07-roadmap.md](07-roadmap.md). Milestones 0
 and 1 were reviewed before milestone 2; the findings are in
-[12-review-milestones-0-1.md](12-review-milestones-0-1.md). Build instructions:
+[12-review-milestones-0-1.md](12-review-milestones-0-1.md). Milestones 3 and 4 were
+reviewed after milestone 4: the results hold, and three defects are to be fixed
+before milestone 5 ([13-review-milestones-3-4.md](13-review-milestones-3-4.md)). Build instructions:
 [../README.md](../README.md).
 
 ## Documents
@@ -31,6 +33,7 @@ and 1 were reviewed before milestone 2; the findings are in
 | 10 | [Mobile app as a consumer](10-mobile-consumer.md) | A separate-repository phone app that will link this library, and the constraints that keeps open |
 | 11 | [Problem file format](11-problem-file-format.md) | The on-disk format used by the CLI and tests |
 | 12 | [Review of milestones 0 and 1](12-review-milestones-0-1.md) | What was checked, what was found, what changes before milestone 2 |
+| 13 | [Review of milestones 3 and 4](13-review-milestones-3-4.md) | What was checked and re-measured, what was found, what changes before milestone 5 |
 
 ## Decisions waiting on the owner
 
@@ -56,9 +59,11 @@ Decided so far:
 
 Still open (full list in [00-decisions.md](00-decisions.md)):
 
-1. **Default prior weights.** The values need real captures to set.
-2. **Real sessions for a private test set.** Milestone 2 cannot meet its exit
-   condition without them.
+1. **Default prior weights.** Relative priors are set from three ARCore captures
+   (D77); global priors, and ARKit, still need captures.
+2. **From the review of milestones 3 and 4** (document 13): whether CI's full mode
+   keeps its Metal step, and what agreement between backends `refine` must give on
+   real captures.
 
 ## Reference material
 
