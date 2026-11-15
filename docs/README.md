@@ -9,7 +9,7 @@ Status: milestones 1 (CPU solver, parity with Ceres), 2 (the main use case on th
 CPU), 3 (gravity, the Manhattan prior, depth, covariances, export) and 4 (the Metal
 backend: the CPU's answers within single-precision tolerance, 3.0 to 12.6 times
 faster than Ceres with Accelerate on the owner's M5 Pro, whole call, D101) done; CI passes on Linux
-and Windows. macOS wheels are left to milestone 6's packaging. Milestone 5 (CUDA)
+and Windows, the CUDA backend compiled with cuDSS included (2026-11-15). macOS wheels are left to milestone 6's packaging. Milestone 5 (CUDA)
 met its exit on Linux: faster than Ceres, Caspar and bae at equal accuracy on the
 owner's laptop, times of the whole call, venice-52 excepted (document 07); the
 Windows check is outstanding. Results in
