@@ -53,7 +53,7 @@ instructions:
 
 Decided so far:
 
-- Language: C++, standard C++23 (D52).
+- Language: C++, standard C++23 (D52); the CUDA sources are C++20 (D113).
 - Correctness means agreeing with Ceres Solver.
 - The speed claim is made for 50 to 2,000 images; up to 10,000 is supported.
 - Depth starts as a term at keypoints; photometric refinement (as in PyPose `bae`)
@@ -82,10 +82,10 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
    D109 (venice-52 not studied before milestone 6).
 4. **From the review of the fixes** (document 15): its two questions are answered by
    D105 (`Auto` keeps one rule) and D106 (Caspar compared on its own scale).
-5. **Before milestone 6:** which CUDA versions the wheels support. CUDA 12 and 13
-   were asked for; D52's C++23 needs CUDA 13.3. Decided so far: no Linux arm64
-   wheels (D108), CI and releases started by hand (D110, D111), docs on Cloudflare
-   Pages (D112).
+5. **Before milestone 6:** all answered. No Linux arm64 wheels (D108), venice-52
+   not studied (D109), CI and releases started by hand (D110, D111), docs on
+   Cloudflare Pages (D112), CUDA 12 and 13 wheels with the CUDA sources in C++20
+   (D113).
 
 ## Reference material
 

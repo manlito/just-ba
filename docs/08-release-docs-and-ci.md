@@ -37,8 +37,8 @@ Open points:
 - One package that loads CUDA at run time when present, or a separate CUDA package
   (the common `-cu12` and `-cu13` naming). Run-time loading gives users one name to
   install; separate packages keep the default wheel small. Decide in milestone 6.
-  Which CUDA versions are supported (12, 13 or both) is open in document 00: D52
-  needs CUDA 13.3.
+  Both CUDA 12 and CUDA 13 are supported, with the CUDA sources built as C++20
+  (D113).
 - Windows is a target (required by the desktop app, document 09): CPU and CUDA
   wheels for Windows x86_64, built and tested on hosted Windows runners, with GPU
   tests on the owner's Windows laptop.

@@ -98,7 +98,7 @@ for the owner to review; D52 and D53 are the owner's.
 | D49 | The CI workflow is manual-trigger only while the repository is private. Push and pull request triggers are switched on when it goes public. | Hosted minutes on private repositories count against a quota, macOS at 10x. Follows D39. | Running CI on every push now. |
 | D50 | Metal kernels are compiled at run time from source embedded in the library. | Needs no Metal offline compiler (a separate Xcode download). Revisit in milestone 4 if compile time matters; pipelines can be cached. | Precompiled `.metallib` files for now. |
 | D51 | Ceres for tests is built from the 2.2.0 tag archive on GitHub, with a pinned hash, by `third_party/ceres/build.cmake`. | ceres-solver.org did not resolve on 2026-11-14; the tag archive is the same release. | Package managers (versions and options vary by platform). |
-| D52 | C++ standard: C++23 everywhere, CUDA sources included. Requires CUDA 13.3 or later. | The owner chose "whatever CUDA supports". nvcc accepts `-std=c++23` from CUDA 13.3 (13.5 documentation checked on 2026-11-14). Brings `std::expected` for the C-level API and `std::mdspan` for Jacobian blocks. | C++20 (the suggestion in document 06; no reason to stay). C++26 (compiler support still partial). |
+| D52 | C++ standard: C++23 everywhere, CUDA sources included. Requires CUDA 13.3 or later. (Amended by D113: the CUDA sources are C++20, so CUDA 12 builds too.) | The owner chose "whatever CUDA supports". nvcc accepts `-std=c++23` from CUDA 13.3 (13.5 documentation checked on 2026-11-14). Brings `std::expected` for the C-level API and `std::mdspan` for Jacobian blocks. | C++20 (the suggestion in document 06; no reason to stay). C++26 (compiler support still partial). |
 | D53 | The solver accepts several intrinsics blocks, one per image at most, all of the same camera model. One block per session stays the normal case and the fast path. Refines D11. | BAL has one camera per image, and milestone 1 parity with Ceres runs on BAL. The file format already holds several blocks (D48). One model per problem keeps kernels free of per-observation branching. | BAL parity only after averaging or fixing intrinsics (changes the problem, so not a parity test). Several camera models in one problem. |
 
 ## Milestone 1 (2026-11-14)
@@ -217,8 +217,7 @@ by D105 and D106.
 
 ## Before milestone 6 (2026-11-15)
 
-Owner answers to the milestone 6 prerequisites. Which CUDA versions the wheels
-support is still open (below): the owner asked for CUDA 12 and 13, and D52 needs 13.3.
+Owner answers to the milestone 6 prerequisites.
 
 | # | Decision | Why | Rejected or ruled out |
 |---|---|---|---|
@@ -227,6 +226,7 @@ support is still open (below): the owner asked for CUDA 12 and 13, and D52 needs
 | D110 | CI stays manual and light through milestone 6 (D49, D61 unchanged). The full mode's informational Metal step is to be removed from `ci.yml`; the Metal tests are run by hand on the owner's Mac, as for every GPU test (D40). Answers document 13's question on that step. | The owner wants CI lightweight. The step spent 10x macOS minutes on tests that cannot fail the run. | Keeping the informational step. Making it a required check on the hosted runner. |
 | D111 | Releasing to PyPI is a workflow started by hand (`.github/workflows/release.yml`, `workflow_dispatch`), not by a tag. It builds the wheels and the source distribution and publishes through PyPI trusted publishing, with no GitHub environment: environment protection rules and secrets in private repositories are not on the owner's plan. The pending publisher on PyPI names this workflow file. TestPyPI is not used. | Follows D49 and D110: nothing runs that was not started by hand. Trusted publishing needs neither an environment nor a stored token. | A tag-triggered release (document 08's first plan). A PyPI API token stored as a secret. |
 | D112 | The documentation site is hosted on Cloudflare Pages. How it is deployed (Cloudflare's own build from the repository, or an upload from a workflow) is decided when the documentation build exists. | Free, and it serves a site built from a private repository; GitHub Pages from a private repository needs GitHub Pro. | GitHub Pages (needs Pro while private). Read the Docs (its free plan is for public repositories). GitHub Pro (costs money). |
+| D113 | CUDA wheels for both CUDA 12 and CUDA 13. The CUDA sources (`backends/cuda/src/backend.cu` and every header it includes) are compiled as C++20 (`CMAKE_CUDA_STANDARD 20`); the host code stays C++23 (D52). The headers shared with CUDA must keep to C++20. Not yet built with CUDA 12: when checked on 2026-11-15 those headers used none of the C++23 library features (`std::expected`, `std::mdspan`, `std::print`), so no code change is expected; the CMake change and a CUDA 12 build come with milestone 6's wheels. | CUDA 13 dropped older GPU generations; CUDA 12 keeps them working. nvcc accepts C++23 only from 13.3, so CUDA 12 needs C++20 on the device side. | CUDA 13 only (drops older GPUs). C++20 everywhere (the host code would lose C++23 for no reason). |
 
 ## Still open
 
@@ -239,7 +239,6 @@ support is still open (below): the owner asked for CUDA 12 and 13, and D52 needs
 | Desktop app: UI technology, bundled matcher, bare photos versus pose-carrying captures first | When the app is scheduled |
 | What agreement between backends `refine` must give on real captures (measured: about 1e-3 of the scene scale, against 1e-7 on the parity problems), and whether its solves should run to convergence instead of stopping at 50 iterations (document 13, finding 5) | Before CUDA is compared with the CPU on captures |
 | A leaner layout for strategy B's tile entries, which grow with the square of the track length (document 13, finding 10), and E and G, 36 floats per observation. Since D102 the set-up is fast (tracks of 100: 0.75 s on CUDA) and `Auto` keeps B off a device it would not fit, so this is now about reach: with tracks of 16, 10,000 images do not fit B on an 8 GB card | When a problem of the target class needs B and does not fit |
-| Which CUDA versions the wheels support. The owner asked for CUDA 12 and 13; D52 compiles the CUDA sources as C++23, which nvcc accepts from 13.3 only. CUDA 12 wheels would need the CUDA sources (and the headers they include) built as C++20, the host code staying C++23. CUDA 13 dropped older GPU generations, which is the reason to ship CUDA 12 | Owner, at the start of milestone 6 |
 | The CUDA backend on Windows: build and tests on the laptop's Windows (document 07, milestone 5) | Owner, when the laptop is booted into Windows |
 | Double-precision kernels on CUDA, full-system conjugate gradients (deferred, D100) | When a problem needs them |
 
