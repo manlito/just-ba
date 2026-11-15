@@ -1,5 +1,5 @@
 # WebGPU backend (exploration). Natively against Dawn's prebuilt library
-# (JBA_DAWN_DIR, the unpacked release with lib/cmake/Dawn); under Emscripten against
+# (JBA_DAWN_DIR, the unpacked release with lib/cmake/Dawn, lib64/ on Linux); under Emscripten against
 # Dawn's emdawnwebgpu port (JBA_EMDAWNWEBGPU_DIR, the unpacked emdawnwebgpu_pkg).
 # The kernels are WGSL, embedded as strings and compiled by the WebGPU implementation
 # at run time, like Metal's (D50).
@@ -32,7 +32,9 @@ if(EMSCRIPTEN)
 else()
   file(GLOB _dawn_default "${PROJECT_SOURCE_DIR}/third_party/webgpu/dawn/Dawn-*")
   set(JBA_DAWN_DIR "${_dawn_default}" CACHE PATH "The unpacked Dawn release (with lib/cmake/Dawn)")
-  find_package(Dawn REQUIRED CONFIG PATHS "${JBA_DAWN_DIR}/lib/cmake/Dawn" NO_DEFAULT_PATH)
+  # Dawn's Linux release installs into lib64/ (CI's first WebGPU run), macOS's into lib/.
+  find_package(Dawn REQUIRED CONFIG PATHS "${JBA_DAWN_DIR}/lib/cmake/Dawn" "${JBA_DAWN_DIR}/lib64/cmake/Dawn"
+               NO_DEFAULT_PATH)
   find_package(Threads REQUIRED)
   target_link_libraries(jba_webgpu PUBLIC dawn::webgpu_dawn)
   if(APPLE)
