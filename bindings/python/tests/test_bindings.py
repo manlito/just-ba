@@ -300,3 +300,29 @@ def test_depth_in_refine():
     assert np.isnan(rep.depth_refined[~has]).all()
     p = r.problem
     assert p.depth_kind == jba.DepthKind.Z and p.depth_form == jba.DepthForm.LINEAR
+
+
+def test_covariance():
+    sc = scene.room(n_images=12, n_points=800)
+    p = jba.make_problem("PINHOLE", scene.K, poses=sc["poses"])
+    obs_image, obs_point, obs_xy = [], [], []
+    for i, (kp, pts) in enumerate(zip(sc["keypoints"], sc["point_of"])):
+        obs_image += [i] * len(pts)
+        obs_point += pts.tolist()
+        obs_xy.append(kp)
+    used, obs_point = np.unique(obs_point, return_inverse=True)
+    p.points = sc["points"][used]
+    p.obs_image = obs_image
+    p.obs_point = obs_point
+    p.obs_xy = np.concatenate(obs_xy)
+    p.obs_sigma = np.full(p.num_observations, 0.5)
+    jba.solve(p)
+    c = jba.covariance(p, points=[0, 5])
+    assert c.pose.shape == (12, 6, 6) and c.centre.shape == (12, 3, 3) and c.point.shape == (2, 3, 3)
+    ref = c.gauge.fixed_images[0]
+    assert np.all(c.pose[ref] == 0)
+    others = [i for i in range(12) if i != ref]
+    for i in others:
+        np.testing.assert_allclose(c.pose[i], c.pose[i].T, atol=1e-18)
+        assert np.all(np.linalg.eigvalsh(c.centre[i]) > -1e-18)
+    assert np.all(np.linalg.eigvalsh(c.point[0]) > 0)

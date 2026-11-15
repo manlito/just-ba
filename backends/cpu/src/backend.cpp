@@ -1568,6 +1568,265 @@ struct CpuBackend::Impl {
     return out;
   }
 
+  // ---------------------------------------------------------------------------
+  // Covariance.
+
+  // Free columns: those of variable blocks that are not held (masks).
+  std::vector<char> free_columns() const {
+    std::vector<char> free(nf, 1);
+    for (const FBlock& fb : fblocks) {
+      std::uint16_t mask = 0;
+      if (fb.kind == BlockKind::Pose) mask = pose_fixed_cols[static_cast<std::size_t>(fb.index)];
+      else if (fb.kind == BlockKind::Intrinsics) mask = intr_fixed_cols[static_cast<std::size_t>(fb.index)];
+      else if (fb.kind == BlockKind::Depth) mask = depth_fixed_cols[static_cast<std::size_t>(fb.index)];
+      for (int c = 0; c < fb.size; ++c)
+        if (mask & (1u << c)) free[static_cast<std::size_t>(fb.offset + c)] = 0;
+    }
+    return free;
+  }
+
+  // In-place inverse of a dense symmetric positive definite matrix (n x n), by
+  // Cholesky; rows run in parallel. False when it is not positive definite.
+  bool dense_spd_inverse(std::vector<double>& A, std::size_t n) {
+    // A = L L^T, L in the lower triangle.
+    for (std::size_t j = 0; j < n; ++j) {
+      double d = A[j * n + j];
+      for (std::size_t k = 0; k < j; ++k) d -= A[j * n + k] * A[j * n + k];
+      if (!(d > 0) || !std::isfinite(d)) return false;
+      const double ljj = std::sqrt(d);
+      A[j * n + j] = ljj;
+      pool.parallel_for(n - j - 1, [&](std::size_t a0, std::size_t a1) {
+        for (std::size_t a = a0; a < a1; ++a) {
+          const std::size_t i = j + 1 + a;
+          double v = A[i * n + j];
+          for (std::size_t k = 0; k < j; ++k) v -= A[i * n + k] * A[j * n + k];
+          A[i * n + j] = v / ljj;
+        }
+      }, 64);
+    }
+    // Columns of L^-1, then A^-1 = L^-T L^-1 (lower triangle, mirrored).
+    std::vector<double> Li(n * n, 0.0);
+    pool.parallel_for(n, [&](std::size_t c0, std::size_t c1) {
+      for (std::size_t c = c0; c < c1; ++c) {
+        Li[c * n + c] = 1 / A[c * n + c];
+        for (std::size_t i = c + 1; i < n; ++i) {
+          double v = 0;
+          for (std::size_t k = c; k < i; ++k) v -= A[i * n + k] * Li[k * n + c];
+          Li[i * n + c] = v / A[i * n + i];
+        }
+      }
+    }, 8);
+    pool.parallel_for(n, [&](std::size_t i0, std::size_t i1) {
+      for (std::size_t i = i0; i < i1; ++i)
+        for (std::size_t j = 0; j <= i; ++j) {
+          double v = 0;
+          for (std::size_t k = i; k < n; ++k) v += Li[k * n + i] * Li[k * n + j];
+          A[i * n + j] = v;
+        }
+    }, 8);
+    for (std::size_t i = 0; i < n; ++i)
+      for (std::size_t j = 0; j < i; ++j) A[j * n + i] = A[i * n + j];
+    return true;
+  }
+
+  // The camera-side columns and Jacobian rows of observation k's residual rows:
+  // up to 3 rows (2 reprojection, 1 depth) over pose, intrinsics and depth blocks.
+  struct ObsRows {
+    int rows = 0;
+    int off[3] = {-1, -1, -1}, size[3] = {0, 0, 0};
+    double J[3][3 * kMaxParams] = {};  // [block][row * size + col]
+    double X[3][3] = {};               // point Jacobian per row
+  };
+  ObsRows obs_rows(std::size_t k) const {
+    ObsRows o;
+    const bool depth = has_depth && o_dw[k] != 0;
+    o.rows = depth ? 3 : 2;
+    if (o_pose[k] >= 0) {
+      o.off[0] = o_pose[k];
+      o.size[0] = 6;
+      for (int c = 0; c < 6; ++c) {
+        o.J[0][c] = Jp[12 * k + c];
+        o.J[0][6 + c] = Jp[12 * k + 6 + c];
+        if (depth) o.J[0][12 + c] = dJp[6 * k + c];
+      }
+    }
+    if (o_intr[k] >= 0) {
+      o.off[1] = o_intr[k];
+      o.size[1] = np;
+      for (int c = 0; c < np; ++c) {
+        o.J[1][c] = Jk[2 * static_cast<std::size_t>(np) * k + c];
+        o.J[1][np + c] = Jk[2 * static_cast<std::size_t>(np) * k + np + c];
+      }
+    }
+    if (depth && o_dep[k] >= 0) {
+      o.off[2] = o_dep[k];
+      o.size[2] = 2;
+      o.J[2][4] = dJc[2 * k];
+      o.J[2][5] = dJc[2 * k + 1];
+    }
+    for (int c = 0; c < 3; ++c) {
+      o.X[0][c] = Jx[6 * k + c];
+      o.X[1][c] = Jx[6 * k + 3 + c];
+      if (depth) o.X[2][c] = dJx[3 * k + c];
+    }
+    return o;
+  }
+
+  void covariance(const std::vector<int>& want_points, std::size_t max_unknowns, std::vector<double>& pose_cov,
+                  std::vector<double>& point_cov) {
+    if (nf > max_unknowns)
+      throw std::runtime_error("covariance: " + std::to_string(nf) + " camera-side unknowns, more than the limit of " +
+                               std::to_string(max_unknowns));
+    // Unscaled, robustified Jacobian at the current parameters.
+    have_scaling = false;
+    std::fill(f_scale.begin(), f_scale.end(), 1.0);
+    std::fill(e_scale.begin(), e_scale.end(), 1.0);
+    linearize(false);
+    const std::size_t n = nf;
+    std::vector<double> S(n * n, 0.0);
+    // Point blocks C_j = J_e^T J_e (undamped) and their inverses.
+    // A free point seen from fewer than two images absorbs its observations entirely:
+    // it is left out, which is the limit of marginalising it.
+    std::vector<char> point_ok(point_off.size(), 1), point_used(point_off.size(), 1);
+    for (std::size_t j = 0; j < point_off.size(); ++j) {
+      if (point_off[j] < 0) continue;
+      int images = 0;
+      for (std::size_t k = pt_begin[j]; k < pt_begin[j + 1]; ++k)
+        if (k == pt_begin[j] || o_img[k] != o_img[k - 1]) ++images;
+      if (images < 2) {
+        point_used[j] = point_ok[j] = 0;
+        continue;
+      }
+      double C[9] = {};
+      for (std::size_t k = pt_begin[j]; k < pt_begin[j + 1]; ++k) {
+        const ObsRows o = obs_rows(k);
+        for (int row = 0; row < o.rows; ++row)
+          for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b) C[3 * a + b] += o.X[row][a] * o.X[row][b];
+      }
+      point_ok[j] = spd_inverse(C, 3);
+      std::copy(C, C + 9, &Cinv[9 * j]);
+    }
+    // S = sum over residuals of J_f^T J_f - sum over points E_j C_j^-1 E_j^T.
+    for (std::size_t j = 0; j < point_off.size(); ++j) {
+      if (!point_used[j]) continue;
+      const bool eliminate = point_off[j] >= 0 && point_ok[j];
+      // E_j as a list of (column, 3 values).
+      std::vector<std::pair<int, std::array<double, 3>>> E;
+      for (std::size_t k = pt_begin[j]; k < pt_begin[j + 1]; ++k) {
+        const ObsRows o = obs_rows(k);
+        for (int b1 = 0; b1 < 3; ++b1) {
+          if (o.off[b1] < 0) continue;
+          for (int c1 = 0; c1 < o.size[b1]; ++c1) {
+            const auto col = static_cast<std::size_t>(o.off[b1] + c1);
+            for (int b2 = 0; b2 < 3; ++b2) {
+              if (o.off[b2] < 0) continue;
+              for (int c2 = 0; c2 < o.size[b2]; ++c2) {
+                double v = 0;
+                for (int row = 0; row < o.rows; ++row) v += o.J[b1][row * o.size[b1] + c1] * o.J[b2][row * o.size[b2] + c2];
+                S[col * n + static_cast<std::size_t>(o.off[b2] + c2)] += v;
+              }
+            }
+            if (eliminate) {
+              std::array<double, 3> e{};
+              for (int row = 0; row < o.rows; ++row)
+                for (int a = 0; a < 3; ++a) e[static_cast<std::size_t>(a)] += o.J[b1][row * o.size[b1] + c1] * o.X[row][a];
+              E.push_back({static_cast<int>(col), e});
+            }
+          }
+        }
+      }
+      if (!eliminate) continue;
+      const double* Ci = &Cinv[9 * j];
+      for (const auto& [c1, e1] : E) {
+        double w[3];
+        for (int a = 0; a < 3; ++a) w[a] = Ci[3 * a] * e1[0] + Ci[3 * a + 1] * e1[1] + Ci[3 * a + 2] * e1[2];
+        for (const auto& [c2, e2] : E)
+          S[static_cast<std::size_t>(c1) * n + static_cast<std::size_t>(c2)] -= w[0] * e2[0] + w[1] * e2[1] + w[2] * e2[2];
+      }
+    }
+    for (const FactorSet& fs : fsets) {
+      for (std::size_t f = 0; f < fs.count; ++f) {
+        const double* J = fs.Jf(f);
+        for (int s1 = 0; s1 < fs.nslots; ++s1) {
+          if (fs.off(f, s1) < 0) continue;
+          for (int s2 = 0; s2 < fs.nslots; ++s2) {
+            if (fs.off(f, s2) < 0) continue;
+            for (int c1 = 0; c1 < fs.slot_size[s1]; ++c1)
+              for (int c2 = 0; c2 < fs.slot_size[s2]; ++c2) {
+                double v = 0;
+                for (int row = 0; row < fs.rows; ++row)
+                  v += J[row * fs.cols + fs.slot_base[s1] + c1] * J[row * fs.cols + fs.slot_base[s2] + c2];
+                S[static_cast<std::size_t>(fs.off(f, s1) + c1) * n + static_cast<std::size_t>(fs.off(f, s2) + c2)] += v;
+              }
+          }
+        }
+      }
+    }
+    // Held coordinates: a unit diagonal, zeroed again afterwards.
+    const std::vector<char> free = free_columns();
+    for (std::size_t c = 0; c < n; ++c) {
+      if (free[c]) continue;
+      for (std::size_t a = 0; a < n; ++a) S[c * n + a] = S[a * n + c] = 0;
+      S[c * n + c] = 1;
+    }
+    if (n > 0 && !dense_spd_inverse(S, n))
+      throw std::runtime_error("covariance: the system is singular; some freedom is not held (gauge) or not observed");
+    for (std::size_t c = 0; c < n; ++c) {
+      if (free[c]) continue;
+      for (std::size_t a = 0; a < n; ++a) S[c * n + a] = S[a * n + c] = 0;
+    }
+    // Poses.
+    const std::size_t n_img = pose_off.size();
+    pose_cov.assign(36 * n_img, 0.0);
+    for (std::size_t i = 0; i < n_img; ++i) {
+      const int o = pose_off[i];
+      if (o < 0) continue;
+      for (int a = 0; a < 6; ++a)
+        for (int b = 0; b < 6; ++b)
+          pose_cov[36 * i + static_cast<std::size_t>(6 * a + b)] = S[static_cast<std::size_t>(o + a) * n + static_cast<std::size_t>(o + b)];
+    }
+    // Points: C^-1 + C^-1 E^T Sigma_f E C^-1.
+    point_cov.assign(9 * want_points.size(), 0.0);
+    for (std::size_t q = 0; q < want_points.size(); ++q) {
+      const auto j = static_cast<std::size_t>(want_points[q]);
+      if (j >= point_off.size() || point_off[j] < 0) continue;
+      double* out = &point_cov[9 * q];
+      if (!point_ok[j]) {
+        for (int a = 0; a < 9; ++a) out[a] = std::nan("");
+        continue;
+      }
+      std::vector<std::pair<int, std::array<double, 3>>> E;
+      for (std::size_t k = pt_begin[j]; k < pt_begin[j + 1]; ++k) {
+        const ObsRows o = obs_rows(k);
+        for (int b1 = 0; b1 < 3; ++b1) {
+          if (o.off[b1] < 0) continue;
+          for (int c1 = 0; c1 < o.size[b1]; ++c1) {
+            std::array<double, 3> e{};
+            for (int row = 0; row < o.rows; ++row)
+              for (int a = 0; a < 3; ++a) e[static_cast<std::size_t>(a)] += o.J[b1][row * o.size[b1] + c1] * o.X[row][a];
+            E.push_back({o.off[b1] + c1, e});
+          }
+        }
+      }
+      // M = E^T Sigma_f E (3 x 3).
+      double M[9] = {};
+      for (const auto& [c1, e1] : E)
+        for (const auto& [c2, e2] : E) {
+          const double s = S[static_cast<std::size_t>(c1) * n + static_cast<std::size_t>(c2)];
+          for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b) M[3 * a + b] += e1[static_cast<std::size_t>(a)] * s * e2[static_cast<std::size_t>(b)];
+        }
+      const double* Ci = &Cinv[9 * j];
+      double T[9];
+      for (int a = 0; a < 3; ++a)
+        for (int b = 0; b < 3; ++b) T[3 * a + b] = Ci[3 * a] * M[b] + Ci[3 * a + 1] * M[3 + b] + Ci[3 * a + 2] * M[6 + b];
+      for (int a = 0; a < 3; ++a)
+        for (int b = 0; b < 3; ++b)
+          out[3 * a + b] = Ci[3 * a + b] + T[3 * a] * Ci[b] + T[3 * a + 1] * Ci[3 + b] + T[3 * a + 2] * Ci[6 + b];
+    }
+  }
+
   double parameter_norm() const {
     double s = 0;
     for (const FBlock& fb : fblocks) {
@@ -1600,6 +1859,11 @@ CpuBackend::~CpuBackend() = default;
 double CpuBackend::cost() { return impl_->cost_of(impl_->cur); }
 
 void CpuBackend::cost_by_type(double* out) { impl_->cost_by_type(out); }
+
+void CpuBackend::covariance(const std::vector<int>& points, std::size_t max_unknowns, std::vector<double>& pose_cov,
+                            std::vector<double>& point_cov) {
+  impl_->covariance(points, max_unknowns, pose_cov, point_cov);
+}
 
 void CpuBackend::linearize(bool compute_scaling) { impl_->linearize(compute_scaling); }
 

@@ -646,9 +646,57 @@ Result solve(jba::Problem& p, const Options& o) {
   opts.logging_type = ceres::SILENT;
 
   ceres::Solver::Summary summary;
-  ceres::Solve(opts, &problem, &summary);
+  if (o.solve) ceres::Solve(opts, &problem, &summary);
 
   Result r;
+  if (o.covariance) {
+    ceres::Covariance::Options copts;
+    copts.algorithm_type = ceres::DENSE_SVD;
+    copts.num_threads = o.num_threads;
+    ceres::Covariance cov(copts);
+    std::vector<std::pair<const double*, const double*>> blocks;
+    for (std::size_t i = 0; i < p.num_images(); ++i) {
+      const double* pose = &p.poses[7 * i];
+      if (problem.HasParameterBlock(pose) && !problem.IsParameterBlockConstant(pose)) blocks.push_back({pose, pose});
+    }
+    for (int j : o.covariance_points) {
+      const double* X = &p.points[3 * static_cast<std::size_t>(j)];
+      if (problem.HasParameterBlock(X) && !problem.IsParameterBlockConstant(X)) blocks.push_back({X, X});
+    }
+    if (!cov.Compute(blocks, &problem)) throw std::runtime_error("Ceres covariance failed");
+    r.pose_covariance.assign(36 * p.num_images(), 0.0);
+    for (std::size_t i = 0; i < p.num_images(); ++i) {
+      const double* pose = &p.poses[7 * i];
+      if (!problem.HasParameterBlock(pose) || problem.IsParameterBlockConstant(pose)) continue;
+      double* out = &r.pose_covariance[36 * i];
+      if (std::find(o.gauge.heading_images.begin(), o.gauge.heading_images.end(), static_cast<int>(i)) !=
+          o.gauge.heading_images.end()) {
+        for (int a = 0; a < 36; ++a) out[a] = std::nan("");
+        continue;
+      }
+      // Tangent columns present: rotation, then the translation coordinates not held.
+      std::vector<int> cols = {0, 1, 2};
+      for (int c = 0; c < 3; ++c) {
+        bool held = std::find(o.gauge.translation_images.begin(), o.gauge.translation_images.end(),
+                              static_cast<int>(i)) != o.gauge.translation_images.end();
+        for (const auto& [img, hc] : o.gauge.fixed_translations)
+          if (img == static_cast<int>(i) && hc == c) held = true;
+        if (!held) cols.push_back(3 + c);
+      }
+      const int m = static_cast<int>(cols.size());
+      std::vector<double> C(static_cast<std::size_t>(m * m));
+      cov.GetCovarianceBlockInTangentSpace(pose, pose, C.data());
+      for (int a = 0; a < m; ++a)
+        for (int b = 0; b < m; ++b) out[6 * cols[static_cast<std::size_t>(a)] + cols[static_cast<std::size_t>(b)]] = C[static_cast<std::size_t>(m * a + b)];
+    }
+    r.point_covariance.assign(9 * o.covariance_points.size(), 0.0);
+    for (std::size_t q = 0; q < o.covariance_points.size(); ++q) {
+      const double* X = &p.points[3 * static_cast<std::size_t>(o.covariance_points[q])];
+      if (problem.HasParameterBlock(X) && !problem.IsParameterBlockConstant(X))
+        cov.GetCovarianceBlock(X, X, &r.point_covariance[9 * q]);
+    }
+  }
+  if (!o.solve) return r;
   r.initial_cost = summary.initial_cost;
   r.final_cost = summary.final_cost;
   r.iterations = static_cast<int>(summary.iterations.size()) - 1;

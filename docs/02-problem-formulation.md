@@ -595,6 +595,10 @@ the linear system at the solution.
 | Covariance of selected points (3 x 3) | Back-substitution through the point blocks | On request, for chosen points or all |
 | Full joint covariance | Not offered | Too large to be useful |
 
+As built (milestone 3, D88): `covariance()` in `covariance.h`, dense inverse of the
+reduced system up to 20,000 camera-side unknowns, checked against Ceres's covariance
+and against the spread of repeated noisy runs.
+
 Points to settle when it is implemented:
 
 - Covariances are only meaningful when the input weights are meaningful. With

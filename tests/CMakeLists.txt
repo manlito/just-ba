@@ -12,6 +12,7 @@ jba_test(test_bal)
 jba_test(test_solver)
 jba_test(test_prior_jacobians)
 jba_test(test_direction_jacobians)
+jba_test(test_covariance)
 jba_test(test_geometry)
 
 # End to end on synthetic scenes (document 05; generator in scene.cpp).

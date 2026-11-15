@@ -12,6 +12,10 @@ target_link_libraries(jba_parity PRIVATE jba_ceres_reference)
 add_executable(test_ceres_level1 test_ceres_level1.cpp)
 target_link_libraries(test_ceres_level1 PRIVATE jba_ceres_reference)
 add_test(NAME test_ceres_level1 COMMAND test_ceres_level1)
+add_executable(test_ceres_covariance test_ceres_covariance.cpp)
+target_link_libraries(test_ceres_covariance PRIVATE jba_ceres_reference)
+target_include_directories(test_ceres_covariance PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+add_test(NAME test_ceres_covariance COMMAND test_ceres_covariance)
 
 # Level 2 on synthetic problems: one generated file per case, then a parity run.
 #   jba_parity_case(<name> "<generator options>" "<parity options>")

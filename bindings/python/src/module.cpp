@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "jba/camera_model.h"
+#include "jba/covariance.h"
 #include "jba/initialize.h"
 #include "jba/priors.h"
 #include "jba/problem.h"
@@ -585,6 +586,30 @@ NB_MODULE(_core, m) {
       "(Tracks, TrackStats).");
 
   // --- Refine --------------------------------------------------------------
+  nb::class_<jba::Covariance>(m, "Covariance", "Uncertainty of a solved problem (document 02).")
+      .def_prop_ro("pose", [](const jba::Covariance& c) { return to_numpy(c.pose, {6, 6}); },
+                   "(N, 6, 6) per image, pose tangent: rotation (rad, camera axes), then translation.",
+                   nb::rv_policy::move)
+      .def_prop_ro("centre", [](const jba::Covariance& c) { return to_numpy(c.centre, {3, 3}); },
+                   "(N, 3, 3) per image, camera centre in the working frame.", nb::rv_policy::move)
+      .def_prop_ro("points", [](const jba::Covariance& c) { return to_numpy(c.points); }, nb::rv_policy::move)
+      .def_prop_ro("point", [](const jba::Covariance& c) { return to_numpy(c.point, {3, 3}); },
+                   "(P, 3, 3) per requested point.", nb::rv_policy::move)
+      .def_ro("gauge", &jba::Covariance::gauge);
+  m.def(
+      "covariance",
+      [](const jba::Problem& p, const jba::SolverOptions& o, nb::handle points, bool all_points, std::size_t max_unknowns) {
+        jba::CovarianceOptions co;
+        if (!points.is_none()) co.points = from_numpy(as_array<std::int32_t>(points, "points"), {}, "points");
+        co.all_points = all_points;
+        co.max_unknowns = max_unknowns;
+        nb::gil_scoped_release release;
+        return jba::covariance(p, o, co);
+      },
+      "problem"_a, "options"_a = jba::SolverOptions{}, "points"_a = nb::none(), "all_points"_a = false,
+      "max_unknowns"_a = 20000,
+      "Covariances of the poses (and of the given points) of a solved problem, relative to the gauge.");
+
   nb::class_<jba::ManhattanOptions>(m, "ManhattanOptions", "Line assignment and the support test (document 02, section 5).")
       .def(nb::init<>())
       .def_rw("dof", &jba::ManhattanOptions::dof)

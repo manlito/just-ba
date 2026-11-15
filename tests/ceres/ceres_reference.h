@@ -150,6 +150,9 @@ struct Options {
   jba::PriorDefaults prior_defaults;
   jba::Gauge gauge;  // the same freedoms the library would hold fixed
   int num_threads = 1;
+  bool solve = true;        // false: build the problem only (with covariance)
+  bool covariance = false;  // Ceres's covariance estimation (dense SVD) at the end
+  std::vector<int> covariance_points;
 };
 
 struct Result {
@@ -165,6 +168,10 @@ struct Result {
   std::vector<double> history_radius;
   std::vector<double> history_relative_decrease;
   std::vector<bool> history_accepted;
+  // With Options::covariance: per image 6 x 6 in the pose tangent (held coordinates
+  // zero; NaN for a heading-held pose, whose tangent is not the library's), and 3 x 3
+  // per requested point.
+  std::vector<double> pose_covariance, point_covariance;
 };
 
 // Solves `problem` in place with Ceres.
