@@ -6,8 +6,8 @@ job is refining reconstructions that come with noisy camera poses from ARKit, AR
 or another tracker.
 
 Status: milestones 1 (CPU solver, parity with Ceres) and 2 (the main use case on the
-CPU) done; milestone 3 (gravity, the Manhattan prior, depth, covariances, export)
-done on synthetic data, CI run pending. Results in [07-roadmap.md](07-roadmap.md). Milestones 0
+CPU) and 3 (gravity, the Manhattan prior, depth, covariances, export) done; CI passes
+on Linux and Windows. Results in [07-roadmap.md](07-roadmap.md). Milestones 0
 and 1 were reviewed before milestone 2; the findings are in
 [12-review-milestones-0-1.md](12-review-milestones-0-1.md). Build instructions:
 [../README.md](../README.md).

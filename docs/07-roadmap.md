@@ -273,10 +273,12 @@ Results (2026-11-14, M5 Pro):
   the same machine, from 12% faster to 2% slower. The machine ran about 10% slower
   than when the baseline was taken, so the baseline file was not replaced.
 
-Status: exit conditions met on synthetic data, on the owner's Mac. Not yet done: a CI
-run on Linux and Windows (manual trigger, D49); real captures with segments or
-depth (the exported ARCore captures carry neither yet; their `refine` test still
-passes).
+Status: done. Exit conditions met on synthetic data. Tested on the owner's Mac and, in
+a quick CI run (D61) on 2026-11-15, on Ubuntu 24.04 and Windows Server 2025, Ceres
+parity included. The first CI run found a covariance test whose problem was
+singular but passed on the Mac by rounding; singular systems are now refused on
+every platform (D88). Not yet tried: real captures with segments or depth (the
+exported ARCore captures carry neither; their `refine` test still passes).
 
 ## Milestone 4: Apple backend (Metal)
 
