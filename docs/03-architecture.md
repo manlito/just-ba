@@ -204,6 +204,13 @@ the device and never returns to the host per dot product. What every backend nee
 on the host (variable layout, observations in point-major order, the camera-side
 factors and their evaluation in double, the cost in double, the retraction) is one
 shared class, `cpu::System`; each backend adds its own linear algebra.
+The two GPU backends share more (milestone 5, D96): one kernel source,
+`backends/gpu/kernels/solver.inc`, compiled by Metal and by nvcc behind a prelude of
+macros each, and one host side, `gpu::GpuBackend`, above a small device interface
+(`jba/gpu/device.h`: buffers with a host side, dispatches of a kernel over threads
+or groups, and the direct factorization of option B). The structures the kernels
+share with the host are defined once (`jba/gpu/layout.h`). A GPU backend is that
+interface: Metal's is about 250 lines with Accelerate, CUDA's about 240 with cuDSS.
 
 ## Precision
 
@@ -265,7 +272,9 @@ portable. If CUDA atomics prove faster, they can be an opt-in fast mode.
 - Generated code is checked into the repository. The generator is a development tool,
   not a build or run-time dependency.
 
-The tool is wrenfold, pinned, with small custom emitters for C++ and Metal (D45).
+The tool is wrenfold, pinned, with small custom emitters for C++, Metal and CUDA
+(D45; the CUDA one since milestone 5). The solver kernels themselves are written by
+hand, once for both GPU backends (D96).
 SymForce was the other candidate; its C++ output depends on Eigen and its own
 runtime types. CI checks that the checked-in generated files are current.
 
@@ -274,8 +283,8 @@ runtime types. CI checks that the checked-in generated files are current.
 | Backend | Kernels | Precision | Direct solver (option B) | Runtime dependencies |
 |---|---|---|---|---|
 | CPU (reference) | Host language, threads, SIMD | double | Not built yet (D92). Planned: Accelerate on Apple; a small built-in dense Cholesky elsewhere | None beyond the system |
-| CUDA | CUDA C | single by default, double optional | cuDSS or cuSOLVER, optional | CUDA runtime; solver libraries only if option B is enabled |
-| Apple (as built, milestone 4) | Metal Shading Language, compiled at run time from embedded source | single, with host double for decisions | Accelerate's sparse Cholesky in double (the default there, D92) | System frameworks only (Metal, Foundation, Accelerate) |
+| CUDA (as built, milestone 5) | The shared kernel source, compiled by nvcc for the build machine's GPU unless architectures are given | single, with host double for decisions; double kernels not built | cuDSS's sparse Cholesky in double on the GPU, optional (`JBA_WITH_CUDSS`, D98); then the default | CUDA runtime, linked statically; cuDSS only when built with it |
+| Apple (as built, milestone 4) | Metal Shading Language: the shared kernel source behind the Metal prelude (D96), compiled at run time from embedded source | single, with host double for decisions | Accelerate's sparse Cholesky in double (the default there, D92) | System frameworks only (Metal, Foundation, Accelerate) |
 | WebGPU (stretch) | WGSL | single | none | Browser |
 
 Notes:
@@ -305,8 +314,8 @@ Notes:
 
 All backends are compiled into one binary where the platform allows and selected at
 run time. Running out of device memory is a reported error with a CPU fallback; an
-8 GB GPU is the reference consumer device. As built on Metal, a buffer that cannot
-be allocated is a reported error; the fallback to the CPU is not built.
+8 GB GPU is the reference consumer device. As built on Metal and CUDA, a buffer that
+cannot be allocated is a reported error; the fallback to the CPU is not built.
 
 ## Repository layout
 
@@ -321,8 +330,9 @@ core/            problem data, problem file, LM loop, gauge choice, priors, star
 residuals/       symbolic definitions and generated code per target
 backends/
   cpu/           the solver backend
+  gpu/           what the GPU backends share: kernel source, structures, host side (D96)
   metal/         Apple GPU backend (milestone 4); the milestone 0 spike kernel too
-  cuda/        *
+  cuda/          NVIDIA GPU backend (milestone 5)
   webgpu/      *
 tracks/          track building, triangulation
 pipeline/      * incremental reconstruction (test fixture)
@@ -340,7 +350,7 @@ third_party/     reference solver build (Ceres), test-only
 
 | Decision | How it gets settled |
 |---|---|
-| Default linear strategy (A, B or C) per problem size | Metal: B at every size measured, 16 to 2,000 images (D92). CPU and CUDA: benchmark |
+| Default linear strategy (A, B or C) per problem size | Metal: B at every size measured, 16 to 2,000 images (D92). CUDA: B when built with cuDSS (D98). CPU: benchmark once it has B |
 | Preconditioner beyond block-Jacobi | Benchmark on ill-conditioned prior-heavy problems |
 | Symbolic tool | Decided: wrenfold (D45) |
 | Whether CUDA double is worth shipping | Accuracy results in single precision |
