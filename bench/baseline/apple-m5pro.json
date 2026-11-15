@@ -1,5 +1,5 @@
 {
- "commit": "2a5308e-dirty",
+ "commit": "b0342e3",
  "machine": {
   "system": "Darwin",
   "release": "25.6.0",
@@ -26,10 +26,10 @@
    "accepted_steps": 31,
    "linear_iterations": 2051,
    "termination": "convergence",
-   "time_seconds": 0.427,
+   "time_seconds": 0.4233,
    "setup_seconds": 0.0008,
-   "cold_time_seconds": 0.4269,
-   "time_per_iteration": 0.013774193548387097
+   "cold_time_seconds": 0.4264,
+   "time_per_iteration": 0.01365483870967742
   },
   "problem-21-11315-pre": {
    "images": 21,
@@ -44,10 +44,10 @@
    "accepted_steps": 10,
    "linear_iterations": 911,
    "termination": "convergence",
-   "time_seconds": 0.2003,
+   "time_seconds": 0.1956,
    "setup_seconds": 0.0011,
-   "cold_time_seconds": 0.205,
-   "time_per_iteration": 0.02003
+   "cold_time_seconds": 0.1962,
+   "time_per_iteration": 0.01956
   },
   "problem-16-22106-pre": {
    "images": 16,
@@ -62,10 +62,10 @@
    "accepted_steps": 14,
    "linear_iterations": 669,
    "termination": "convergence",
-   "time_seconds": 0.2903,
-   "setup_seconds": 0.002,
-   "cold_time_seconds": 0.3025,
-   "time_per_iteration": 0.020735714285714284
+   "time_seconds": 0.277,
+   "setup_seconds": 0.0019,
+   "cold_time_seconds": 0.2845,
+   "time_per_iteration": 0.01978571428571429
   },
   "problem-52-64053-pre": {
    "images": 52,
@@ -80,10 +80,10 @@
    "accepted_steps": 35,
    "linear_iterations": 3570,
    "termination": "no_convergence",
-   "time_seconds": 7.3302,
+   "time_seconds": 7.0765,
    "setup_seconds": 0.0067,
-   "cold_time_seconds": 7.3684,
-   "time_per_iteration": 0.14660399999999998
+   "cold_time_seconds": 7.1272,
+   "time_per_iteration": 0.14153000000000002
   },
   "problem-93-61203-pre": {
    "images": 93,
@@ -98,10 +98,10 @@
    "accepted_steps": 15,
    "linear_iterations": 1131,
    "termination": "convergence",
-   "time_seconds": 1.8211,
-   "setup_seconds": 0.0055,
-   "cold_time_seconds": 1.8135,
-   "time_per_iteration": 0.12140666666666666
+   "time_seconds": 1.7695,
+   "setup_seconds": 0.0059,
+   "cold_time_seconds": 1.7647,
+   "time_per_iteration": 0.11796666666666668
   },
   "synthetic-pinhole-50": {
    "images": 50,
@@ -116,10 +116,10 @@
    "accepted_steps": 6,
    "linear_iterations": 48,
    "termination": "convergence",
-   "time_seconds": 0.0614,
-   "setup_seconds": 0.0044,
-   "cold_time_seconds": 0.063,
-   "time_per_iteration": 0.010233333333333334
+   "time_seconds": 0.0574,
+   "setup_seconds": 0.0047,
+   "cold_time_seconds": 0.0611,
+   "time_per_iteration": 0.009566666666666666
   },
   "synthetic-radial-free-30": {
    "images": 30,
@@ -134,10 +134,10 @@
    "accepted_steps": 24,
    "linear_iterations": 892,
    "termination": "convergence",
-   "time_seconds": 0.6142,
-   "setup_seconds": 0.0023,
-   "cold_time_seconds": 0.6394,
-   "time_per_iteration": 0.01706111111111111
+   "time_seconds": 0.6001,
+   "setup_seconds": 0.0022,
+   "cold_time_seconds": 0.6161,
+   "time_per_iteration": 0.016669444444444445
   },
   "synthetic-relative-priors-50": {
    "images": 50,
@@ -152,10 +152,10 @@
    "accepted_steps": 4,
    "linear_iterations": 22,
    "termination": "convergence",
-   "time_seconds": 0.0365,
-   "setup_seconds": 0.0042,
-   "cold_time_seconds": 0.0412,
-   "time_per_iteration": 0.009125
+   "time_seconds": 0.0352,
+   "setup_seconds": 0.0041,
+   "cold_time_seconds": 0.0383,
+   "time_per_iteration": 0.0088
   },
   "synthetic-global-similarity-50": {
    "images": 50,
@@ -170,10 +170,10 @@
    "accepted_steps": 4,
    "linear_iterations": 27,
    "termination": "convergence",
-   "time_seconds": 0.0404,
+   "time_seconds": 0.0379,
    "setup_seconds": 0.0042,
-   "cold_time_seconds": 0.0433,
-   "time_per_iteration": 0.0101
+   "cold_time_seconds": 0.0418,
+   "time_per_iteration": 0.009475
   },
   "synthetic-opencv-30": {
    "images": 30,
@@ -189,8 +189,8 @@
    "linear_iterations": 35,
    "termination": "convergence",
    "time_seconds": 0.0196,
-   "setup_seconds": 0.0019,
-   "cold_time_seconds": 0.0217,
+   "setup_seconds": 0.0021,
+   "cold_time_seconds": 0.0216,
    "time_per_iteration": 0.0049
   }
  }
