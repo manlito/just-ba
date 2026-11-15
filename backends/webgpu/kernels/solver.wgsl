@@ -594,7 +594,11 @@ fn block_gather_body(gid: u32, group: u32, lid: u32) {
         }
       } else if (fb.kind == kIntrinsics) {
         let J = a.Jk + 2u * np * k;
-        for (var c = 0u; c < np; c++) {
+        // Columns 1, 2, ..., np - 1, then 0: the same sums as columns in order. In order,
+        // Apple's shader compiler or GPU now and then drops one product of the first
+        // pass, so repeated solves differ (document 16); this order avoids it.
+        for (var cc = 0u; cc < np; cc++) {
+          let c = (cc + 1u) % np;
           let j0 = ld(J + c);
           let j1 = ld(J + np + c);
           if (op.mode == 0) {

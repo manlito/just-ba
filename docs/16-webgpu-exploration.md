@@ -21,13 +21,13 @@ app could use WebGPU alone, or at least good enough for a browser-only demo?
   where fixed costs dominate). The browser has no direct factorization yet (below), so
   it runs the iterative solver, which on BAL takes 1.6 to 9 times as long as Metal's
   default.
-- **One defect is open:** on BAL problems with one free intrinsics block
-  per image (ladybug-49, venice-52, final-93), repeated WebGPU solves differ. The
-  answers are correct to the usual tolerances, but the library's rule that the same
-  input gives the same result bit for bit (D59, D93) does not hold on WebGPU yet.
-  It is not a defect of this code: it reproduces in a small Metal program
-  without Dawn or the library, which points to Apple's shader compiler or GPU
-  (below).
+- **Repeatability: a fault on Apple's side, worked around.** On BAL problems
+  (one free intrinsics block per image), repeated WebGPU solves used to differ,
+  breaking the library's rule that the same input gives the same result bit for bit
+  (D59, D93). It is not a defect of this code: it reproduces in a small Metal program
+  without Dawn or the library, which points to Apple's shader compiler or GPU. A
+  reordered loop in one kernel avoids it at no measurable cost (below); every
+  problem tried now repeats.
 - **For the desktop app:** WebGPU is good enough on Apple GPUs to be the only GPU
   path on a Mac if the determinism defect is fixed, at a cost of up to 40 percent
   with the iterative solver and 20 to 120 percent with sparse_schur (40 at
@@ -92,10 +92,11 @@ the larger walks the counts differ, because WebAssembly does not fuse multiply-a
 on the host and the host's double arithmetic rounds differently (the reason D81
 keeps baselines per platform).
 
-### Open: repeated solves differ on some BAL problems (not a defect of this code)
+### Repeated solves differed on BAL problems (Apple's fault, worked around)
 
-Repeated WebGPU solves of ladybug-49, venice-52 and final-93 give different
-iteration counts and final costs (for example 47 iterations and a final cost of
+Before the workaround below, repeated WebGPU solves of ladybug-49, venice-52 and
+final-93 (in a later run also trafalgar-21) gave different iteration counts and
+final costs (for example 47 iterations and a final cost of
 13344.703 in one run, 49 and 13344.687 in another). Dubrovnik-16, trafalgar-21 and
 every synthetic problem, including the 2,000-image walk, repeat bit for bit. Metal,
 running the same algorithm, repeats on all of them. So the library's determinism
@@ -133,16 +134,23 @@ this code shape, not of `solver.wgsl`, `backend.cpp`, Dawn's runtime or Tint's
 additions. The WGSL was also reviewed kernel by kernel against `solver.inc`
 (indexing, structure layouts, State offsets, barriers, early returns): no race.
 
-Avoiding it: iterating the intrinsics columns of `block_gather` from 1 (`c = (cc + 1)
-% np`, the same arithmetic per column) removes it in the repeat test (0 of 4,300 and
-0 of 680), and all six BAL solves that differed then repeat five times out of five.
-Not applied: it sidesteps the trigger without explaining it, and `jf_times`,
-`rows_of` and `scale_observations` have loops of the same shape that were not tested
-on their own. The reproduction (the Metal program, the kernels, the snapshot and the
+The workaround (D119): `block_gather` takes the intrinsics columns in the order 1,
+2, ..., np - 1, 0 (`c = (cc + 1) % np`), the same sums per column. The repeat test
+then fails in 0 of 4,300 and 0 of 680 dispatches. Five solves of each of the five BAL
+problems, with each linear solver, repeat bit for bit, and the WebGPU tests pass
+three times out of three under `ctest -j4`, where `webgpu_bal_shape` had failed
+once. Cost: none measurable. Time per conjugate-gradients iteration moved by 0.91 to
+1.09 times on the BAL problems, the radial problem and the 500-image walk, which
+never runs the changed loop and moved by 1.01, the size of the noise.
+
+It sidesteps the trigger without explaining it. `jf_times`, `rows_of` and
+`scale_observations` have loops of the same shape and were not tested on their own;
+every problem tried repeats, but a new problem shape could meet the fault elsewhere.
+The reproduction (the Metal program, the kernels, the buffer snapshot and the
 reordered kernel) was saved under `build/metal-repro` in the exploration's worktree,
 for a report to Apple. Still to try: a later Dawn release, and the same build on
-Vulkan and Direct3D 12 on the laptop. Until then `bench/run.py
---allow-nondeterministic` relaxes the benchmark's determinism check.
+Vulkan and Direct3D 12 on the laptop. `bench/run.py --allow-nondeterministic` stays,
+so a regression shows as a warning instead of stopping the run.
 
 ## Speed
 
@@ -256,10 +264,9 @@ with Dawn's release unpacked under `third_party/webgpu/dawn` and emdawnwebgpu un
 
 ## What it would take to merge
 
-1. Deal with the Metal fault behind the non-repeatable solves (above): the loop
-   reordering that avoids it, checked on every kernel with the same loop shape, and
-   a report to Apple with the saved reproduction. Without that the backend breaks
-   D59's promise and the benchmark's regression rule on Apple GPUs.
+1. The Metal fault behind the non-repeatable solves (above) is worked around in
+   the one kernel where it showed. Check the other kernels with the same loop shape,
+   and report it to Apple with the saved reproduction.
 2. Measure on the laptop: Dawn on Direct3D 12 and Vulkan against CUDA, on Windows
    and Linux. This decides whether the desktop app can use WebGPU alone on Windows,
    and covers the Intel and AMD machines document 09 worries about.

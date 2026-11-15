@@ -242,6 +242,7 @@ review; none of it is on main.
 | D116 | Strategy B on WebGPU only where the host has a factorization: Accelerate natively on Apple. In the browser, iterative_schur. | The reduced system is formed on the GPU by the same tile kernels; the factorization is the host's, as on Metal. WebAssembly has no sparse Cholesky in this library yet. | A factorization compiled into the WebAssembly module, sparse or dense for small problems (not built yet; a follow-up in document 16). |
 | D117 | The WebAssembly module is single-threaded on the host, waits for the GPU through JSPI, and uses native wasm exceptions. | No `SharedArrayBuffer`, so any static host serves the page; JSPI needs no change to the synchronous solver; exceptions are how the library reports errors. | Threads (cross-origin-isolation headers; the host side is a small part of the time on WebGPU). Asyncify (larger, slower, and incompatible with native wasm exceptions). |
 | D118 | `bench/run.py --allow-nondeterministic` records problems whose repeated runs differ instead of stopping. For this exploration only. | The WebGPU backend does not yet repeat bit for bit on three BAL problems (document 16); the rest of the benchmark still needs measuring. | Dropping the check (it found the defect). |
+| D119 | `block_gather` takes the intrinsics columns in the order 1, ..., np - 1, 0 on WebGPU. | On Apple GPUs, in the natural order, the first pass of that loop now and then dropped one product, so repeated solves of BAL problems differed (document 16). Reproduced in plain Metal without Dawn or the library; the reordering removes it with no measurable cost, and the same sums per column. | Leaving it (the owner chose the fix). Waiting for Apple. |
 
 ## Still open
 
@@ -257,7 +258,7 @@ review; none of it is on main.
 | Which CUDA versions the wheels support. The owner asked for CUDA 12 and 13; D52 compiles the CUDA sources as C++23, which nvcc accepts from 13.3 only. CUDA 12 wheels would need the CUDA sources (and the headers they include) built as C++20, the host code staying C++23. CUDA 13 dropped older GPU generations, which is the reason to ship CUDA 12 | Owner, at the start of milestone 6 |
 | The CUDA backend on Windows: build and tests on the laptop's Windows (document 07, milestone 5) | Owner, when the laptop is booted into Windows |
 | Double-precision kernels on CUDA, full-system conjugate gradients (deferred, D100) | When a problem needs them |
-| Repeated WebGPU solves differ on ladybug-49, venice-52 and final-93: a fault of Apple's shader compiler or GPU, reproduced without Dawn or the library (document 16). Whether to work around it, and whether the WebGPU backend is merged | When the backend is measured against CUDA on the laptop |
+| Whether the WebGPU backend is merged; whether kernels other than `block_gather` meet the Apple shader fault worked around by D119 (document 16) | When the backend is measured against CUDA on the laptop |
 
 ## Things discussed that turned out not to matter
 
