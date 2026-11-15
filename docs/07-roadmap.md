@@ -365,7 +365,7 @@ means Apple Silicon here):
 Status: done. Exit met on the owner's M5 Pro: same answers as the CPU reference
 within single-precision tolerance, and faster than Ceres with Accelerate on every
 problem measured, 2.6 to 10.6 times (iterations only; with the whole call timed,
-D101, 2.9 to 11.9 times warm, `bench/baseline/apple-m5pro-metal-sparse.json`). No M1 was available, so "M1-class" is shown on
+D101, 3.0 to 12.6 times warm, `bench/baseline/apple-m5pro-metal-sparse.json`). No M1 was available, so "M1-class" is shown on
 newer Apple Silicon only. macOS wheels moved to milestone 6 with the other wheels.
 The Metal tests run by hand where a Metal device is present (label `gpu`). The
 shared host side, the trust-region changes and the rest pass a quick CI run (D61)
@@ -446,8 +446,8 @@ CUDA 13.4; the M5 Pro for Metal):
   not fit the 8 GB card (4,591 MiB needed, 4,935 free) and `Auto` takes the iterative
   solver (D102): 12 iterations in 308 s, at most 2.9 GB of GPU memory, where the
   review saw `Auto` stop with an allocation error.
-- Metal (M5 Pro, against Ceres 2.2.0 with Accelerate): sparse_schur warm 2.9 to 11.9
-  times faster, at equal cost 2.2 to 27 (`bench/baseline/apple-m5pro-metal-sparse.json`).
+- Metal (M5 Pro, against Ceres 2.2.0 with Accelerate): sparse_schur warm 3.0 to 12.6
+  times faster, at equal cost 2.2 to 29 (`bench/baseline/apple-m5pro-metal-sparse.json`).
 - How the competitors were built and run: `bench/competitors/README.md`.
 - Not done: the Windows build and tests on the laptop's Windows; double-precision
   kernels and full-system conjugate gradients (both deferred, D100).
