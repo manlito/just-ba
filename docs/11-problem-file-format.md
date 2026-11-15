@@ -148,6 +148,22 @@ Depth at keypoints (milestone 3; all optional, D87).
 | `depth.correction` | f64 | [N, 2] | no | Per image (a, b); a d + b is the corrected reading. Absent: (1, 0). The estimate after a solve |
 | `depth.correction_free` | u8 | [N] | no | Bits estimated: 1 the scale, 2 the offset. Absent: none (a metric sensor) |
 
+Results (milestone 3; written by `write_result`, D89; readers keep them as unknown
+sections). `P` points with a covariance.
+
+| Name | dtype | Shape | Meaning |
+|---|---|---|---|
+| `result.pose_covariance` | f64 | [N, 6, 6] | Pose tangent covariance (rotation, then translation; D46). Zero for held coordinates and images that are not variables |
+| `result.centre_covariance` | f64 | [N, 3, 3] | Camera centre covariance, working frame |
+| `result.point_covariance.index` | i32 | [P] | Points with a covariance |
+| `result.point_covariance` | f64 | [P, 3, 3] | Their covariances |
+| `result.cost_by_type` | f64 | [6] | Cost by residual type, in the order of `loss.type` |
+| `result.reprojection_error` | f64 | [K] | Pixels, not divided by sigma |
+| `result.relative_prior_weight`, `result.global_prior_weight`, `result.gravity_weight` | f64 | per prior | Robust weight rho', near 0 for a prior the solve overruled |
+| `result.line_angle` | f64 | [L] | Radians by which a segment's axis misses its plane; NaN when not in the term |
+| `result.depth_refined`, `result.depth_corrected` | f64 | [K] | Refined depth of each observation's point, and its corrected reading a d + b; NaN without a reading |
+| `result.obs_keypoint` | i32 | [K] | Keypoint (in its image) of each observation |
+
 ## BAL conversion
 
 `read_bal` and `just-ba convert-bal` turn a Bundle Adjustment in the Large file

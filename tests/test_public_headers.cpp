@@ -4,6 +4,7 @@
 
 #include "jba/camera_model.h"
 #include "jba/covariance.h"
+#include "jba/export.h"
 #include "jba/initialize.h"
 #include "jba/loss.h"
 #include "jba/manhattan.h"

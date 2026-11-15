@@ -67,6 +67,25 @@ def test_arrays_round_trip_and_shapes():
         p.model = "NO_SUCH_MODEL"
 
 
+def read_jba(path):
+    data = open(path, "rb").read()
+    assert data[:8] == b"\x89JBA\r\n\x1a\n"
+    version, count = np.frombuffer(data, "<u4", 2, 8)
+    assert version == 1
+    dtypes = {1: "<u1", 2: "<i4", 3: "<i8", 4: "<f4", 5: "<f8"}
+    pos, out = 16, {}
+    for _ in range(count):
+        n = int(np.frombuffer(data, "<u4", 1, pos)[0]); pos += 4
+        name = data[pos:pos + n].decode(); pos += n
+        dtype, ndim = data[pos], data[pos + 1]; pos += 4
+        shape = tuple(int(d) for d in np.frombuffer(data, "<u8", ndim, pos)); pos += 8 * ndim
+        pos = (pos + 7) // 8 * 8
+        a = np.frombuffer(data, dtypes[dtype], int(np.prod(shape)), pos).reshape(shape)
+        pos = (pos + a.nbytes + 7) // 8 * 8
+        out[name] = a
+    return out
+
+
 def test_file_matches_the_documented_reader(tmp_path):
     p, _, _ = small_problem()
     jba.add_relative_priors_from_poses(p, p.poses, np.array([[0, 1], [1, 2]]))
@@ -78,24 +97,6 @@ def test_file_matches_the_documented_reader(tmp_path):
     jba.write_problem(path, p)
 
     # The reader from document 11, verbatim.
-    def read_jba(path):
-        data = open(path, "rb").read()
-        assert data[:8] == b"\x89JBA\r\n\x1a\n"
-        version, count = np.frombuffer(data, "<u4", 2, 8)
-        assert version == 1
-        dtypes = {1: "<u1", 2: "<i4", 3: "<i8", 4: "<f4", 5: "<f8"}
-        pos, out = 16, {}
-        for _ in range(count):
-            n = int(np.frombuffer(data, "<u4", 1, pos)[0]); pos += 4
-            name = data[pos:pos + n].decode(); pos += n
-            dtype, ndim = data[pos], data[pos + 1]; pos += 4
-            shape = tuple(int(d) for d in np.frombuffer(data, "<u8", ndim, pos)); pos += 8 * ndim
-            pos = (pos + 7) // 8 * 8
-            a = np.frombuffer(data, dtypes[dtype], int(np.prod(shape)), pos).reshape(shape)
-            pos = (pos + a.nbytes + 7) // 8 * 8
-            out[name] = a
-        return out
-
     d = read_jba(path)
     np.testing.assert_array_equal(d["image.pose"], p.poses)
     np.testing.assert_array_equal(d["prior.relative.pose"], p.rel_pose)
@@ -326,3 +327,22 @@ def test_covariance():
         np.testing.assert_allclose(c.pose[i], c.pose[i].T, atol=1e-18)
         assert np.all(np.linalg.eigvalsh(c.centre[i]) > -1e-18)
     assert np.all(np.linalg.eigvalsh(c.point[0]) > 0)
+
+
+def test_export(tmp_path):
+    p = jba.make_problem("PINHOLE", scene.K, poses=[[1, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, -0.5, 0, 0]],
+                         points=[[0, 0, 4], [0.5, 0.2, 5], [-0.4, 0.1, 3]],
+                         obs_image=[0, 0, 0, 1, 1, 1], obs_point=[0, 1, 2, 0, 1, 2],
+                         obs_xy=np.zeros((6, 2)))
+    R = jba.matrix_from_quat(p.poses[:, :4])
+    p.obs_xy = np.array([scene.K[:2] * (R[i] @ X + p.poses[i, 4:])[:2] / (R[i] @ X + p.poses[i, 4:])[2] + scene.K[2:]
+                         for i, X in zip(p.obs_image, p.points[p.obs_point])])
+    jba.export_colmap(p, str(tmp_path), image_names=["a.jpg", "b.jpg"])
+    lines = [l for l in (tmp_path / "images.txt").read_text().splitlines() if not l.startswith("#")]
+    assert lines[0].split()[-1] == "a.jpg" and len(lines) == 4
+    pts = [l for l in (tmp_path / "points3D.txt").read_text().splitlines() if not l.startswith("#")]
+    assert len(pts) == 3 and float(pts[0].split()[7]) < 1e-9
+    jba.write_result(str(tmp_path / "r.jba"), p, covariance=jba.covariance(p), report=jba.evaluate(p))
+    d = read_jba(str(tmp_path / "r.jba"))
+    assert d["result.pose_covariance"].shape == (2, 6, 6)
+    assert d["result.reprojection_error"].shape == (6,)

@@ -22,6 +22,7 @@
 
 #include "jba/camera_model.h"
 #include "jba/covariance.h"
+#include "jba/export.h"
 #include "jba/initialize.h"
 #include "jba/priors.h"
 #include "jba/problem.h"
@@ -682,6 +683,45 @@ NB_MODULE(_core, m) {
       .def_prop_ro("global_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.global_prior_index); }, nb::rv_policy::move)
       .def_prop_ro("gravity_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.gravity_prior_index); }, nb::rv_policy::move)
       .def_ro("manhattan", &jba::RefineResult::manhattan, "The last line assignment, and whether it was accepted.");
+
+  m.def(
+      "export_colmap",
+      [keypoints_of](const jba::Problem& p, const std::string& directory, std::optional<std::vector<std::string>> names,
+                     nb::handle image_size, nb::handle images, nb::handle keypoints, nb::handle obs_keypoint,
+                     nb::handle point_color) {
+        jba::ColmapExportOptions o;
+        if (names) o.image_names = *names;
+        if (!image_size.is_none())
+          o.image_size = from_numpy(as_array<std::int32_t>(image_size, "image_size"), {2}, "image_size");
+        if (!images.is_none()) {
+          const auto v = from_numpy(as_array<std::uint8_t>(images, "images"), {}, "images");
+          o.images.assign(v.begin(), v.end());
+        }
+        jba::Keypoints kp;
+        if (!keypoints.is_none()) {
+          kp = keypoints_of(keypoints);
+          o.keypoints = &kp;
+          if (obs_keypoint.is_none()) throw nb::value_error("export_colmap: keypoints need obs_keypoint");
+          o.obs_keypoint = from_numpy(as_array<std::int32_t>(obs_keypoint, "obs_keypoint"), {}, "obs_keypoint");
+        }
+        if (!point_color.is_none())
+          o.point_color = from_numpy(as_array<std::uint8_t>(point_color, "point_color"), {3}, "point_color");
+        jba::export_colmap(p, directory, o);
+      },
+      "problem"_a, "directory"_a, "image_names"_a = nb::none(), "image_size"_a = nb::none(), "images"_a = nb::none(),
+      "keypoints"_a = nb::none(), "obs_keypoint"_a = nb::none(), "point_color"_a = nb::none(),
+      "Writes COLMAP's text model (cameras.txt, images.txt, points3D.txt) into an existing directory. With "
+      "keypoints (one array per image) and obs_keypoint, POINTS2D lists every keypoint.");
+  m.def(
+      "write_result",
+      [](const std::string& path, const jba::Problem& p, std::optional<const jba::Covariance*> cov,
+         std::optional<const jba::ResidualReport*> rep, nb::handle obs_keypoint) {
+        std::vector<std::int32_t> kp;
+        if (!obs_keypoint.is_none()) kp = from_numpy(as_array<std::int32_t>(obs_keypoint, "obs_keypoint"), {}, "obs_keypoint");
+        jba::write_result(path, p, cov ? *cov : nullptr, rep ? *rep : nullptr, obs_keypoint.is_none() ? nullptr : &kp);
+      },
+      "path"_a, "problem"_a, "covariance"_a = nb::none(), "report"_a = nb::none(), "obs_keypoint"_a = nb::none(),
+      "Writes the problem file with result.* sections (covariances, report, keypoint of each observation).");
 
   m.def(
       "refine",
