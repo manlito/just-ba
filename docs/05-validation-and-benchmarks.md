@@ -232,7 +232,10 @@ The sample command-line binary is also the benchmark driver:
 ## Open questions
 
 - Tolerances for single precision on GPU. Caspar's authors list float32 summation
-  error as a limitation, so realistic thresholds need measurement.
+  error as a limitation, so realistic thresholds need measurement. Measured on Metal
+  (milestone 4, D95): on the parity cases' problems run to tight tolerances, final
+  costs agree with the CPU to 1.6e-9 or better and median camera centres to 8e-5 of
+  the scene scale; the Metal tests check 1e-6 and 1e-4.
 - Which public phone-capture datasets to adopt (ARKitScenes is the obvious first
   candidate). The private test set exists (D78): ARCore captures exported by the
   owner's matching tool, run by tests/real when present.

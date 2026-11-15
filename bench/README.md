@@ -32,6 +32,28 @@ Baselines are per machine class, under `baseline/`. Counts differ between platfo
 everywhere, so a run is compared only with the baseline of its own machine. Times
 are taken by hand on an otherwise idle machine; CI does not run this.
 
-| Baseline | Machine |
+| Baseline | Machine and configuration |
 |---|---|
-| `apple-m5pro.json` | The owner's Mac (Apple M5 Pro), all threads |
+| `apple-m5pro.json` | The owner's Mac (Apple M5 Pro), all threads; CPU backend |
+| `apple-m5pro-metal-sparse.json` | The same Mac; Metal backend, sparse_schur (its default), with Ceres with Accelerate alongside |
+| `apple-m5pro-metal-iterative.json` | The same Mac; Metal backend, iterative_schur, with Ceres with Accelerate alongside |
+
+`--backend metal` and `--linear-solver` select the configuration (default: the CPU;
+the linear solver defaults to auto, the library's rule). A baseline records its
+configuration and `--compare` refuses one of another. `--ceres <jba_ceres_solve>`
+solves every problem with Ceres as well (SPARSE_SCHUR, the same gauge and losses)
+and records its iterations, cost and time next to ours; the milestone 4 speed
+reference is a Ceres built with Accelerate:
+
+```bash
+cmake -DPREFIX=$PWD/build/ceres-2.2.0-accelerate -DACCELERATE=ON -P third_party/ceres/build.cmake
+```
+
+```bash
+python3 bench/run.py --build build/dev --backend metal --ceres build/accel/tests/ceres/jba_ceres_solve --compare bench/baseline/apple-m5pro-metal-sparse.json
+```
+
+where `build/accel` is a just-ba build configured with
+`-DJBA_WITH_CERES=ON -DCMAKE_PREFIX_PATH=$PWD/build/ceres-2.2.0-accelerate`. `--large` adds two
+problems in the main size range (walks of 500 and 2,000 images); they are not in the
+baselines.

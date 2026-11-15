@@ -2,8 +2,8 @@
 
 How the library is laid out so that it can be the fastest option for its narrow job,
 on three kinds of hardware, with almost no dependencies. The language is C++
-(document 06). Sections marked "as built" describe the code after milestone 1; the
-rest is still the plan.
+(document 06). Sections marked "as built" describe the code after the milestone they
+name; the rest is still the plan.
 
 ## Design principles
 
@@ -196,15 +196,14 @@ loop sees is coarser than the table: `cost`, `linearize`, `gradient_max_norm`,
 candidate, including the conjugate gradients loop. The operations in the table
 exist as private functions of the CPU backend, for the reprojection residual and
 the pose priors (D75).
-Two things follow, both to settle before the interface is frozen in milestone 4:
-
-- The conjugate gradients loop is backend code today. Either it moves to the core
-  over the fine-grained operations, or each backend keeps its own. On a GPU the
-  loop should not return to the host for every dot product, which argues for
-  keeping it in the backend and sharing only the stopping rule.
-- Milestone 2 extended the backend for several residual types (D75): pose priors
-  enter as camera-side terms next to reprojection. Depth and the Manhattan prior
-  (milestone 3) will follow the same pattern.
+As frozen in milestone 4 (D90): the coarse interface stays, plus
+`max_trust_region_radius()`, which lets a single-precision backend cap the radius
+where its damping is still resolved (D91). The inner solve belongs to each backend:
+on Metal the conjugate gradients loop, stopping test included, runs in batches on
+the device and never returns to the host per dot product. What every backend needs
+on the host (variable layout, observations in point-major order, the camera-side
+factors and their evaluation in double, the cost in double, the retraction) is one
+shared class, `cpu::System`; each backend adds its own linear algebra.
 
 ## Precision
 
@@ -230,6 +229,21 @@ everywhere and treats double on CUDA as an option:
 - **Iterative refinement** for direct solves done in single precision.
 
 The CPU backend runs in double and is the accuracy reference for the others.
+
+As built on Metal (D91): the state and every decision in double on the host; the
+device gets points minus the scene's centre and translations t + R c, the rotation
+Jacobian corrected back to the library's tangent. Re-centring the observations on the
+principal point buys little (milestone 0); what fixes residual precision is taking
+the whitened residuals from the host's double cost evaluation, rounded after the
+subtraction, so the gradient is accurate to float relative to the residual rather
+than to the pixel value. Sums are fixed-order gathers and trees (D93), not
+compensated sums. Two limits of single precision are explicit: Cholesky pivots are
+floored at 1e-6 of their diagonal entry, and the trust-region radius is capped at
+1e6, both about eight float epsilons. A predicted decrease too small for the float
+sums ends the solve as converged at the backend's precision. The direct solve
+factorizes in double a reduced system formed in single precision; where that system
+is not positive definite the step falls back to conjugate gradients instead of
+iterative refinement.
 
 ## Accumulation without float atomics
 
@@ -261,7 +275,7 @@ runtime types. CI checks that the checked-in generated files are current.
 |---|---|---|---|---|
 | CPU (reference) | Host language, threads, SIMD | double | Accelerate on Apple; a small built-in dense Cholesky elsewhere | None beyond the system |
 | CUDA | CUDA C | single by default, double optional | cuDSS or cuSOLVER, optional | CUDA runtime; solver libraries only if option B is enabled |
-| Apple | Metal Shading Language | single, with host double for decisions | Accelerate (CPU) | System frameworks only |
+| Apple (as built, milestone 4) | Metal Shading Language, compiled at run time from embedded source | single, with host double for decisions | Accelerate's sparse Cholesky in double (the default there, D92) | System frameworks only (Metal, Foundation, Accelerate) |
 | WebGPU (stretch) | WGSL | single | none | Browser |
 
 Notes:
@@ -306,7 +320,7 @@ core/            problem data, problem file, LM loop, gauge choice, priors, star
 residuals/       symbolic definitions and generated code per target
 backends/
   cpu/           the solver backend
-  metal/         milestone 0 spike: the reprojection kernel only
+  metal/         Apple GPU backend (milestone 4); the milestone 0 spike kernel too
   cuda/        *
   webgpu/      *
 tracks/          track building, triangulation
@@ -325,7 +339,7 @@ third_party/     reference solver build (Ceres), test-only
 
 | Decision | How it gets settled |
 |---|---|
-| Default linear strategy (A, B or C) per problem size | Benchmark |
+| Default linear strategy (A, B or C) per problem size | Metal: B at every size measured, 16 to 2,000 images (D92). CPU and CUDA: benchmark |
 | Preconditioner beyond block-Jacobi | Benchmark on ill-conditioned prior-heavy problems |
 | Symbolic tool | Decided: wrenfold (D45) |
 | Whether CUDA double is worth shipping | Accuracy results in single precision |

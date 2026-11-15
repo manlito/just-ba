@@ -2,10 +2,10 @@
 
 A minimal, high-performance bundle adjustment library in C++ with Python bindings,
 for refining reconstructions that come with noisy camera poses from ARKit, ARCore
-or another tracker. Early development: milestone 3, the main use case on the CPU
-(`jba::refine`) with gravity, the Manhattan prior from line segments, depth at
-keypoints, covariances and export to COLMAP, checked against Ceres and synthetic
-ground truth.
+or another tracker. Early development: milestone 4, the main use case (`jba::refine`)
+with gravity, the Manhattan prior from line segments, depth at keypoints, covariances
+and export to COLMAP, checked against Ceres and synthetic ground truth, on the CPU and
+on Apple GPUs (Metal).
 The plan is in [docs/](docs/README.md).
 
 ## Build
@@ -100,6 +100,21 @@ build/cli/just-ba solve problem.jba --loss huber:2 --output solved.jba --history
 
 Run `build/cli/just-ba` without arguments for every option.
 
+## Metal backend (Apple GPUs)
+
+On a Mac the solve can run on the GPU: `SolverOptions::backend = BackendKind::Metal`
+in C++, `options.backend = just_ba.Backend.METAL` in Python, or:
+
+```bash
+build/cli/just-ba solve problem.jba --backend metal
+```
+
+It works in single precision on the GPU and takes every decision in double on the
+host; its answers agree with the CPU's to single-precision tolerance, not bit for bit
+(document 03, D91). Its default linear solver forms the reduced camera system and
+factorizes it with Accelerate (`sparse_schur`, D92). `ctest -L gpu` compares it with
+the CPU backend on every parity problem.
+
 ## Parity with Ceres
 
 With the reference solver enabled, `build/tests/ceres/jba_parity <problem>` solves
@@ -114,6 +129,9 @@ same machine (`bench/README.md`, D81):
 ```bash
 python3 bench/run.py --build build --compare bench/baseline/apple-m5pro.json
 ```
+
+`--backend metal` benchmarks the Metal backend, and `--ceres` adds Ceres's times
+on the same problems.
 
 ## Real captures
 

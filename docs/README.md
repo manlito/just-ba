@@ -7,7 +7,9 @@ or another tracker.
 
 Status: milestones 1 (CPU solver, parity with Ceres) and 2 (the main use case on the
 CPU) and 3 (gravity, the Manhattan prior, depth, covariances, export) done; CI passes
-on Linux and Windows. Results in [07-roadmap.md](07-roadmap.md). Milestones 0
+on Linux and Windows. Milestone 4 (the Metal backend) met its exit on the owner's
+M5 Pro: the CPU's answers within single-precision tolerance, 2.6 to 10.6 times
+faster than Ceres with Accelerate; macOS wheels are left to milestone 6's packaging. Results in [07-roadmap.md](07-roadmap.md). Milestones 0
 and 1 were reviewed before milestone 2; the findings are in
 [12-review-milestones-0-1.md](12-review-milestones-0-1.md). Build instructions:
 [../README.md](../README.md).

@@ -295,6 +295,74 @@ exported ARCore captures carry neither; their `refine` test still passes).
 Exit: same answers as the CPU reference within tolerance on an M1-class machine,
 faster than Ceres with Accelerate on the same machine.
 
+Results (2026-11-14, owner's M5 Pro; the only Apple machine available, so "M1-class"
+means Apple Silicon here):
+
+- Built: the Metal backend (D90 to D93). The GPU linearizes the reprojection
+  residual from the generated Metal code, scales the Jacobian, forms column norms,
+  gradient, point and camera blocks, and solves the step in single precision; the
+  host keeps the state and every decision in double, shares its whole setup with
+  the CPU backend (`cpu::System`), and linearizes the few camera-side factors and
+  the depth rows in double. Both linear strategies: iterative_schur, with the
+  conjugate gradients loop and Ceres's stopping test running in batches on the
+  device, and sparse_schur, the reduced camera system formed on the GPU by tiles
+  and factorized in double by Accelerate's sparse Cholesky (D92), the default on
+  Metal. `SolverOptions::backend`, `--backend metal` in the CLI, `Backend.METAL` in
+  Python; `refine` runs on it unchanged.
+- The precision design held, with three additions the measurements forced (D91):
+  residuals from the host's double evaluation, a pivot floor, and a cap on the
+  trust-region radius. Conditioning alone does not fix residual precision, as
+  milestone 0 predicted; taking the residual from the host does.
+- Same answers: the problems of the 55 Ceres parity cases, solved on both backends
+  to tight tolerances, with each Metal solver (110 tests): final costs agree with
+  the CPU to 1.6e-9 or better (median 1e-11), median camera centres to 8e-5 of the
+  scene scale or better (median over the cases 5e-7; the largest are the gravity
+  cases, whose heading gauge is path-dependent, D86), rotations to 2e-5 rad. Every Metal
+  solve is bit-identical when repeated (D93). The three ARCore captures through
+  `refine` pass the same checks on every configuration, with the same reprojection
+  medians (0.89, 1.02, 0.89 px).
+- Faster than Ceres with Accelerate (D94: SPARSE_SCHUR, 18 threads, the same gauge,
+  losses and problem), times best of three for the solve alone:
+
+  | Problem | Ceres + Accelerate | Metal, sparse_schur | Speed-up | Metal, iterative_schur | CPU (double) | Final cost vs Ceres |
+  |---|---|---|---|---|---|---|
+  | ladybug-49 | 30 it, 0.363 s | 44 it, 0.141 s | 2.6x | 46 it, 0.413 s | 31 it, 0.411 s | 2.9e-5 |
+  | trafalgar-21 | 9 it, 0.171 s | 11 it, 0.041 s | 4.2x | 11 it, 0.121 s | 10 it, 0.193 s | 5.2e-8 |
+  | dubrovnik-16 | 12 it, 0.564 s | 12 it, 0.053 s | 10.6x | 14 it, 0.156 s | 14 it, 0.283 s | 1.2e-7 |
+  | venice-52 | 50 it, 6.224 s | 50 it, 1.016 s | 6.1x | 50 it, 0.801 s | 50 it, 7.103 s | 9.6e-2 (another basin) |
+  | final-93 | 8 it, 1.132 s | 10 it, 0.227 s | 5.0x | 20 it, 1.296 s | 15 it, 1.675 s | 5.2e-7 |
+  | synthetic pinhole, 50 images | 4 it, 0.360 s | 4 it, 0.054 s | 6.7x | 6 it, 0.039 s | 6 it, 0.049 s | 2.0e-13 |
+  | synthetic radial, free shared intrinsics, 30 | 14 it, 0.727 s | 14 it, 0.226 s | 3.2x | 23 it, 0.478 s | 36 it, 0.586 s | 5.3e-8 |
+  | synthetic relative priors, 50 | 3 it, 0.320 s | 3 it, 0.046 s | 7.0x | 4 it, 0.031 s | 4 it, 0.029 s | 8.0e-10 |
+  | synthetic global similarity, 50 | 3 it, 0.324 s | 3 it, 0.046 s | 7.0x | 4 it, 0.032 s | 4 it, 0.032 s | 1.2e-9 |
+  | synthetic OPENCV, 30 | 2 it, 0.107 s | 2 it, 0.019 s | 5.6x | 4 it, 0.025 s | 4 it, 0.017 s | 3.7e-12 |
+  | walk, 500 images, 480k observations | 5 it, 0.342 s | 5 it, 0.058 s | 5.9x | 8 it, 0.532 s | 7 it, 1.276 s | 1e-10 |
+  | walk, 2,000 images, 1.9M observations | 7 it, 1.670 s | 7 it, 0.279 s | 6.0x | 9 it, 3.283 s | 9 it, 11.47 s | 1e-9 |
+
+  The walks are the main size range (D5): each point seen by 8 neighbouring images,
+  relative priors (`bench/run.py --large`, single runs). venice-52 with the gauge
+  held is the problem whose end point depends on rounding (D60); at 50 iterations
+  neither solver has converged and they sit in different basins. On the three
+  captures, refine's solves take 0.41 to 0.89 s on Metal against 1.95 to 4.43 s on
+  the CPU. At the small end the CPU backend is as fast or faster (the dense
+  synthetic problems), as document 03 expected; choosing the backend by size is
+  for later.
+- Benchmark baselines for both Metal solvers (`bench/baseline/apple-m5pro-metal-*`),
+  with Ceres's figures alongside. The CPU backend's counts and costs are unchanged
+  from milestone 3 throughout.
+- Not done: macOS wheels. Packaging for PyPI is milestone 6's subject (document 08)
+  and none exists yet; the wheel for macOS is built there with the others. The
+  Metal backend needs nothing beyond the system frameworks (Metal, Foundation,
+  Accelerate), so the wheel needs nothing extra.
+- Also not done: strategy B on the CPU, and depth rows on the GPU (they are
+  linearized on the host; no capture with depth exists yet to measure against).
+
+Status: exit met on the owner's M5 Pro: same answers as the CPU reference within
+single-precision tolerance, and faster than Ceres with Accelerate on every problem
+measured, 2.6 to 10.6 times. The Metal tests run where a Metal device is present
+(label `gpu`); CI's quick mode has no macOS job, and its full mode runs them on the
+hosted macOS runner as an informational step (document 08).
+
 ## Milestone 5: CUDA backend
 
 - Developed on the owner's laptop (NVIDIA GPU, 8 GB), which has both Linux and
