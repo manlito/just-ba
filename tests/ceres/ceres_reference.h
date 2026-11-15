@@ -140,9 +140,12 @@ enum class LinearSolver { DenseSchur, SparseSchur, IterativeSchur };
 
 struct Options {
   LinearSolver linear_solver = LinearSolver::IterativeSchur;
-  // SPARSE_SCHUR's sparse Cholesky: Eigen's (the default, every platform) or Apple's
-  // Accelerate (a Ceres built with third_party/ceres/build.cmake -DACCELERATE=ON).
-  bool accelerate_sparse = false;
+  // SPARSE_SCHUR's sparse Cholesky: Eigen's (the default, every platform), Apple's
+  // Accelerate (a Ceres built with third_party/ceres/build.cmake -DACCELERATE=ON),
+  // SuiteSparse's CHOLMOD, or NVIDIA's cuDSS (Ceres master built with CUDA): each
+  // needs a Ceres built with it.
+  enum class SparseLibrary { Eigen, Accelerate, SuiteSparse, Cuda };
+  SparseLibrary sparse_library = SparseLibrary::Eigen;
   int max_iterations = 50;
   double function_tolerance = 1e-6;
   double gradient_tolerance = 1e-10;

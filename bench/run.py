@@ -25,8 +25,8 @@ A baseline records its backend and linear solver; --compare refuses a baseline o
 another configuration.
 
 --ceres <jba_ceres_solve> also solves every problem with Ceres (SPARSE_SCHUR, the same
-gauge, all threads; --ceres-sparse-library picks Eigen's or Accelerate's sparse
-Cholesky) and records its iterations, final cost and best time next to ours. Speed
+gauge, all threads; --ceres-sparse-library picks the sparse Cholesky: Eigen's,
+Accelerate's, SuiteSparse's or cuDSS, as that Ceres was built) and records its iterations, final cost and best time next to ours. Speed
 reference of milestone 4: a Ceres built with third_party/ceres/build.cmake
 -DACCELERATE=ON, and --ceres-sparse-library accelerate.
 
@@ -207,7 +207,8 @@ def main():
                     help="auto: sparse_schur on metal, iterative_schur on cpu (the library's rule)")
     ap.add_argument("--large", action="store_true", help="add the main-size-range problems (LARGE)")
     ap.add_argument("--ceres", help="jba_ceres_solve to run on every problem too (speed reference)")
-    ap.add_argument("--ceres-sparse-library", default="accelerate", choices=["eigen", "accelerate"])
+    ap.add_argument("--ceres-sparse-library", default="accelerate",
+                    choices=["eigen", "accelerate", "suite_sparse", "cuda"])
     ap.add_argument("--only", help="comma-separated substrings of problem names")
     args = ap.parse_args()
     if args.linear_solver == "auto":

@@ -72,6 +72,15 @@ LinearSolverType resolve_linear_solver(LinearSolverType type, BackendKind backen
 
 namespace {
 
+// Backends with a direct solver for the reduced camera system (strategy B).
+bool has_sparse_schur(BackendKind backend) {
+  if (backend == BackendKind::Metal) return true;
+#ifdef JBA_HAVE_CUDSS
+  if (backend == BackendKind::Cuda) return true;
+#endif
+  return false;
+}
+
 template <typename B>
 SolverSummary run(B& backend, Problem& problem, const SolverOptions& options, const IterationCallback& callback,
                   const Gauge& gauge) {
@@ -96,8 +105,8 @@ SolverSummary solve(Problem& problem, const SolverOptions& requested, const Iter
     throw std::invalid_argument("backend " + std::string(backend_name(options.backend)) +
                                 " is not available in this build or on this machine");
 
-  if (options.linear_solver == LinearSolverType::SparseSchur && options.backend != BackendKind::Metal)
-    throw std::invalid_argument("linear solver sparse_schur needs the metal backend");
+  if (options.linear_solver == LinearSolverType::SparseSchur && !has_sparse_schur(options.backend))
+    throw std::invalid_argument("linear solver sparse_schur needs the metal backend, or cuda built with cuDSS");
 
   const Gauge gauge = options.gauge == GaugeMode::Auto ? choose_gauge(problem) : Gauge{};
 #ifdef JBA_HAVE_METAL

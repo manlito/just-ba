@@ -38,11 +38,12 @@ are taken by hand on an otherwise idle machine; CI does not run this.
 | `apple-m5pro-metal-sparse.json` | The same Mac; Metal backend, sparse_schur (its default), with Ceres with Accelerate alongside |
 | `apple-m5pro-metal-iterative.json` | The same Mac; Metal backend, iterative_schur, with Ceres with Accelerate alongside |
 
-`--backend metal` and `--linear-solver` select the configuration (default: the CPU;
+`--backend metal|cuda` and `--linear-solver` select the configuration (default: the CPU;
 the linear solver defaults to auto, the library's rule). A baseline records its
 configuration and `--compare` refuses one of another. `--ceres <jba_ceres_solve>`
 solves every problem with Ceres as well (SPARSE_SCHUR, the same gauge and losses)
-and records its iterations, cost and time next to ours; the milestone 4 speed
+and records its iterations, cost and time next to ours (`--ceres-sparse-library`:
+`eigen`, `accelerate`, `suite_sparse` or `cuda`, as that Ceres was built); the milestone 4 speed
 reference is a Ceres built with Accelerate:
 
 ```bash

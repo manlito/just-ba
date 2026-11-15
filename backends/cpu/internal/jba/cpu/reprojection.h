@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include "jba/camera_model.h"
 #include "reprojection_generated.h"  // residuals/generated/cpu
 
@@ -28,6 +30,8 @@ inline void reprojection(CameraModel model, const Scalar* q, const Scalar* t, co
       return g::reprojection_opencv_fisheye(q, t, point, intrinsics, observed, residual, J_pose, J_point,
                                             J_intrinsics);
   }
+  // Not a camera model (validate() refuses it): no residual.
+  residual[0] = residual[1] = std::numeric_limits<Scalar>::quiet_NaN();
 }
 
 }  // namespace jba::cpu

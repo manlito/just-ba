@@ -168,8 +168,14 @@ struct Args {
   JBA_DEVICE const TileEntry* entries;
   JBA_DEVICE float* tile_partial;  // kChunkFloats per tile chunk
   JBA_DEVICE float* tile_vals;
+  // Strategy B: per observation of an eliminated point, E = J_f^T J_x (n x 3) for each
+  // camera-side role it has, eo_stride floats apart: pose at 0, intrinsics at eo_intr,
+  // depth at eo_dep; and G = E C^-1 in the same layout, per step.
+  JBA_DEVICE float* Eo;
+  JBA_DEVICE float* Go;
   // Sizes and options.
   uint nobs, npts, nf, ne, nfb, nchunks, nfac, np, ntiles, ntile_chunks;
+  uint eo_stride, eo_intr, eo_dep;
   int has_depth, has_intr, loss_type;
   float loss_scale, pivot_floor;
 };

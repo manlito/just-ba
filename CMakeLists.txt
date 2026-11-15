@@ -24,6 +24,7 @@ else()
   set(JBA_WITH_METAL OFF)
 endif()
 option(JBA_WITH_CUDA "Build the CUDA backend (needs the CUDA toolkit, 13.3 or later)" OFF)
+option(JBA_WITH_CUDSS "CUDA backend: sparse_schur with NVIDIA cuDSS (needs cuDSS 1.0 or later)" OFF)
 if(JBA_WITH_CUDA)
   # The GPU of the build machine unless the caller lists architectures.
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)

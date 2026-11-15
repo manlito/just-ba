@@ -303,6 +303,8 @@ struct GpuBackend::Impl {
 
     if (direct) setup_direct();
     else {
+      buffer<float>(1, args.Eo);
+      buffer<float>(1, args.Go);
       buffer<Tile>(1, args.tiles);
       buffer<TileChunk>(1, args.tile_chunks);
       buffer<TileEntry>(1, args.entries);
@@ -410,6 +412,13 @@ struct GpuBackend::Impl {
     buffer<TileEntry>(entries.size(), args.entries, entries.data());
     buffer<float>(kChunkFloats * tchunks.size(), args.tile_partial);
     tile_vals = mirrored<float>(nvals, args.tile_vals);
+    // Each observation's E per role (obs_schur_e), for the observations' pairs.
+    const std::size_t np = static_cast<std::size_t>(sys.np);
+    args.eo_intr = 18;
+    args.eo_dep = static_cast<std::uint32_t>(18 + (any_intr ? 3 * np : 0));
+    args.eo_stride = args.eo_dep + (sys.has_depth ? 6 : 0);
+    buffer<float>(args.eo_stride * sys.nobs, args.Eo);
+    buffer<float>(args.eo_stride * sys.nobs, args.Go);
 
     // Lower triangle, compressed columns: column c of block A holds rows r >= c of
     // every tile (A, B), B >= A, in increasing B.
@@ -489,6 +498,7 @@ struct GpuBackend::Impl {
 
   // One group per chunk of a tile's entries, then each tile's values.
   void tiles() {
+    run(Kernel::ObsSchurG, sys.nobs);
     if (ntiles == 0) return;
     if (ntile_chunks > 0) dev->dispatch_groups(Kernel::SchurTiles, ntile_chunks, kTileThreads, Op{});
     run(Kernel::TileFinish, kChunkFloats * ntiles);
@@ -652,6 +662,7 @@ struct GpuBackend::Impl {
       run(Kernel::ScaleFactors, nfac);
     }
     encode_colnorm();
+    if (direct) run(Kernel::ObsSchurE, sys.nobs);
     dev->finish();
     dev->to_host(g_f);
     dev->to_host(g_e);

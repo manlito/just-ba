@@ -74,6 +74,7 @@ inline void point_from_camera(const double* pose, const double* p_cam, double* X
 inline void reference_project(jba::CameraModel model, const double* k, const double* pc, double* px,
                               double* py) {
   const double x = pc[0] / pc[2], y = pc[1] / pc[2];
+  *px = *py = std::nan("");  // overwritten for every camera model
   switch (model) {
     case jba::CameraModel::SimplePinhole: *px = k[0] * x + k[1]; *py = k[0] * y + k[2]; break;
     case jba::CameraModel::Pinhole: *px = k[0] * x + k[2]; *py = k[1] * y + k[3]; break;

@@ -112,9 +112,9 @@ build/cli/just-ba solve problem.jba --backend metal
 
 Both work in single precision on the GPU and take every decision in double on the
 host; their answers agree with the CPU's to single-precision tolerance, not bit for
-bit (document 03, D91). They share one kernel source and one host side (D96). On
-Metal the default linear solver forms the reduced camera system and factorizes it
-with Accelerate (`sparse_schur`, D92); CUDA has conjugate gradients so far (D97).
+bit (document 03, D91). They share one kernel source and one host side (D96). Their
+`sparse_schur` forms the reduced camera system and factorizes it, with Accelerate
+on Metal (its default, D92) and with NVIDIA cuDSS on CUDA when built with it (D98).
 `ctest -L gpu` compares each GPU backend built with the CPU backend on every parity
 problem.
 
@@ -124,6 +124,9 @@ is built for the GPU of the build machine unless `CMAKE_CUDA_ARCHITECTURES` is s
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CUDA=ON
 ```
+
+For `sparse_schur` on CUDA, add `-DJBA_WITH_CUDSS=ON -Dcudss_DIR=<cuDSS>/lib/cmake/cudss`
+(cuDSS 1.0 or later, NVIDIA's redistributable).
 
 ## Parity with Ceres
 

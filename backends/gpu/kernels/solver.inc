@@ -558,21 +558,64 @@ JBA_KERNEL(block_gather) {
   }
 }
 
+// Strategy B: E = J_f^T J_x (n x 3) of an observation for one camera-side role, as
+// schur_tiles needs it; the same sums in the same order as forming it there.
+JBA_FUNC void store_schur_e(JBA_ARGS_REF a, int kind, uint k, int n, JBA_DEVICE float* out) {
+  const Rows o = rows_of(a, kind, k, false);
+  const int r0 = kind == kDepth ? 2 : 0;
+  float E[kMaxParams * 3];
+  for (int c = 0; c < 3 * kMaxParams; ++c) E[c] = 0;
+  for (int row = r0; row < o.n; ++row)
+    for (int x = 0; x < n; ++x)
+      for (int c = 0; c < 3; ++c) E[3 * x + c] += o.J[row][x] * o.X[row][c];
+  for (int c = 0; c < 3 * n; ++c) out[c] = E[c];
+}
+
+// Per observation of an eliminated point, its E for every role it has (pose,
+// intrinsics, depth); once per linearization, since E does not depend on the damping.
+JBA_KERNEL(obs_schur_e) {
+  const uint k = gid;
+  if (k >= a.nobs || a.point_off[a.o_pt[k]] < 0) return;
+  JBA_DEVICE float* out = a.Eo + a.eo_stride * k;
+  if (a.o_pose[k] >= 0) store_schur_e(a, kPose, k, 6, out);
+  if (a.has_intr && a.o_intr[k] >= 0) store_schur_e(a, kIntrinsics, k, int(a.np), out + a.eo_intr);
+  if (a.has_depth && a.o_dw[k] != 0 && a.o_dep[k] >= 0) store_schur_e(a, kDepth, k, 2, out + a.eo_dep);
+}
+
+// Per observation of an eliminated point, G = E C^-1 for every role it has; per step,
+// after point_blocks. The same products as forming G in schur_tiles.
+JBA_FUNC void store_schur_g(JBA_DEVICE const float* E, JBA_DEVICE const float* Ci, int n, JBA_DEVICE float* out) {
+  for (int x = 0; x < n; ++x)
+    for (int c = 0; c < 3; ++c) out[3 * x + c] = E[3 * x] * Ci[c] + E[3 * x + 1] * Ci[3 + c] + E[3 * x + 2] * Ci[6 + c];
+}
+
+JBA_KERNEL(obs_schur_g) {
+  const uint k = gid;
+  if (k >= a.nobs) return;
+  const int j = a.o_pt[k];
+  if (a.point_off[j] < 0) return;
+  JBA_DEVICE const float* E = a.Eo + a.eo_stride * k;
+  JBA_DEVICE float* out = a.Go + a.eo_stride * k;
+  JBA_DEVICE const float* Ci = a.Cinv + 9 * j;
+  if (a.o_pose[k] >= 0) store_schur_g(E, Ci, 6, out);
+  if (a.has_intr && a.o_intr[k] >= 0) store_schur_g(E + a.eo_intr, Ci, int(a.np), out + a.eo_intr);
+  if (a.has_depth && a.o_dw[k] != 0 && a.o_dep[k] >= 0) store_schur_g(E + a.eo_dep, Ci, 2, out + a.eo_dep);
+}
+
 // The reduced camera system: S_ab = sum of J_a^T J_b over observations and factors
 // - sum over points of E_aj C_j^-1 E_bj^T, plus D^2 on a diagonal tile. One
 // threadgroup per chunk of a tile's entries: threads take entries i, i + T, ... in
 // order and a fixed tree adds their sums (schur_tiles); then each tile adds its
 // chunks in order (tile_finish).
-JBA_KERNEL(schur_tiles) {
-  const uint tc = group;
-  const uint i = lid;
-  JBA_SHARED float buf[kTileThreads * kChunkFloats];
-  const TileChunk TC = a.tile_chunks[tc];
-  const Tile T = a.tiles[TC.tile];
-  const FBlockDesc A = a.fblocks[T.a], B = a.fblocks[T.b];
-  const int na = A.size, nb = B.size, nv = na * nb;
-  float acc[kChunkFloats];
-  for (int c = 0; c < kChunkFloats; ++c) acc[c] = 0;
+// One thread's sums over a tile chunk's entries i, i + T, ...: NA x NB fixed at compile
+// time where the shape is common (pose by pose), so the sums stay in registers (CUDA
+// keeps an array indexed at run time in local memory); 0 x 0 takes the run-time na x nb.
+// The same additions in the same order either way.
+template <int NA, int NB>
+JBA_FUNC void tile_sums(JBA_ARGS_REF a, TileChunk TC, uint i, int na_rt, int nb_rt, JBA_THREAD float* out) {
+  const int na = NA > 0 ? NA : na_rt, nb = NB > 0 ? NB : nb_rt;
+  float acc[NA > 0 ? NA * NB : kChunkFloats];
+  for (int c = 0; c < na * nb; ++c) acc[c] = 0;
   for (uint e = TC.e0 + i; e < TC.e1; e += kTileThreads) {
     const TileEntry E = a.entries[e];
     const int ra = int(E.info & 3), rb = int((E.info >> 2) & 3);
@@ -586,32 +629,38 @@ JBA_KERNEL(schur_tiles) {
       continue;
     }
     const int kinds[3] = {kPose, kIntrinsics, kDepth};
-    const Rows oa = rows_of(a, kinds[ra], E.ka, false);
-    const Rows ob = rows_of(a, kinds[rb], E.kb, false);
     const int a0 = ra == 2 ? 2 : 0, b0 = rb == 2 ? 2 : 0;
     if (E.ka == E.kb) {
+      const Rows oa = rows_of(a, kinds[ra], E.ka, false);
+      const Rows ob = rows_of(a, kinds[rb], E.kb, false);
       for (int row = max(a0, b0); row < min(oa.n, ob.n); ++row)
         for (int x = 0; x < na; ++x)
           for (int y = 0; y < nb; ++y) acc[x * nb + y] += oa.J[row][x] * ob.J[row][y];
     }
     const int j = a.o_pt[E.ka];
     if (a.point_off[j] < 0) continue;
-    // G = E_a C^-1 (na x 3), E_b (nb x 3); acc -= G E_b^T.
-    float Ea[kMaxParams * 3], Eb[kMaxParams * 3];
-    for (int c = 0; c < 3 * kMaxParams; ++c) Ea[c] = Eb[c] = 0;
-    for (int row = a0; row < oa.n; ++row)
-      for (int x = 0; x < na; ++x)
-        for (int c = 0; c < 3; ++c) Ea[3 * x + c] += oa.J[row][x] * oa.X[row][c];
-    for (int row = b0; row < ob.n; ++row)
+    // G_a = E_a C^-1 (na x 3, obs_schur_g), E_b (nb x 3, obs_schur_e); acc -= G_a E_b^T.
+    const uint offs[3] = {0, a.eo_intr, a.eo_dep};
+    JBA_DEVICE const float* G = a.Go + a.eo_stride * E.ka + offs[ra];
+    JBA_DEVICE const float* Eb = a.Eo + a.eo_stride * E.kb + offs[rb];
+    for (int x = 0; x < na; ++x)
       for (int y = 0; y < nb; ++y)
-        for (int c = 0; c < 3; ++c) Eb[3 * y + c] += ob.J[row][y] * ob.X[row][c];
-    JBA_DEVICE const float* Ci = a.Cinv + 9 * j;
-    for (int x = 0; x < na; ++x) {
-      float G[3];
-      for (int c = 0; c < 3; ++c) G[c] = Ea[3 * x] * Ci[c] + Ea[3 * x + 1] * Ci[3 + c] + Ea[3 * x + 2] * Ci[6 + c];
-      for (int y = 0; y < nb; ++y) acc[x * nb + y] -= G[0] * Eb[3 * y] + G[1] * Eb[3 * y + 1] + G[2] * Eb[3 * y + 2];
-    }
+        acc[x * nb + y] -= G[3 * x] * Eb[3 * y] + G[3 * x + 1] * Eb[3 * y + 1] + G[3 * x + 2] * Eb[3 * y + 2];
   }
+  for (int c = 0; c < na * nb; ++c) out[c] = acc[c];
+}
+
+JBA_KERNEL(schur_tiles) {
+  const uint tc = group;
+  const uint i = lid;
+  JBA_SHARED float buf[kTileThreads * kChunkFloats];
+  const TileChunk TC = a.tile_chunks[tc];
+  const Tile T = a.tiles[TC.tile];
+  const FBlockDesc A = a.fblocks[T.a], B = a.fblocks[T.b];
+  const int na = A.size, nb = B.size, nv = na * nb;
+  float acc[kChunkFloats];
+  if (na == 6 && nb == 6) tile_sums<6, 6>(a, TC, i, na, nb, acc);
+  else tile_sums<0, 0>(a, TC, i, na, nb, acc);
   for (int c = 0; c < nv; ++c) buf[c * kTileThreads + i] = acc[c];
   JBA_BARRIER();
   for (uint w = kTileThreads / 2; w > 0; w /= 2) {

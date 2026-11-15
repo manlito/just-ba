@@ -2,7 +2,7 @@
 //
 //   jba_ceres_solve <problem.jba | bal.txt> [--linear-solver dense_schur|sparse_schur|iterative_schur]
 //                   [--max-iterations N] [--output solved.jba] [--threads N]
-//                   [--sparse-library eigen|accelerate] [--gauge none|auto]
+//                   [--sparse-library eigen|accelerate|suite_sparse|cuda] [--gauge none|auto]
 //
 // --gauge auto holds the freedoms just-ba's automatic gauge holds (choose_gauge), so
 // the two solve the same problem; the default, none, holds nothing.
@@ -53,8 +53,12 @@ int main(int argc, char** argv) {
         if (val != "auto" && val != "none") throw std::invalid_argument("unknown gauge " + val);
         auto_gauge = val == "auto";
       } else if (key == "--sparse-library") {
-        if (val != "eigen" && val != "accelerate") throw std::invalid_argument("unknown sparse library " + val);
-        o.accelerate_sparse = val == "accelerate";
+        using L = jba_ceres::Options::SparseLibrary;
+        if (val == "eigen") o.sparse_library = L::Eigen;
+        else if (val == "accelerate") o.sparse_library = L::Accelerate;
+        else if (val == "suite_sparse") o.sparse_library = L::SuiteSparse;
+        else if (val == "cuda") o.sparse_library = L::Cuda;
+        else throw std::invalid_argument("unknown sparse library " + val);
       } else if (key == "--linear-solver") {
         linear = val;
         if (val == "dense_schur") o.linear_solver = jba_ceres::LinearSolver::DenseSchur;

@@ -636,7 +636,22 @@ Result solve(jba::Problem& p, const Options& o) {
     case LinearSolver::DenseSchur: opts.linear_solver_type = ceres::DENSE_SCHUR; break;
     case LinearSolver::SparseSchur:
       opts.linear_solver_type = ceres::SPARSE_SCHUR;
-      opts.sparse_linear_algebra_library_type = o.accelerate_sparse ? ceres::ACCELERATE_SPARSE : ceres::EIGEN_SPARSE;
+      switch (o.sparse_library) {
+        case Options::SparseLibrary::Eigen: opts.sparse_linear_algebra_library_type = ceres::EIGEN_SPARSE; break;
+        case Options::SparseLibrary::Accelerate:
+          opts.sparse_linear_algebra_library_type = ceres::ACCELERATE_SPARSE;
+          break;
+        case Options::SparseLibrary::SuiteSparse:
+          opts.sparse_linear_algebra_library_type = ceres::SUITE_SPARSE;
+          break;
+        case Options::SparseLibrary::Cuda:
+#if CERES_VERSION_MAJOR > 2 || (CERES_VERSION_MAJOR == 2 && CERES_VERSION_MINOR >= 3)
+          opts.sparse_linear_algebra_library_type = ceres::CUDA_SPARSE;
+#else
+          throw std::invalid_argument("sparse library cuda needs Ceres 2.3 (master) built with CUDA");
+#endif
+          break;
+      }
       break;
     case LinearSolver::IterativeSchur:
       opts.linear_solver_type = ceres::ITERATIVE_SCHUR;
