@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Speed and iteration-count benchmark of the solver (document 05, regression gate;
-document 12, item 2), on the CPU or the Metal backend (--backend, --linear-solver).
+document 12, item 2), on the CPU, Metal or CUDA backend (--backend, --linear-solver).
 
 Solves a fixed set of problems with the CLI and writes one JSON file: per problem the
 iteration count, accepted steps, linear (conjugate gradient) iterations, termination,
-initial and final cost, and the best wall time of several runs. With --compare it checks
-a run against a stored baseline of the same machine class:
+initial and final cost, the linear solver used, and times of the whole solver call
+(set-up included, D101): `time_seconds`, the best of several warm calls (the CLI's
+--warm-up: the device already started, as in a process that solves more than once),
+its `setup_seconds`, and `cold_time_seconds`, one call in a fresh process (device
+start-up included, as a command-line run pays it). With --compare it checks a run
+against a stored baseline of the same machine class:
 
   - counts and termination must be identical, and final costs agree to 1e-9 relative:
     these are deterministic for a given build and platform (D59), so any change means the
     arithmetic changed;
-  - time per iteration may not grow by more than --max-slowdown (default 10%).
+  - time per iteration (warm call time over iterations) may not grow by more than
+    --max-slowdown (default 10%).
 
 Counts are only comparable within a machine class (fused multiply-add on Apple and ARM
 changes rounding; document 12). Times are taken by hand on an otherwise idle machine,
@@ -22,16 +27,21 @@ one problem at a time; hosted CI runners are too noisy for them.
       --compare bench/baseline/apple-m5pro-metal-sparse.json
 
 A baseline records its backend and linear solver; --compare refuses a baseline of
-another configuration.
+another configuration, and with --only compares only the problems run.
 
 --ceres <jba_ceres_solve> also solves every problem with Ceres (SPARSE_SCHUR, the same
 gauge, all threads; --ceres-sparse-library picks the sparse Cholesky: Eigen's,
-Accelerate's, SuiteSparse's or cuDSS, as that Ceres was built) and records its iterations, final cost and best time next to ours. Speed
-reference of milestone 4: a Ceres built with third_party/ceres/build.cmake
+Accelerate's, SuiteSparse's or cuDSS, as that Ceres was built), column "ceres";
+--ceres-gpu <jba_ceres_solve> another Ceres with cuDSS, column "ceres_gpu". Each
+records Ceres's iterations, final cost, wall time of the call (building its problem
+included) and the speed-up at equal accuracy: the time each solver needs to reach the
+worse of the two final costs (relative 1e-6), from the per-iteration histories (D99).
+Speed reference of milestone 4: a Ceres built with third_party/ceres/build.cmake
 -DACCELERATE=ON, and --ceres-sparse-library accelerate.
 
 Problems: the five BAL problems (python3 tests/data/fetch_bal.py) and synthetic ones
-written by jba_make_problem, which is built with the tests. Standard library only.
+written by jba_make_problem, which is built with the tests; --large and --huge add
+walked captures of 500 to 10,000 images. Standard library only.
 """
 
 import argparse
@@ -71,6 +81,12 @@ LARGE = [
     ("synthetic-walk-2000", "--model PINHOLE --images 2000 --points 240000 --track-length 8 --relative-priors 2 "
                             "--seed 22"),
 ]
+# With --huge: document 07's 10,000-image walk (9.6 million observations).
+HUGE = [
+    ("synthetic-walk-10000", "--model PINHOLE --images 10000 --points 1200000 --track-length 8 --relative-priors 2 "
+                             "--seed 23"),
+]
+EQUAL_COST = 1e-6  # D99
 COUNTS = ("iterations", "accepted_steps", "linear_iterations", "termination")
 
 
@@ -106,20 +122,37 @@ def machine():
     return info
 
 
-def solve(cli, path, args):
-    out = subprocess.run([cli, "solve", path, "--threads", str(args.threads), "--backend", args.backend,
-                          "--linear-solver", args.linear_solver], capture_output=True, text=True)
+def solve(cli, path, args, warm=True, history=None):
+    cmd = [cli, "solve", path, "--threads", str(args.threads), "--backend", args.backend, "--linear-solver",
+           args.linear_solver]
+    if warm:
+        cmd.append("--warm-up")
+    if history:
+        cmd += ["--history", history]
+    out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"{path}: {out.stderr.strip() or out.stdout.strip()}")
-    return json.loads(out.stdout)
+    r = json.loads(out.stdout)
+    if history:
+        with open(history) as f:
+            r["history"] = json.load(f)
+    return r
 
 
-def ceres_solve(tool, path, args):
-    out = subprocess.run([tool, path, "--linear-solver", "sparse_schur", "--sparse-library",
-                          args.ceres_sparse_library, "--gauge", "auto"], capture_output=True, text=True)
+def ceres_solve(tool, library, path):
+    out = subprocess.run([tool, path, "--linear-solver", "sparse_schur", "--sparse-library", library, "--gauge", "auto"],
+                         capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"ceres {path}: {out.stderr.strip() or out.stdout.strip()}")
     return json.loads(out.stdout)
+
+
+def time_to(costs, times, target):
+    """First time at which the cost is at or below target (within EQUAL_COST)."""
+    for c, t in zip(costs, times):
+        if c <= target * (1 + EQUAL_COST):
+            return t
+    return None
 
 
 def run(args):
@@ -132,54 +165,87 @@ def run(args):
             problems.append((name, p))
         else:
             print(f"skipping {name}: not downloaded (python3 tests/data/fetch_bal.py)", file=sys.stderr)
-    tmp = tempfile.mkdtemp(prefix="jba_bench_")
-    for name, opts in SYNTHETIC + (LARGE if args.large else []):
-        p = os.path.join(tmp, name + ".jba")
-        subprocess.run([make, p, *opts.split()], check=True, capture_output=True)
-        problems.append((name, p))
+    synthetic = SYNTHETIC + (LARGE if args.large or args.huge else []) + (HUGE if args.huge else [])
     if args.only:
-        problems = [(n, p) for n, p in problems if any(o in n for o in args.only.split(","))]
+        keep = lambda n: any(o in n for o in args.only.split(","))
+        problems = [(n, p) for n, p in problems if keep(n)]
+        synthetic = [(n, o) for n, o in synthetic if keep(n)]
+    with tempfile.TemporaryDirectory(prefix="jba_bench_") as tmp:
+        for name, opts in synthetic:
+            p = os.path.join(tmp, name + ".jba")
+            subprocess.run([make, p, *opts.split()], check=True, capture_output=True)
+            problems.append((name, p))
+        return run_problems(args, cli, problems, tmp)
 
+
+def run_problems(args, cli, problems, tmp):
     result = {"commit": git_commit(), "machine": machine(), "backend": args.backend,
               "linear_solver": args.linear_solver, "threads": args.threads, "repeats": args.repeats,
+              "timing": "whole call, set-up included; warm (best of repeats) and cold (a fresh process)",
               "problems": {}}
+    ceres_tools = []
+    if args.ceres:
+        ceres_tools.append(("ceres", args.ceres, args.ceres_sparse_library))
+    if args.ceres_gpu:
+        ceres_tools.append(("ceres_gpu", args.ceres_gpu, "cuda"))
     for name, path in problems:
-        runs = [solve(cli, path, args) for _ in range(args.repeats)]
+        cold = solve(cli, path, args, warm=False)
+        hist = os.path.join(tmp, name + ".history.json")
+        runs = [solve(cli, path, args, history=hist + str(r)) for r in range(args.repeats)]
         first = runs[0]
-        # The solver auto stands for, as the library resolved it for this build.
+        # The solver auto stood for, as the library resolved it for this problem.
         result["linear_solver"] = first["linear_solver"]
-        for r in runs[1:]:
+        for r in runs[1:] + [cold]:
             if any(r[k] != first[k] for k in COUNTS) or r["final_cost"] != first["final_cost"]:
                 raise RuntimeError(f"{name}: repeated runs differ; the solver should be deterministic (D59)")
-        best = min(r["time_seconds"] for r in runs)
+        best = min(runs, key=lambda r: r["time_seconds"])
         entry = {k: first[k] for k in ("images", "points", "observations", "relative_priors", "global_priors",
-                                      "initial_cost", "final_cost", *COUNTS)}
-        entry["time_seconds"] = best
-        entry["time_per_iteration"] = best / max(1, first["iterations"])
-        line = (f"{name:34s} {first['iterations']:3d} it {first['linear_iterations']:5d} lin  "
-                f"{best:8.3f} s  {1000 * entry['time_per_iteration']:8.2f} ms/it  {first['termination']}")
-        if args.ceres:
-            cruns = [ceres_solve(args.ceres, path, args) for _ in range(args.repeats)]
-            entry["ceres"] = {"sparse_library": args.ceres_sparse_library, "iterations": cruns[0]["iterations"],
-                              "final_cost": cruns[0]["final_cost"], "termination": cruns[0]["termination"],
-                              "time_seconds": min(r["time_seconds"] for r in cruns)}
-            c = entry["ceres"]
-            line += (f"  | ceres {c['iterations']:3d} it {c['time_seconds']:8.3f} s  x{c['time_seconds'] / best:5.2f}"
-                     f"  cost diff {abs(first['final_cost'] - c['final_cost']) / c['final_cost']:.1e}")
+                                      "initial_cost", "final_cost", "linear_solver", *COUNTS)}
+        entry["time_seconds"] = best["time_seconds"]
+        entry["setup_seconds"] = best["setup_seconds"]
+        entry["cold_time_seconds"] = cold["time_seconds"]
+        entry["time_per_iteration"] = best["time_seconds"] / max(1, first["iterations"])
+        line = (f"{name:30s} {first['iterations']:3d} it {first['linear_iterations']:5d} lin  "
+                f"{best['time_seconds']:7.3f} s (set-up {best['setup_seconds']:6.3f}, cold {cold['time_seconds']:7.3f})"
+                f"  {first['termination']}")
+        ours_costs = [h["cost"] for h in best["history"]]
+        ours_times = [h["time_seconds"] for h in best["history"]]
+        for column, tool, library in ceres_tools:
+            cruns = [ceres_solve(tool, library, path) for _ in range(args.repeats)]
+            cb = min(cruns, key=lambda r: r["wall_seconds"])
+            c = {"sparse_library": library, "version": cb["ceres_version"], "iterations": cb["iterations"],
+                 "final_cost": cb["final_cost"], "termination": cb["termination"],
+                 "time_seconds": cb["wall_seconds"], "solve_seconds": cb["time_seconds"]}
+            c["speedup"] = c["time_seconds"] / best["time_seconds"]
+            # At equal accuracy (D99): time to the worse of the two final costs.
+            target = max(first["final_cost"], c["final_cost"])
+            t_ours = time_to(ours_costs, ours_times, target)
+            t_ceres = time_to(cb["history_cost"], cb["history_time"], target)
+            if t_ours and t_ceres:
+                c["equal_cost_target"] = target
+                c["equal_cost_seconds"] = t_ceres
+                c["equal_cost_seconds_ours"] = t_ours
+                c["equal_cost_speedup"] = t_ceres / t_ours
+            entry[column] = c
+            line += (f"  | {column} {c['iterations']:3d} it {c['time_seconds']:7.3f} s  x{c['speedup']:5.2f}"
+                     f" (equal cost x{c.get('equal_cost_speedup', float('nan')):5.2f})")
         result["problems"][name] = entry
         print(line, file=sys.stderr)
     return result
 
 
-def compare(result, baseline, max_slowdown):
+def compare(result, baseline, max_slowdown, only=None):
     problems = []
+    if "timing" not in baseline:
+        return ["baseline was recorded before times included the set-up (D101); record it again"]
     for key, default in (("backend", "cpu"), ("linear_solver", "iterative_schur")):
         if baseline.get(key, default) != result[key]:
             return [f"baseline is for {key} {baseline.get(key, default)}, this run is {result[key]}"]
     for name, b in baseline["problems"].items():
         r = result["problems"].get(name)
         if r is None:
-            problems.append(f"{name}: not run")
+            if not only:
+                problems.append(f"{name}: not run")
             continue
         for k in COUNTS:
             if r[k] != b[k]:
@@ -208,9 +274,11 @@ def main():
     ap.add_argument("--linear-solver", default="auto", choices=["auto", "iterative_schur", "sparse_schur"],
                     help="auto: the library's rule for the backend, as this build resolves it")
     ap.add_argument("--large", action="store_true", help="add the main-size-range problems (LARGE)")
+    ap.add_argument("--huge", action="store_true", help="add LARGE and the 10,000-image walk (HUGE)")
     ap.add_argument("--ceres", help="jba_ceres_solve to run on every problem too (speed reference)")
     ap.add_argument("--ceres-sparse-library", default="accelerate",
                     choices=["eigen", "accelerate", "suite_sparse", "cuda"])
+    ap.add_argument("--ceres-gpu", help="a second jba_ceres_solve, built with cuDSS (column ceres_gpu)")
     ap.add_argument("--only", help="comma-separated substrings of problem names")
     args = ap.parse_args()
     result = run(args)
@@ -222,7 +290,7 @@ def main():
     if args.compare:
         with open(args.compare) as f:
             baseline = json.load(f)
-        problems = compare(result, baseline, args.max_slowdown)
+        problems = compare(result, baseline, args.max_slowdown, args.only)
         for p in problems:
             print("REGRESSION " + p, file=sys.stderr)
         sys.exit(1 if problems else 0)

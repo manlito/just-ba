@@ -7,19 +7,21 @@ or another tracker.
 
 Status: milestones 1 (CPU solver, parity with Ceres), 2 (the main use case on the
 CPU), 3 (gravity, the Manhattan prior, depth, covariances, export) and 4 (the Metal
-backend: the CPU's answers within single-precision tolerance, 2.6 to 10.6 times
-faster than Ceres with Accelerate on the owner's M5 Pro) done; CI passes on Linux
+backend: the CPU's answers within single-precision tolerance, 2.9 to 11.9 times
+faster than Ceres with Accelerate on the owner's M5 Pro, whole call, D101) done; CI passes on Linux
 and Windows. macOS wheels are left to milestone 6's packaging. Milestone 5 (CUDA)
 met its exit on Linux: faster than Ceres, Caspar and bae at equal accuracy on the
-owner's laptop, venice-52 excepted (document 07); the Windows check is outstanding. Results in
+owner's laptop, times of the whole call, venice-52 excepted (document 07); the
+Windows check is outstanding. Results in
 [07-roadmap.md](07-roadmap.md). Milestones 0 and 1 were reviewed before milestone 2;
 the findings are in [12-review-milestones-0-1.md](12-review-milestones-0-1.md).
 Milestones 3 and 4 were reviewed after milestone 4: the results hold, and the three
 defects it found are fixed ([13-review-milestones-3-4.md](13-review-milestones-3-4.md)).
-Milestone 5 was reviewed on both machines: the CUDA backend's answers, repeatability
-and baseline hold and Metal is bit-identical to before, but the speed figures leave
-out the backend's set-up, and the comparison with Caspar and bae has to be repeated
-with it ([14-review-milestone-5.md](14-review-milestone-5.md)). Build instructions:
+Milestone 5 was reviewed on both machines
+([14-review-milestone-5.md](14-review-milestone-5.md)): the CUDA backend's answers,
+repeatability and baseline held, but the speed figures left out the backend's set-up.
+Its findings are fixed (D101 to D104) and the comparison was repeated with times of
+the whole call, warm and cold, and recorded. Build instructions:
 [../README.md](../README.md).
 
 ## Documents
@@ -71,10 +73,10 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
 2. **From the review of milestones 3 and 4** (document 13): whether CI's full mode
    keeps its Metal step, and what agreement between backends `refine` must give on
    real captures.
-3. **From the review of milestone 5** (document 14): whether the speed claim is
-   about the call to `solve()` or about the iterations alone; whether `Auto` may
-   fail for lack of GPU memory where the iterative solver would run; and whether
-   the invalid steps on venice-52 are fixed before milestone 6.
+3. **From the review of milestone 5** (document 14): whether the rest of venice-52's
+   invalid steps (a camera block of the reduced system losing definiteness in single
+   precision) is studied before milestone 6. Its other two questions are answered
+   by D101 and D102.
 
 ## Reference material
 

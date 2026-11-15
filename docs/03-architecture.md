@@ -314,8 +314,12 @@ Notes:
 
 All backends are compiled into one binary where the platform allows and selected at
 run time. Running out of device memory is a reported error with a CPU fallback; an
-8 GB GPU is the reference consumer device. As built on Metal and CUDA, a buffer that
-cannot be allocated is a reported error; the fallback to the CPU is not built.
+8 GB GPU is the reference consumer device. As built on Metal and CUDA (D102): with
+`Auto`, option B is not taken where its reduced system would not fit the device's
+free memory or its 32-bit indices, a set-up of B that still runs out starts again
+with option A, and a factorization that runs out part way hands the rest of the solve
+to A; asked for explicitly, B reports that it does not fit. A buffer that cannot be
+allocated for option A is a reported error; the fallback to the CPU is not built.
 
 ## Repository layout
 
@@ -350,7 +354,7 @@ third_party/     reference solver build (Ceres), test-only
 
 | Decision | How it gets settled |
 |---|---|
-| Default linear strategy (A, B or C) per problem size | Metal: B at every size measured, 16 to 2,000 images (D92). CUDA: B when built with cuDSS (D98). CPU: benchmark once it has B |
+| Default linear strategy (A, B or C) per problem size | Metal and CUDA with cuDSS: B wherever it fits the device, measured end to end from 16 to 10,000 images and on tracks of 8 to 100 images (D92, D98, D102). CPU: benchmark once it has B |
 | Preconditioner beyond block-Jacobi | Benchmark on ill-conditioned prior-heavy problems |
 | Symbolic tool | Decided: wrenfold (D45) |
 | Whether CUDA double is worth shipping | Accuracy results in single precision |

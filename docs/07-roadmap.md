@@ -364,7 +364,8 @@ means Apple Silicon here):
 
 Status: done. Exit met on the owner's M5 Pro: same answers as the CPU reference
 within single-precision tolerance, and faster than Ceres with Accelerate on every
-problem measured, 2.6 to 10.6 times. No M1 was available, so "M1-class" is shown on
+problem measured, 2.6 to 10.6 times (iterations only; with the whole call timed,
+D101, 2.9 to 11.9 times warm, `bench/baseline/apple-m5pro-metal-sparse.json`). No M1 was available, so "M1-class" is shown on
 newer Apple Silicon only. macOS wheels moved to milestone 6 with the other wheels.
 The Metal tests run by hand where a Metal device is present (label `gpu`). The
 shared host side, the trust-region changes and the rest pass a quick CI run (D61)
@@ -410,42 +411,60 @@ CUDA 13.4; the M5 Pro for Metal):
   B with cuDSS. Kernel work for B (each observation's E and G once, stored in list
   order; fixed-shape pose tiles) made the tile kernel 4 times faster on CUDA and
   Metal 4 to 50 percent faster per iteration, with Metal's results bit-identical.
-- Same answers: every GPU case (55 parity problems and two of their own) on CUDA with
-  both solvers agrees with the CPU within the Metal tests' limits and repeats bit for
-  bit; all 300 tests pass on Linux, all 303 on the Mac.
-- Against Ceres 2.2.0 (SuiteSparse, 12 threads) on the same problems: 3.5 to 17.6
-  times faster at the same cost (BAL 4.0 to 9.6, the 500- and 2,000-image walks 13.2
-  and 17.6). Against Ceres master on the same GPU (cuDSS): 2.6 to 14.9 times.
+- Same answers: every GPU case (55 parity problems and the cases of their own) on
+  CUDA with both solvers agrees with the CPU within the Metal tests' limits and
+  repeats bit for bit; all 310 tests pass on Linux, all 304 on the Mac.
+- Times are of the whole call to `solve()`, set-up included (D101; document 05).
+  "Warm" is a call with the device already started, as in a process that solves more
+  than once; "cold" is the first call of a fresh process, device start-up included,
+  as a command-line run pays it. Recorded in `bench/baseline/rtx2070maxq-cuda-sparse.json`
+  and `bench/competitors/results/rtx2070maxq.json`.
+- Against Ceres 2.2.0 (SuiteSparse, 12 threads, timed from building its problem) on
+  the same problems: warm 3.4 to 13.8 times faster, at equal cost 2.8 to 14.0 (BAL
+  2.8 to 10.0; the walks of 500, 2,000 and 10,000 images 12.6, 13.5 and 14.0); cold
+  1.2 to 12.7 times. Against Ceres master on the same GPU (cuDSS): warm 3.0 to 11.0,
+  at equal cost 2.5 to 10.9, cold 1.4 to 9.9.
 - Against COLMAP's Caspar (reprojection-only problems: BAL reduced to SIMPLE_RADIAL,
-  walks without priors): to Caspar's final cost, 6.8 to 41 times faster; end to end,
-  1.7 to 18.5 times, with a lower final cost on every problem (Caspar's fixed 200
-  iterations stop short on BAL: dubrovnik 27,095 against 24,714).
-- Against bae (BAL, its 20 steps): to bae's final cost 26 to 67 times faster on four
-  of five problems.
+  walks without priors; Caspar timed from creating its adjuster to its termination,
+  its history from its own iteration clock): end to end 1.3 to 5.5 times faster cold
+  and 1.5 to 14.4 warm, with a lower final cost on every problem; at Caspar's final
+  cost 1.8 to 23 times warm, and cold 2.8 to 6.3 on all but venice-52, where Caspar
+  reaches its cost (368,625, against just-ba's 247,684) in 0.93 of just-ba's cold
+  time.
+- Against bae (BAL, its 20 steps, timed from its first step): end to end 6.2 to 18.8
+  times faster cold and 7.1 to 52 warm; at the worse of the two final costs 2.7 to
+  15 cold and 2.9 to 73 warm. On venice-52 bae ends lower (245,653 against 271,831).
 - Exception, venice-52 (52 images): its end point depends on the path (D60, D99).
-  With the defaults (sparse_schur, Ceres's tolerances) CUDA ends at 270,448 in 50
-  iterations, Ceres at 261,813 and bae at 245,656; CUDA's conjugate gradients reach
-  bae's cost in 8.4 s against bae's 11.6 s when run at tight tolerances, and 251,831
-  in 3.2 s at the default ones.
-- Large class: a 10,000-image walk (9.6 million observations) in 1.6 s, against 32.2 s
-  for Ceres on the CPU and 26.2 s for Ceres master on the GPU, the same cost to 3e-8;
-  at most 3.6 GB of GPU memory. Caspar and bae were not run at this size.
+  With the defaults CUDA's sparse_schur ends at 271,831 in 50 iterations, Ceres at
+  261,813 (recorded), bae at 245,653, Metal's sparse_schur at 236,658. On CUDA 17 of
+  the 50 steps are invalid: one camera's block of the reduced system, formed in
+  single precision, loses definiteness (document 14, finding 5; D103 recovers the
+  steps where only the preconditioner's diagonal is lost). CUDA's conjugate
+  gradients end at 252,162 at the defaults.
+- Large class: the 10,000-image walk (9.6 million observations) in 2.9 s warm and
+  3.1 s cold, against 39.4 s for Ceres on the CPU and 30.5 s for Ceres master on the
+  GPU, the same cost; with tracks of 16 (19.2 million observations) strategy B does
+  not fit the 8 GB card (4,591 MiB needed, 4,935 free) and `Auto` takes the iterative
+  solver (D102): 12 iterations in 308 s, at most 2.9 GB of GPU memory, where the
+  review saw `Auto` stop with an allocation error.
+- Metal (M5 Pro, against Ceres 2.2.0 with Accelerate): sparse_schur warm 2.9 to 11.9
+  times faster, at equal cost 2.2 to 27 (`bench/baseline/apple-m5pro-metal-sparse.json`).
 - How the competitors were built and run: `bench/competitors/README.md`.
 - Not done: the Windows build and tests on the laptop's Windows; double-precision
   kernels and full-system conjugate gradients (both deferred, D100).
 
-Status: exit met on Linux, venice-52 excepted as above; the Windows confirmation is
-outstanding.
+Status: exit met on Linux, venice-52 excepted as above: faster than every competitor
+at equal accuracy on every problem of the small and medium classes, warm and cold,
+but for venice-52 against Caspar cold. The Windows confirmation is outstanding.
 
-Reviewed in document 14: the tests, the repeatability, Metal's bit-identical results
-and the baseline reproduce. The times above are `time_seconds`, which starts after
-the backend is set up, not at the call as document 05 requires; with the set-up
-counted the range against Ceres 2.2.0 is 1.7 to 7.4 times (the 10,000-image walk:
-6.7 s, 4.8 times), and the Caspar and bae figures, whose runs were not recorded,
-could not be recomputed. The exit against Caspar is open until they are. Also
-found: an out-of-bounds read in the shared layer's buffer set-up, sparse_schur's
-set-up cost and memory under `Auto`, and what happens on venice-52 (on CUDA 19 of
-sparse_schur's 50 steps are invalid; on Metal its exact steps reach 236,658).
+Reviewed in document 14, whose findings changed the figures above: the first
+version of them timed the iterations only (`time_seconds` then started after the
+backend's set-up) and did not record the Caspar and bae runs. Fixed since (D101 to
+D104): times of the whole call, the runs recorded, the out-of-bounds read in the
+shared layer, strategy B's set-up (counted, then filled in parallel: tracks of 100
+take 2.3 s on CUDA where the review measured 11.7 s), `Auto` against the device's
+memory, cuDSS failures falling back, and CI compiling the shared layer and the CUDA
+backend.
 
 ## Milestone 6: release to PyPI
 

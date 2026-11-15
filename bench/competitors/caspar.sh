@@ -9,7 +9,8 @@
 # Writes into the current directory: <name>.jba and <name>-model (the same problem,
 # jba_to_colmap), three Caspar runs (<name>.caspar<r>.log with glog's timestamps,
 # .out with its per-iteration lines), the cost of Caspar's result in double
-# (<name>.caspar.cost: observations, cost), and three just-ba solves with histories.
+# (<name>.caspar.cost: observations, cost), and just-ba's solves with histories: one
+# cold (<name>.jba-cold.*) and three warm (<name>.jba<r>.*).
 set -e
 name=$1; in=$2; ref=$3; shift 3
 "$BUILD/tests/jba_to_colmap" "$in" "$name.jba" "$name-model" "$@" > "$name.convert.json"
@@ -23,6 +24,10 @@ done
 rm -rf "$name-out-txt"; mkdir -p "$name-out-txt"
 "$COLMAP" model_converter --input_path "$name-out" --output_path "$name-out-txt" --output_type TXT > /dev/null 2>&1
 python3 -I "$(dirname "$0")/colmap_cost.py" "$name-out-txt" > "$name.caspar.cost"
+# just-ba: one call in a fresh process (cold: the device's start-up included, as
+# Caspar's process pays its own), then three warm calls; times of the whole call,
+# set-up included (D101).
+"$BUILD/cli/just-ba" solve "$name.jba" --backend cuda --history "$name.jba-cold.hist.json" > "$name.jba-cold.json"
 for r in 1 2 3; do
-  "$BUILD/cli/just-ba" solve "$name.jba" --backend cuda --history "$name.jba$r.hist.json" > "$name.jba$r.json"
+  "$BUILD/cli/just-ba" solve "$name.jba" --backend cuda --warm-up --history "$name.jba$r.hist.json" > "$name.jba$r.json"
 done
