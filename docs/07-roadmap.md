@@ -511,10 +511,16 @@ runner, times compared on its CPU model only, D117); the release workflow builds
 tests all seven wheels and the sdist (0.4 to 2.0 MB, D114); the docs workflow builds
 the site and its examples pass.
 
+The CUDA wheels on the laptop's Linux (2026-11-15, RTX 2070 Max-Q, driver 620.70,
+Python 3.14, wheels from the release run): `bench/gpu_check.py --wheel` passes for
+`just-ba-cu12` and `just-ba-cu13` (fresh environment, 12 Python tests with the CUDA
+one, CUDA available). A `refine` on CUDA with `just-ba-cu13` converged with
+sparse_schur, and the process mapped cuDSS, cuBLAS, cuBLASLt and NVRTC from NVIDIA's
+pip packages only, not from the laptop's own CUDA 13 in /opt/cuda (D115). The laptop
+has no CUDA 12, so `just-ba-cu12` can only have loaded them from the packages.
+
 Not done yet, so the exit is not met: nothing is on PyPI or Cloudflare Pages, and the
-CUDA wheels have not run on a GPU (`bench/gpu_check.py --wheel` on the laptop, Linux
-and Windows, which also shows that NVIDIA's libraries load from their pip packages
-alone; the build machines had them installed elsewhere too). The owner's set-up for
+CUDA wheels are not yet checked on the laptop's Windows. The owner's set-up for
 publishing: pending publishers on PyPI for `just-ba-cu12` and `just-ba-cu13`, and
 the Cloudflare project, token and account ID as repository secrets.
 

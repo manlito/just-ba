@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>just-ba in the browser (WebGPU exploration)</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1d1d1f; --muted: #6e6e73; --line: #d2d2d7; --accent: #0a66c2; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #f5f5f7; --muted: #a1a1a6; --line: #3a3a3c; --accent: #4ea1ff; } }
+  body { font: 14px/1.45 system-ui, -apple-system, sans-serif; color: var(--fg); max-width: 980px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; }
+  .muted { color: var(--muted); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; padding: .75rem 1rem; margin: 1rem 0; }
+  label { margin-right: 1rem; }
+  select, input, button { font: inherit; }
+  button { padding: .35rem .9rem; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: white; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { border-collapse: collapse; width: 100%; margin-top: .5rem; font-variant-numeric: tabular-nums; }
+  th, td { border-bottom: 1px solid var(--line); padding: .3rem .5rem; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  pre { white-space: pre-wrap; font-size: 12px; }
+  canvas { width: 100%; height: 180px; border: 1px solid var(--line); border-radius: 8px; }
+</style>
+</head>
+<body>
+<h1>just-ba in the browser</h1>
+<div class="muted">Bundle adjustment in WebAssembly, the per-observation work and the linear solve on WebGPU
+(WGSL kernels), every decision in double on the host. Exploration build: iterative_schur only on WebGPU here.</div>
+<div id="device" class="muted" style="margin-top:.5rem">Checking WebGPU…</div>
+
+<fieldset>
+  <legend>Problem</legend>
+  <label>Synthetic <select id="preset"></select></label>
+  <label>or a file <input type="file" id="file" accept=".jba,.txt"></label>
+</fieldset>
+<fieldset>
+  <legend>Solve</legend>
+  <label>Backend <select id="backend"><option>webgpu</option><option>cpu</option></select></label>
+  <label>Linear solver <select id="solver"><option>auto</option><option>iterative_schur</option></select></label>
+  <label>Max iterations <input id="iters" type="number" value="50" min="1" max="500" style="width:5em"></label>
+  <label><input type="checkbox" id="warm" checked> warm-up solve first</label>
+  <button id="go" disabled>Solve</button>
+  <button id="bench" disabled>Run all presets</button>
+</fieldset>
+<canvas id="plot" width="1880" height="360"></canvas>
+<table id="results">
+  <thead><tr><th>Problem</th><th>Backend</th><th>Images</th><th>Obs.</th><th>Iter.</th><th>CG it.</th>
+  <th>Initial cost</th><th>Final cost</th><th>Set-up s</th><th>Total s</th><th>ms / iter.</th></tr></thead>
+  <tbody></tbody>
+</table>
+<pre id="log"></pre>
+
+<script type="module">
+import createJustBa from './just_ba.js';
+
+// The benchmark's synthetic problems (bench/run.py), same generator and seeds.
+const PRESETS = {
+  'synthetic-pinhole-50': '--model PINHOLE --images 50 --points 4000 --seed 11',
+  'synthetic-radial-free-30': '--model RADIAL --images 30 --points 3000 --free-intrinsics 7 --seed 12',
+  'synthetic-relative-priors-50': '--model PINHOLE --images 50 --points 4000 --relative-priors 3 --prior-outliers 0.05 --seed 13',
+  'synthetic-global-similarity-50': '--model PINHOLE --images 50 --points 4000 --relative-priors 2 --global-priors --global-relation similarity --seed 14',
+  'synthetic-opencv-30': '--model OPENCV --images 30 --points 3000 --seed 15',
+  'synthetic-walk-500': '--model PINHOLE --images 500 --points 60000 --track-length 8 --relative-priors 2 --seed 21',
+  'synthetic-walk-2000': '--model PINHOLE --images 2000 --points 240000 --track-length 8 --relative-priors 2 --seed 22',
+};
+const $ = (id) => document.getElementById(id);
+const log = (s) => { $('log').textContent += s + '\n'; };
+for (const name of Object.keys(PRESETS)) $('preset').add(new Option(name));
+
+let M = null;
+const generated = new Set();
+
+async function deviceInfo() {
+  if (!navigator.gpu) return 'No WebGPU in this browser: the CPU backend (single-threaded wasm) still works.';
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) return 'WebGPU present but no adapter.';
+  const i = adapter.info || {};
+  return `WebGPU adapter: ${[i.vendor, i.architecture, i.device, i.description].filter(Boolean).join(' / ') || 'unknown'}; ` +
+         `storage binding up to ${Math.round(adapter.limits.maxStorageBufferBindingSize / 2 ** 20)} MiB`;
+}
+
+function problemPath(name) {
+  const path = `/${name}.jba`;
+  if (!generated.has(name)) {
+    const t0 = performance.now();
+    const err = M.ccall('jba_generate', 'string', ['string', 'string'], [path, PRESETS[name]]);
+    if (err) throw new Error(err);
+    generated.add(name);
+    log(`generated ${name} in ${((performance.now() - t0) / 1000).toFixed(2)} s`);
+  }
+  return path;
+}
+
+async function solve(path, label, backend = $('backend').value, solver = $('solver').value,
+                     iters = +$('iters').value, warm = $('warm').checked) {
+  const json = await M.ccall('jba_solve', 'string', ['string', 'string', 'string', 'number', 'number'],
+                             [path, backend, solver, iters, warm ? 1 : 0], { async: true });
+  const r = JSON.parse(json);
+  if (!r.ok) throw new Error(r.error);
+  r.label = label;
+  const row = $('results').tBodies[0].insertRow();
+  const per = (1000 * (r.time_seconds - r.setup_seconds) / Math.max(1, r.iterations)).toFixed(1);
+  for (const v of [label, `${backend} (${r.linear_solver})`, r.images, r.observations, r.iterations, r.linear_iterations,
+                   r.initial_cost.toPrecision(7), r.final_cost.toPrecision(10), r.setup_seconds.toFixed(3),
+                   r.time_seconds.toFixed(3), per])
+    row.insertCell().textContent = v;
+  plot(r);
+  return r;
+}
+
+function plot(r) {
+  const c = $('plot'), g = c.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  g.clearRect(0, 0, c.width, c.height);
+  const h = r.history; if (h.length < 2) return;
+  const t1 = h[h.length - 1][1], lo = Math.log10(Math.min(...h.map((x) => x[0]))), hi = Math.log10(h[0][0]);
+  const X = (t) => 60 + (c.width - 80) * (t / t1), Y = (v) => 20 + (c.height - 50) * (hi - Math.log10(v)) / Math.max(1e-9, hi - lo);
+  g.strokeStyle = css.getPropertyValue('--accent'); g.lineWidth = 4; g.beginPath();
+  h.forEach(([v, t], i) => (i ? g.lineTo(X(t), Y(v)) : g.moveTo(X(t), Y(v)))); g.stroke();
+  g.fillStyle = css.getPropertyValue('--muted'); g.font = '24px system-ui';
+  g.fillText(`${r.label}: cost (log) against time, ${t1.toFixed(2)} s`, 70, c.height - 12);
+}
+
+async function run(fn) {
+  $('go').disabled = $('bench').disabled = true;
+  try { await fn(); } catch (e) { log('error: ' + e.message); }
+  $('go').disabled = $('bench').disabled = false;
+}
+
+$('go').onclick = () => run(async () => {
+  const f = $('file').files[0];
+  if (f) {
+    const path = '/' + f.name.replace(/[^\w.-]/g, '_');
+    M.FS.writeFile(path, new Uint8Array(await f.arrayBuffer()));
+    await solve(path, f.name);
+  } else {
+    await solve(problemPath($('preset').value), $('preset').value);
+  }
+});
+$('bench').onclick = () => run(async () => {
+  for (const name of Object.keys(PRESETS)) await solve(problemPath(name), name);
+});
+
+// For scripted runs: await window.jba.solvePreset('synthetic-walk-500', 'webgpu').
+window.jba = {
+  solvePreset: (name, backend, solver = 'auto', iters = 50, warm = true) =>
+    solve(problemPath(name), name, backend, solver, iters, warm),
+  solveFile: (path, backend, solver = 'auto', iters = 50, warm = true) => solve(path, path, backend, solver, iters, warm),
+  writeFile: (path, bytes) => M.FS.writeFile(path, bytes),
+};
+
+$('device').textContent = await deviceInfo();
+M = await createJustBa();
+if (!(await M.ccall('jba_backend_available', 'number', ['string'], ['webgpu'], { async: true }))) {
+  log('The WebGPU backend could not start here; use the CPU.');
+  $('backend').value = 'cpu';
+}
+$('go').disabled = $('bench').disabled = false;
+window.jba.ready = true;
+</script>
+</body>
+</html>

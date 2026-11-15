@@ -216,7 +216,8 @@ NB_MODULE(_core, m) {
                               "(NVIDIA GPUs).")
       .value("CPU", jba::BackendKind::Cpu)
       .value("METAL", jba::BackendKind::Metal)
-      .value("CUDA", jba::BackendKind::Cuda);
+      .value("CUDA", jba::BackendKind::Cuda)
+      .value("WEBGPU", jba::BackendKind::WebGpu);
   nb::enum_<jba::LinearSolverType>(m, "LinearSolver",
                                    "Inner solve: AUTO (the backend's fastest), ITERATIVE_SCHUR (every backend) "
                                    "or SPARSE_SCHUR (Metal; CUDA with cuDSS).")
@@ -229,7 +230,8 @@ NB_MODULE(_core, m) {
       "compiled_backends",
       [] {
         std::vector<jba::BackendKind> out;
-        for (jba::BackendKind k : {jba::BackendKind::Cpu, jba::BackendKind::Metal, jba::BackendKind::Cuda})
+        for (jba::BackendKind k : {jba::BackendKind::Cpu, jba::BackendKind::Metal, jba::BackendKind::Cuda,
+                                   jba::BackendKind::WebGpu})
           if (jba::backend_compiled(k)) out.push_back(k);
         return out;
       },

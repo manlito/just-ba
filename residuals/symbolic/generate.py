@@ -85,6 +85,22 @@ def render_cuda() -> str:
     return "".join(parts)
 
 
+def render_wgsl() -> str:
+    gen = emit.WgslGenerator()
+    parts = [
+        BANNER.format(version=wrenfold.__version__, source="reprojection.py"),
+        "// WGSL (WebGPU backend, exploration). Prepended to the shared kernels' WGSL\n"
+        "// port. Every model takes intrinsics as array<f32, 8> and writes J_intrinsics\n"
+        "// (2 x np, row-major) into array<f32, 16>.\n\n",
+        _model_table("wgsl"),
+        "\n",
+    ]
+    for model in reprojection.CAMERA_MODELS:
+        parts.append(emit.generate(reprojection.make_reprojection(model), gen))
+        parts.append("\n")
+    return "".join(parts)
+
+
 def _render_module_cpu(module, source: str) -> str:
     gen = emit.CpuGenerator()
     parts = [
@@ -117,6 +133,7 @@ FILES = {
     OUT / "cpu" / "depth_generated.h": render_depth_cpu,
     OUT / "metal" / "reprojection.metal.h": render_metal,
     OUT / "cuda" / "reprojection.cuh": render_cuda,
+    OUT / "wgsl" / "reprojection.wgsl": render_wgsl,
 }
 
 
