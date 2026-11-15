@@ -68,6 +68,23 @@ def render_metal() -> str:
     return "".join(parts)
 
 
+def render_cuda() -> str:
+    gen = emit.CudaGenerator()
+    parts = [
+        BANNER.format(version=wrenfold.__version__, source="reprojection.py"),
+        "// CUDA C++, compiled by nvcc. Included into kernel sources; instantiate with float\n"
+        "// (or double).\n",
+        "#pragma once\n\n",
+        _model_table("cuda"),
+        "\nnamespace jba::cuda_generated {\n\n",
+    ]
+    for model in reprojection.CAMERA_MODELS:
+        parts.append(emit.generate(reprojection.make_reprojection(model), gen))
+        parts.append("\n")
+    parts.append("}  // namespace jba::cuda_generated\n")
+    return "".join(parts)
+
+
 def _render_module_cpu(module, source: str) -> str:
     gen = emit.CpuGenerator()
     parts = [
@@ -99,6 +116,7 @@ FILES = {
     OUT / "cpu" / "directions_generated.h": render_directions_cpu,
     OUT / "cpu" / "depth_generated.h": render_depth_cpu,
     OUT / "metal" / "reprojection.metal.h": render_metal,
+    OUT / "cuda" / "reprojection.cuh": render_cuda,
 }
 
 

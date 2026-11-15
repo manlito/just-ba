@@ -7,6 +7,8 @@ generated code needs no header beyond the target's own math functions:
 - C++ (CPU backend): `template <typename Scalar>` functions over raw pointers.
 - Metal Shading Language: the same body over `thread` pointers, with `metal::`
   math functions. Instantiated with `float` inside kernels.
+- CUDA C++: the C++ body as `__device__` functions, with the global math functions
+  nvcc overloads for float and double. Instantiated inside kernels.
 
 Optional outputs are pointers that may be null, so a caller that only needs the
 residual skips the Jacobian work.
@@ -105,6 +107,11 @@ class MetalGenerator(_PointerCppBase):
 
     def format_signum(self, x: str) -> str:
         return f"metal::sign({x})"
+
+
+class CudaGenerator(_PointerCppBase):
+    std_namespace = ""  # "::sqrt": nvcc's device overloads in the global namespace
+    inline_keyword = "__device__ inline"
 
 
 def generate(func, generator, name=None) -> str:

@@ -36,7 +36,8 @@ endif()
 # directory; the libraries, the CLI and the tests reach them through this target.
 add_library(jba_internal INTERFACE)
 target_include_directories(jba_internal INTERFACE ${PROJECT_SOURCE_DIR}/core/internal
-                           ${PROJECT_SOURCE_DIR}/backends/cpu/internal ${PROJECT_SOURCE_DIR}/backends/metal/internal)
+                           ${PROJECT_SOURCE_DIR}/backends/cpu/internal ${PROJECT_SOURCE_DIR}/backends/gpu/internal
+                           ${PROJECT_SOURCE_DIR}/backends/metal/internal)
 target_link_libraries(jba_internal INTERFACE jba_generated_cpu)  # the CPU headers include the generated code
 
 add_subdirectory(core)
@@ -45,6 +46,7 @@ add_subdirectory(backends/cpu)
 add_subdirectory(tracks)
 add_subdirectory(api)
 if(JBA_WITH_METAL)
+  add_subdirectory(backends/gpu)
   add_subdirectory(backends/metal)
 endif()
 if(JBA_BUILD_CLI)
