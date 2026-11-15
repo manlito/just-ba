@@ -93,9 +93,25 @@ struct Problem {
   std::vector<double> grav_dir;                 // 3 per prior
   std::vector<double> grav_sigma;               // 1 per prior, radians; empty: the default
 
+  // Line segments for the Manhattan prior (document 02, section 5). Segment k lies in
+  // image line_image[k], endpoints (x0, y0, x1, y1) in pixels; line_sigma is the
+  // endpoint standard deviation in pixels (empty: the default). line_axis assigns it
+  // to a building axis: 0 and 1 horizontal, 2 vertical, -1 none (empty: none);
+  // assign_lines (manhattan.h) fills it.
+  std::vector<std::int32_t> line_image;         // 1 per segment
+  std::vector<double> line_xy;                  // 4 per segment
+  std::vector<double> line_sigma;               // 1 per segment, pixels
+  std::vector<std::int32_t> line_axis;          // 1 per segment
+  // Manhattan frame: rotation from the building's axes to the working frame, as a
+  // quaternion. Empty: no Manhattan term. With manhattan_dof 1 the building's
+  // vertical (axis 2) is the working frame's up (-gravity_world) and only the
+  // heading about it is estimated; with 3 the whole rotation.
+  std::vector<double> manhattan_frame;          // 4, or empty
+  std::int32_t manhattan_dof = 1;
+
   // Robust losses stored with the problem (loss.* sections, D80), one per residual
-  // type in the order reprojection, relative prior, global prior, gravity prior
-  // (kLossReprojection and so on). loss_type holds LossType values; loss_scale the scale a. Empty, or
+  // type in the order reprojection, relative prior, global prior, gravity prior,
+  // Manhattan line (kLossReprojection and so on). loss_type holds LossType values; loss_scale the scale a. Empty, or
   // shorter than the number of types, means the solver options decide for the rest.
   // solve() takes its losses from the options; with_problem_losses (solver.h)
   // copies these in.
@@ -116,6 +132,9 @@ struct Problem {
   std::size_t num_relative_priors() const { return rel_images.size() / 2; }
   std::size_t num_global_priors() const { return glob_image.size(); }
   std::size_t num_gravity_priors() const { return grav_image.size(); }
+  std::size_t num_lines() const { return line_image.size(); }
+  // Whether the Manhattan term is on: a frame is given and some segment is assigned.
+  bool has_manhattan() const;
   std::size_t num_prior_sets() const {
     return !set_relation.empty() ? set_relation.size() : (glob_image.empty() ? 0 : 1);
   }
@@ -127,7 +146,7 @@ struct Problem {
 
 // Positions in Problem::loss_type and loss_scale.
 inline constexpr std::size_t kLossReprojection = 0, kLossRelativePrior = 1, kLossGlobalPrior = 2, kLossGravity = 3,
-                             kNumLossTypes = 4;
+                             kLossLine = 4, kNumLossTypes = 5;
 
 // The direction of gravity in the working frame (Problem::gravity_world or its
 // default).

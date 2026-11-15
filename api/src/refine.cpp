@@ -166,14 +166,42 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   std::vector<std::int32_t> rel_index, glob_index, grav_index;
   keep_active_priors(base, active, rel_index, glob_index, grav_index);
 
-  if (o.prior_solve && base.num_relative_priors() + base.num_global_priors() > 0) {
+  const bool have_priors = base.num_relative_priors() + base.num_global_priors() + base.num_gravity_priors() > 0;
+  if (o.prior_solve && have_priors) {
     out.summaries.push_back(solve(base, o.solver));
+  }
+
+  // Manhattan prior: assign, test support, and remove heading drift before
+  // triangulating. Segments of images left out are never assigned.
+  base.line_axis.clear();
+  base.manhattan_frame.clear();
+  auto assign = [&](const double* frame, double angle) {
+    ManhattanOptions mo = o.manhattan;
+    mo.max_angle_deg = angle;
+    ManhattanAssignment a = assign_lines(base, mo, frame);
+    for (std::size_t k = 0; k < a.axis.size(); ++k) {
+      if (active[static_cast<std::size_t>(base.line_image[k])] || a.axis[k] < 0) continue;
+      --a.assigned[a.axis[k]];
+      a.axis[k] = -1;
+    }
+    apply_assignment(base, a, mo.dof);
+    return a;
+  };
+  double line_angle = o.manhattan.max_angle_deg;
+  if (o.use_manhattan && base.num_lines() > 0) {
+    out.manhattan = assign(nullptr, line_angle);
+    if (out.manhattan.accepted && o.prior_solve && have_priors) out.summaries.push_back(solve(base, o.solver));
   }
 
   Problem problem = base;
   std::vector<std::int32_t> obs_keypoint;
   const int rounds = std::max(1, o.rounds);
   for (int round = 0; round < rounds; ++round) {
+    if (round > 0 && base.has_manhattan()) {
+      line_angle = std::max(o.manhattan_min_angle_deg, 0.5 * line_angle);
+      const std::vector<double> frame = base.manhattan_frame;
+      out.manhattan = assign(frame.data(), line_angle);
+    }
     TrackOptions topt = o.tracks;
     topt.triangulation.max_angle_error_deg = std::max(0.25, o.tracks.triangulation.max_angle_error_deg * std::pow(0.5, round));
     Cameras cams{base.model, base.intrinsics, base.image_intrinsics, base.poses};
@@ -239,7 +267,9 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     base.poses = problem.poses;
     base.intrinsics = problem.intrinsics;
     base.set_transform = problem.set_transform;
+    base.manhattan_frame = problem.manhattan_frame;
   }
+  if (out.manhattan.accepted) out.manhattan.frame = problem.manhattan_frame;
 
   out.num_observations.assign(n_img, 0);
   for (const auto i : problem.obs_image) ++out.num_observations[static_cast<std::size_t>(i)];

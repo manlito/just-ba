@@ -233,6 +233,8 @@ NB_MODULE(_core, m) {
       .def_prop_ro("num_relative_priors", &jba::Problem::num_relative_priors)
       .def_prop_ro("num_global_priors", &jba::Problem::num_global_priors)
       .def_prop_ro("num_gravity_priors", &jba::Problem::num_gravity_priors)
+      .def_prop_ro("num_lines", &jba::Problem::num_lines)
+      .def("has_manhattan", &jba::Problem::has_manhattan, "Whether solve() includes the Manhattan term.")
       .def_prop_ro("num_prior_sets", &jba::Problem::num_prior_sets)
       .def("validate", [](const jba::Problem& p) { return jba::validate(p); },
            "Empty string when valid, otherwise the first problem found.");
@@ -271,6 +273,16 @@ NB_MODULE(_core, m) {
               "(Q, 3) direction of gravity measured in each image's camera axes (x right, y down, z forward); "
               "normalised on the way in.", false, Normalise::Vector);
   array_field(problem, "grav_sigma", &jba::Problem::grav_sigma, {}, "(Q,) gravity prior standard deviations, rad.");
+  array_field(problem, "line_image", &jba::Problem::line_image, {}, "(L,) image of each line segment.");
+  array_field(problem, "line_xy", &jba::Problem::line_xy, {4}, "(L, 4) segment endpoints x0 y0 x1 y1, pixels.");
+  array_field(problem, "line_sigma", &jba::Problem::line_sigma, {}, "(L,) endpoint standard deviations, pixels.");
+  array_field(problem, "line_axis", &jba::Problem::line_axis, {},
+              "(L,) building axis of each segment: 0, 1 horizontal, 2 vertical, -1 none. Set by assign_lines.");
+  array_field(problem, "manhattan_frame", &jba::Problem::manhattan_frame, {},
+              "(4,) quaternion from the building's axes to the working frame; empty: no Manhattan term.", false,
+              Normalise::Quaternion);
+  problem.def_rw("manhattan_dof", &jba::Problem::manhattan_dof,
+                 "1: the frame's heading about the vertical only; 3: its whole rotation.");
   array_field(problem, "loss_type", &jba::Problem::loss_type, {},
               "Stored losses (loss.* sections): LossType values for reprojection, relative prior, global prior, "
               "gravity prior. "
@@ -325,7 +337,9 @@ NB_MODULE(_core, m) {
       .def_rw("relative_translation_per_metre", &jba::PriorDefaults::relative_translation_per_metre)
       .def_rw("global_rotation_sigma", &jba::PriorDefaults::global_rotation_sigma)
       .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma)
-      .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma);
+      .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma)
+      .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma)
+      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma);
 
   nb::class_<jba::SolverOptions>(m, "SolverOptions", "Levenberg-Marquardt options; defaults are Ceres's.")
       .def(nb::init<>())
@@ -345,6 +359,7 @@ NB_MODULE(_core, m) {
       .def_rw("relative_prior_loss", &jba::SolverOptions::relative_prior_loss)
       .def_rw("global_prior_loss", &jba::SolverOptions::global_prior_loss)
       .def_rw("gravity_loss", &jba::SolverOptions::gravity_loss)
+      .def_rw("line_loss", &jba::SolverOptions::line_loss)
       .def_rw("prior_defaults", &jba::SolverOptions::prior_defaults)
       .def_rw("gauge", &jba::SolverOptions::gauge)
       .def_rw("num_threads", &jba::SolverOptions::num_threads, "0: all hardware threads. Results do not depend on it.");
@@ -366,6 +381,9 @@ NB_MODULE(_core, m) {
       .def_ro("fixed_images", &jba::Gauge::fixed_images)
       .def_ro("heading_images", &jba::Gauge::heading_images,
               "Poses whose translation and heading are held, their tilt free (gravity known, D83).")
+      .def_ro("translation_images", &jba::Gauge::translation_images,
+              "Poses whose translation alone is held; the Manhattan frame sets their rotation (D86).")
+      .def_ro("manhattan_frame_held", &jba::Gauge::manhattan_frame_held)
       .def_ro("fixed_translations", &jba::Gauge::fixed_translations)
       .def_ro("fixed_set_scales", &jba::Gauge::fixed_set_scales);
   nb::class_<jba::SolverSummary>(m, "SolverSummary")
@@ -416,6 +434,11 @@ NB_MODULE(_core, m) {
       .def_ro("relative_prior_cost", &jba::ResidualReport::relative_prior_cost)
       .def_ro("global_prior_cost", &jba::ResidualReport::global_prior_cost)
       .def_ro("gravity_cost", &jba::ResidualReport::gravity_cost)
+      .def_ro("line_cost", &jba::ResidualReport::line_cost)
+      .def_prop_ro("line_angle", [](const jba::ResidualReport& r) { return to_numpy(r.line_angle); },
+                   "Per segment: angle by which its axis misses its plane, rad; NaN when not in the term.",
+                   nb::rv_policy::move)
+      .def_prop_ro("line_weight", [](const jba::ResidualReport& r) { return to_numpy(r.line_weight); }, nb::rv_policy::move)
       .def_prop_ro("reprojection_error", [](const jba::ResidualReport& r) { return to_numpy(r.reprojection_error); }, nb::rv_policy::move)
       .def_prop_ro("in_front", [](const jba::ResidualReport& r) {
         std::vector<std::uint8_t> v(r.in_front.begin(), r.in_front.end());
@@ -524,6 +547,41 @@ NB_MODULE(_core, m) {
       "(Tracks, TrackStats).");
 
   // --- Refine --------------------------------------------------------------
+  nb::class_<jba::ManhattanOptions>(m, "ManhattanOptions", "Line assignment and the support test (document 02, section 5).")
+      .def(nb::init<>())
+      .def_rw("dof", &jba::ManhattanOptions::dof)
+      .def_rw("max_angle_deg", &jba::ManhattanOptions::max_angle_deg)
+      .def_rw("min_support", &jba::ManhattanOptions::min_support)
+      .def_rw("min_segments", &jba::ManhattanOptions::min_segments)
+      .def_rw("horizontal_plane_deg", &jba::ManhattanOptions::horizontal_plane_deg);
+  nb::class_<jba::ManhattanAssignment>(m, "ManhattanAssignment")
+      .def_ro("accepted", &jba::ManhattanAssignment::accepted)
+      .def_ro("message", &jba::ManhattanAssignment::message)
+      .def_ro("support", &jba::ManhattanAssignment::support)
+      .def_ro("unusable", &jba::ManhattanAssignment::unusable)
+      .def_prop_ro("frame", [](const jba::ManhattanAssignment& a) { return to_numpy(a.frame); }, nb::rv_policy::move)
+      .def_prop_ro("axis", [](const jba::ManhattanAssignment& a) { return to_numpy(a.axis); }, nb::rv_policy::move)
+      .def_prop_ro("assigned", [](const jba::ManhattanAssignment& a) {
+        return std::vector<int>(a.assigned, a.assigned + 3);
+      })
+      .def("__repr__", [](const jba::ManhattanAssignment& a) {
+        return std::string("ManhattanAssignment(") + (a.accepted ? "accepted" : "refused") + ", support " +
+               std::to_string(a.support) + ")";
+      });
+  m.def(
+      "assign_lines",
+      [](const jba::Problem& p, const jba::ManhattanOptions& o, nb::handle frame) {
+        std::vector<double> f;
+        if (!frame.is_none()) f = from_numpy(as_array<double>(frame, "frame"), {}, "frame");
+        if (!f.empty() && f.size() != 4) throw nb::value_error("frame must hold 4 values");
+        return jba::assign_lines(p, o, f.empty() ? nullptr : f.data());
+      },
+      "problem"_a, "options"_a = jba::ManhattanOptions{}, "frame"_a = nb::none(),
+      "Estimates the Manhattan frame from the segments and current poses, assigns segments to axes, and runs "
+      "the support test. With `frame`, assigns to that frame's axes.");
+  m.def("apply_assignment", &jba::apply_assignment, "problem"_a, "assignment"_a, "dof"_a = 1,
+        "Stores an accepted assignment in the problem (line_axis, manhattan_frame); a refused one clears them.");
+
   nb::class_<jba::RefineOptions>(m, "RefineOptions")
       .def(nb::init<>())
       .def_rw("solver", &jba::RefineOptions::solver)
@@ -534,6 +592,10 @@ NB_MODULE(_core, m) {
       .def_rw("min_tri_angle_deg", &jba::RefineOptions::min_tri_angle_deg)
       .def_rw("downweight_threshold", &jba::RefineOptions::downweight_threshold)
       .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only)
+      .def_rw("use_manhattan", &jba::RefineOptions::use_manhattan,
+              "Manhattan prior from scene's line segments; opt-in.")
+      .def_rw("manhattan", &jba::RefineOptions::manhattan)
+      .def_rw("manhattan_min_angle_deg", &jba::RefineOptions::manhattan_min_angle_deg)
       .def_rw("min_observations", &jba::RefineOptions::min_observations,
               "Inlier observations an image needs to count as refined (default 30).");
   nb::class_<jba::RefineResult>(m, "RefineResult")
@@ -555,7 +617,8 @@ NB_MODULE(_core, m) {
       .def_ro("rejected_observations", &jba::RefineResult::rejected_observations)
       .def_prop_ro("relative_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.relative_prior_index); }, nb::rv_policy::move)
       .def_prop_ro("global_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.global_prior_index); }, nb::rv_policy::move)
-      .def_prop_ro("gravity_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.gravity_prior_index); }, nb::rv_policy::move);
+      .def_prop_ro("gravity_prior_index", [](const jba::RefineResult& r) { return to_numpy(r.gravity_prior_index); }, nb::rv_policy::move)
+      .def_ro("manhattan", &jba::RefineResult::manhattan, "The last line assignment, and whether it was accepted.");
 
   m.def(
       "refine",

@@ -67,7 +67,12 @@ std::string gauge_json(const jba::Gauge& g) {
   out += "], \"heading_images\": [";
   for (std::size_t a = 0; a < g.heading_images.size(); ++a)
     out += (a ? ", " : "") + std::to_string(g.heading_images[a]);
-  out += "], \"fixed_translations\": [";
+  out += "], \"translation_images\": [";
+  for (std::size_t a = 0; a < g.translation_images.size(); ++a)
+    out += (a ? ", " : "") + std::to_string(g.translation_images[a]);
+  out += "], \"manhattan_frame_held\": ";
+  out += g.manhattan_frame_held ? "true" : "false";
+  out += ", \"fixed_translations\": [";
   for (std::size_t a = 0; a < g.fixed_translations.size(); ++a)
     out += (a ? ", [" : "[") + std::to_string(g.fixed_translations[a][0]) + ", " +
            std::to_string(g.fixed_translations[a][1]) + "]";

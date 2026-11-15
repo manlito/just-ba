@@ -1,6 +1,7 @@
 add_library(jba_core STATIC
   src/camera_model.cpp
   src/initialize.cpp
+  src/manhattan.cpp
   src/priors.cpp
   src/problem_io.cpp
   src/solver.cpp

@@ -7,6 +7,7 @@
 //                    [--relative-priors N] [--global-priors] [--global-relation identity|rigid|similarity]
 //                    [--prior-noise ROT,TRANS] [--prior-outliers FRACTION] [--prior-sigma ROT,TRANS]
 //                    [--gravity-priors] [--gravity-noise RAD] [--gravity-outliers FRACTION] [--gravity-sigma RAD]
+//                    [--lines N] [--line-dof 1|3] [--line-outliers FRACTION] [--prior-groups 2]
 //
 // MASK is the IntrinsicsGroup bit mask: 1 focal, 2 principal point, 4 distortion.
 // Priors come from the true poses with noise: relative priors tie each image to
@@ -14,7 +15,11 @@
 // working frame by a random transform of the given kind. Outliers are gross errors
 // (0.3 to 1 rad, 0.5 to 2 m). Gravity priors: every image, measured from the true
 // pose with noise; gravity in the working frame is a fixed oblique direction, so no
-// coordinate axis is special; outliers are 0.2 to 0.5 rad off.
+// coordinate axis is special; outliers are 0.2 to 0.5 rad off. Lines: N segments in
+// the point cloud along the axes of a random Manhattan frame (vertical axis up for
+// one degree of freedom), assigned by the truth except a fraction given a wrong
+// axis, seen by every image that has both endpoints in front; the frame starts
+// 0.02 rad off.
 // Not the synthetic generator of document 05 (milestone 2).
 
 #include <algorithm>
@@ -42,6 +47,8 @@ int main(int argc, char** argv) {
     double noise = 0.5, outliers = 0, sigma = 0;
     bool per_image = false, global_priors = false, gravity_priors = false;
     double gravity_noise = 0.003, gravity_outliers = 0, gravity_sigma = 0;
+    int lines = 0, line_dof = 1, prior_groups = 1;
+    double line_outliers = 0;
     int relative_priors = 0;
     jba::FrameRelation relation = jba::FrameRelation::Identity;
     double prior_noise[2] = {0.002, 0.005}, prior_sigma[2] = {0, 0}, prior_outliers = 0;
@@ -87,6 +94,10 @@ int main(int argc, char** argv) {
       else if (key == "--gravity-noise") gravity_noise = std::stod(val);
       else if (key == "--gravity-outliers") gravity_outliers = std::stod(val);
       else if (key == "--gravity-sigma") gravity_sigma = std::stod(val);
+      else if (key == "--lines") lines = std::stoi(val);
+      else if (key == "--line-dof") line_dof = std::stoi(val);
+      else if (key == "--prior-groups") prior_groups = std::stoi(val);
+      else if (key == "--line-outliers") line_outliers = std::stod(val);
       else if (key == "--global-relation") {
         if (val == "identity") relation = jba::FrameRelation::Identity;
         else if (val == "rigid") relation = jba::FrameRelation::Rigid;
@@ -135,7 +146,12 @@ int main(int argc, char** argv) {
     if (relative_priors > 0) {
       std::vector<std::int32_t> pairs;
       for (int i = 0; i < images; ++i)
-        for (int d = 1; d <= relative_priors && d < images; ++d) pairs.insert(pairs.end(), {i, (i + d) % images});
+        for (int d = 1; d <= relative_priors && d < images; ++d) {
+          const int j = (i + d) % images;
+          // --prior-groups 2: no prior between the two halves of the ring.
+          if (prior_groups == 2 && (2 * i < images) != (2 * j < images)) continue;
+          pairs.insert(pairs.end(), {i, j});
+        }
       jba::add_relative_priors_from_poses(p, truth, pairs);
       for (std::size_t k = 0; k < p.num_relative_priors(); ++k) noisy(&p.rel_pose[7 * k]);
       if (prior_sigma[0] > 0) {
@@ -197,6 +213,84 @@ int main(int argc, char** argv) {
         for (double v : g) p.grav_dir.push_back(v / gn);
         if (gravity_sigma > 0) p.grav_sigma.push_back(gravity_sigma);
       }
+    }
+
+    if (lines > 0) {
+      // The true frame: columns e0, e1, e2 = up for one degree of freedom.
+      double g[3];
+      jba::gravity_direction(p, g);
+      double Rm[9];
+      if (line_dof == 1) {
+        const double up[3] = {-g[0], -g[1], -g[2]};
+        double x[3] = {up[1], -up[0], 0};
+        if (std::abs(up[2]) > 0.9) x[0] = 1, x[1] = 0;
+        double xu = x[0] * up[0] + x[1] * up[1] + x[2] * up[2];
+        for (int c = 0; c < 3; ++c) x[c] -= xu * up[c];
+        const double xn = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+        for (double& v : x) v /= xn;
+        const double y[3] = {up[1] * x[2] - up[2] * x[1], up[2] * x[0] - up[0] * x[2], up[0] * x[1] - up[1] * x[0]};
+        const double psi = 1.5 * u(rng);
+        double e0[3];
+        for (int c = 0; c < 3; ++c) e0[c] = std::cos(psi) * x[c] + std::sin(psi) * y[c];
+        const double e1[3] = {up[1] * e0[2] - up[2] * e0[1], up[2] * e0[0] - up[0] * e0[2], up[0] * e0[1] - up[1] * e0[0]};
+        for (int r = 0; r < 3; ++r) {
+          Rm[3 * r] = e0[r];
+          Rm[3 * r + 1] = e1[r];
+          Rm[3 * r + 2] = up[r];
+        }
+      } else {
+        double q[4];
+        jba_test::random_rotation(rng, 3.0, q);
+        for (int c = 0; c < 3; ++c) {
+          double e[3] = {0, 0, 0}, d[3];
+          e[c] = 1;
+          jba::quat_rotate(q, e, d);
+          for (int r = 0; r < 3; ++r) Rm[3 * r + c] = d[r];
+        }
+      }
+      double qm[4];
+      jba::quat_from_matrix(Rm, qm);
+      const double* K = p.intrinsics.data();
+      for (int s = 0; s < lines; ++s) {
+        const int axis = static_cast<int>(rng() % 3);
+        const double half = 0.2 + 0.4 * u(rng);
+        double X0[3], X1[3];
+        for (int c = 0; c < 3; ++c) {
+          const double m = 2 * u(rng) - 1;
+          X0[c] = m - half * Rm[3 * c + axis];
+          X1[c] = m + half * Rm[3 * c + axis];
+        }
+        int label = axis;
+        if (u(rng) < line_outliers) label = (axis + 1 + static_cast<int>(rng() % 2)) % 3;
+        for (int i = 0; i < images; ++i) {
+          const double* T = &truth[7 * static_cast<std::size_t>(i)];
+          double xy[4];
+          bool ok = true;
+          for (int e = 0; e < 2 && ok; ++e) {
+            double pc[3];
+            jba::quat_rotate(T, e == 0 ? X0 : X1, pc);
+            for (int c = 0; c < 3; ++c) pc[c] += T[4 + c];
+            ok = pc[2] > 0.5 && jba::project(model, K, pc, &xy[2 * e], &xy[2 * e + 1]);
+          }
+          if (!ok) continue;
+          p.line_image.push_back(i);
+          for (double v : xy) p.line_xy.push_back(v + noise * n(rng));
+          p.line_axis.push_back(label);
+        }
+      }
+      // Start 0.02 rad off, about up for one degree of freedom.
+      double d[3];
+      if (line_dof == 1) {
+        for (int c = 0; c < 3; ++c) d[c] = -0.02 * g[c];
+      } else {
+        for (double& v : d) v = 0.012 * n(rng);
+      }
+      double dq[4];
+      jba::quat_exp(d, dq);
+      p.manhattan_frame.resize(4);
+      jba::quat_multiply(dq, qm, p.manhattan_frame.data());
+      jba::quat_normalize(p.manhattan_frame.data());
+      p.manhattan_dof = line_dof;
     }
 
     if (fix_images > 0) {

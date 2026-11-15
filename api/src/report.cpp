@@ -8,6 +8,7 @@
 #include "jba/cpu/reprojection.h"
 #include "jba/geometry.h"
 #include "jba/loss.h"
+#include "jba/manhattan.h"
 #include "jba/priors.h"
 
 namespace jba {
@@ -108,6 +109,26 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
     r.gravity_angle[k] = 2 * std::asin(std::min(1.0, chord / 2));
     r.gravity_weight[k] = rho[1];
     if (rho[1] < threshold) r.downweighted_gravity.push_back(static_cast<std::int32_t>(k));
+  }
+
+  const std::size_t n_lines = p.num_lines();
+  r.line_angle.assign(n_lines, std::nan(""));
+  r.line_weight.assign(n_lines, 0.0);
+  if (p.has_manhattan()) {
+    for (std::size_t k = 0; k < n_lines; ++k) {
+      double n[3];
+      if (p.line_axis[k] < 0 || !line_normal(p, k, n)) continue;
+      double axis[3] = {0, 0, 0}, res;
+      axis[p.line_axis[k]] = 1;
+      cpu::manhattan_line<double>(&p.poses[7 * static_cast<std::size_t>(p.line_image[k])], n, p.manhattan_frame.data(),
+                                  axis, &res, static_cast<double*>(nullptr), static_cast<double*>(nullptr));
+      const double w = 1 / line_residual_sigma(p, k, o.prior_defaults);
+      double rho[3];
+      evaluate_loss(o.line_loss, res * res * w * w, rho);
+      r.line_cost += 0.5 * rho[0];
+      r.line_angle[k] = std::asin(std::min(1.0, std::abs(res)));
+      r.line_weight[k] = rho[1];
+    }
   }
   return r;
 }

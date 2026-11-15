@@ -33,4 +33,13 @@ inline void gravity_prior(const Scalar* pose, const Scalar* g_world, const Scala
   generated::gravity_prior(pose, g_world, g_camera, residual, J_pose);
 }
 
+// Manhattan line residual (1 value, unwhitened): pose (q, t), plane normal in camera
+// axes, Manhattan frame (q), building axis. J_pose is 1 x 6, J_frame 1 x 3 (left
+// perturbation of the frame in the working frame's axes).
+template <typename Scalar>
+inline void manhattan_line(const Scalar* pose, const Scalar* normal, const Scalar* frame, const Scalar* axis,
+                           Scalar* residual, Scalar* J_pose, Scalar* J_frame) {
+  generated::manhattan_line(pose, normal, frame, axis, residual, J_pose, J_frame);
+}
+
 }  // namespace jba::cpu

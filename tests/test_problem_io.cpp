@@ -49,7 +49,9 @@ bool same(const jba::Problem& a, const jba::Problem& b) {
          a.glob_pose == b.glob_pose && a.glob_sigma == b.glob_sigma && a.glob_sqrt_info == b.glob_sqrt_info &&
          a.set_relation == b.set_relation && a.set_transform == b.set_transform && a.loss_type == b.loss_type &&
          a.loss_scale == b.loss_scale && a.gravity_world == b.gravity_world && a.grav_image == b.grav_image &&
-         a.grav_dir == b.grav_dir && a.grav_sigma == b.grav_sigma && extra_same;
+         a.grav_dir == b.grav_dir && a.grav_sigma == b.grav_sigma && a.line_image == b.line_image &&
+         a.line_xy == b.line_xy && a.line_sigma == b.line_sigma && a.line_axis == b.line_axis &&
+         a.manhattan_frame == b.manhattan_frame && a.manhattan_dof == b.manhattan_dof && extra_same;
 }
 
 }  // namespace
@@ -72,6 +74,12 @@ int main() {
     p.grav_image = {1, 3};
     p.grav_dir = {0, 1, 0, 0.6, 0, 0.8};
     p.grav_sigma = {0.01, 0.02};
+    p.line_image = {0, 2, 3};
+    p.line_xy = {10, 20, 200, 25, 30, 40, 35, 300, 1, 2, 3, 4};
+    p.line_sigma = {0.5, 1, 2};
+    p.line_axis = {0, 2, -1};
+    p.manhattan_frame = {0.6, 0.8, 0, 0};  // any rotation, with three freedoms
+    p.manhattan_dof = 3;
     const auto path = temp_path("priors.jba");
     jba::write_problem(path, p);
     const auto q = jba::read_problem(path);
@@ -107,6 +115,25 @@ int main() {
     bad = p;
     bad.grav_sigma = {0.01};
     EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.line_axis[1] = 3;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.line_xy[4] = bad.line_xy[6];
+    bad.line_xy[5] = bad.line_xy[7];  // zero length
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.manhattan_dof = 2;
+    EXPECT(!jba::validate(bad).empty());
+    // With one freedom, axis 2 must be up. A rotation of 90 degrees about x takes it to
+    // (0, -1, 0), which is up for gravity (0, 1, 0) but not for this problem's.
+    bad = p;
+    bad.manhattan_dof = 1;
+    EXPECT(!jba::validate(bad).empty());
+    bad.manhattan_frame = {std::sqrt(0.5), std::sqrt(0.5), 0, 0};
+    EXPECT(!jba::validate(bad).empty());
+    bad.gravity_world = {0, 1, 0};
+    EXPECT(jba::validate(bad).empty());
   }
 
   // Losses stored with the problem (loss.* sections, D80): round trip, the options

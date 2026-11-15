@@ -8,6 +8,8 @@
 
 #include "check.h"
 #include "jba/initialize.h"
+#include "jba/manhattan.h"
+#include "jba/solver.h"
 #include "jba/refine.h"
 #include "scene.h"
 
@@ -257,6 +259,75 @@ int main() {
     so.drift_heading_per_m = 0.02;
     const auto o = run(model == jba::CameraModel::OpenCV ? "room, OPENCV" : "room, OPENCV_FISHEYE", so);
     EXPECT(o.after.median_centre < 0.01);
+  }
+
+  // Manhattan prior (document 05): heading drift removed, refused where the scene is
+  // not Manhattan, no harm where it is mixed.
+  {
+    auto manhattan = [](jba::RefineOptions ro) {
+      ro.use_manhattan = true;
+      return ro;
+    };
+    // Heading drift: after the pose-only solve with the segments, before anything is
+    // triangulated, the drift is gone.
+    SceneOptions so;
+    so.kind = SceneKind::Room;
+    so.drift_heading_per_m = 0.03;
+    so.drift_trans_per_m = 0.02;
+    so.lines = jba_test::LineMode::Manhattan;
+    {
+      const auto sc = jba_test::make_scene(so);
+      jba::Problem p = sc.input.scene;
+      const auto init = jba::initialize_poses(p);
+      p.poses = init.poses;
+      auto priors_only = p;
+      jba::solve(priors_only);
+      const auto a = jba::assign_lines(p, jba::ManhattanOptions{});
+      jba::apply_assignment(p, a, 1);
+      jba::solve(p);
+      const auto e0 = jba_test::pose_error(priors_only.poses, sc.truth.poses, false);
+      const auto e1 = jba_test::pose_error(p.poses, sc.truth.poses, false);
+      std::printf("pose graph, heading drift: priors only rot %.3f deg (max %.3f), with segments %.3f deg (max %.3f)\n",
+                  e0.median_rotation / kDeg, e0.max_rotation / kDeg, e1.median_rotation / kDeg, e1.max_rotation / kDeg);
+      // At this stage the relative priors, whose default weights come from ARCore
+      // captures with less drift than this tracker (D77), still pull: the drift is
+      // about halved. The images finish the job (below).
+      EXPECT(a.accepted);
+      EXPECT(e1.median_rotation < 0.6 * e0.median_rotation);
+      EXPECT(e1.max_rotation < 0.7 * e0.max_rotation);
+    }
+    const auto plain = run("room, heading drift", so);
+    const auto with = run("room, heading drift, Manhattan", so, manhattan({}));
+    EXPECT(with.result.manhattan.accepted);
+    EXPECT(with.after.median_rotation < 0.7 * plain.after.median_rotation);
+    EXPECT(with.after.median_centre < 1.05 * plain.after.median_centre);
+
+    // Two rooms joined by a doorway: the images tie the rooms together weakly.
+    so.kind = SceneKind::House;
+    so.images = 80;
+    const auto house = run("house, heading drift", so);
+    const auto house_m = run("house, heading drift, Manhattan", so, manhattan({}));
+    EXPECT(house_m.result.manhattan.accepted);
+    EXPECT(house_m.after.median_rotation < 0.7 * house.after.median_rotation);
+    EXPECT(house_m.after.median_centre < 1.05 * house.after.median_centre);
+
+    // Not Manhattan: refused, with a reason, and the result is the plain one.
+    so.kind = SceneKind::Room;
+    so.images = 60;
+    so.lines = jba_test::LineMode::Random;
+    const auto random_plain = run("room, random segments", so);
+    const auto random_m = run("room, random segments, Manhattan", so, manhattan({}));
+    std::printf("  refused: %s\n", random_m.result.manhattan.message.c_str());
+    EXPECT(!random_m.result.manhattan.accepted && !random_m.result.manhattan.message.empty());
+    EXPECT(random_m.result.problem.poses == random_plain.result.problem.poses);
+
+    // Mixed: off-axis segments left out, and the result not worse.
+    so.lines = jba_test::LineMode::Mixed;
+    const auto mixed_plain = run("room, mixed segments", so);
+    const auto mixed_m = run("room, mixed segments, Manhattan", so, manhattan({}));
+    EXPECT(mixed_m.result.manhattan.accepted);
+    EXPECT(mixed_m.after.median_rotation <= 1.05 * mixed_plain.after.median_rotation);
+    EXPECT(mixed_m.after.median_centre <= 1.05 * mixed_plain.after.median_centre);
   }
 
   return TEST_MAIN_RESULT();

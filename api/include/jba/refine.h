@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "jba/initialize.h"
+#include "jba/manhattan.h"
 #include "jba/problem.h"
 #include "jba/report.h"
 #include "jba/solver.h"
@@ -16,11 +17,16 @@ namespace jba {
 //
 //   1. Starting poses from the priors (initialize_poses); images without priors are
 //      left out and reported.
-//   2. Optionally a pose-only solve over the priors.
+//   2. Optionally a pose-only solve over the priors. With the Manhattan prior on, the
+//      segments are then assigned (and the prior refused where the support test
+//      fails), and the pose-only solve is repeated with them, which removes heading
+//      drift before anything is triangulated.
 //   3. Rounds of: tracks from the matches with the current poses (stages 1 and 2 of
 //      document 04), robust triangulation, solve, removal of outlier observations
 //      and weak points, solve again. Each round starts from the previous poses with
-//      a tighter triangulation threshold.
+//      a tighter triangulation threshold, and segments are assigned again to the
+//      current frame with a tighter angle (halved each round, down to
+//      manhattan_min_angle_deg).
 struct RefineInput {
   // Camera, pose priors and prior sets, as in a Problem. `poses` may be empty (all
   // identity) or hold starting poses: a relative-prior group's root keeps its pose.
@@ -32,6 +38,8 @@ struct RefineInput {
   // tracks; tracks take precedence when not empty.
   std::vector<std::int32_t> matches;
   Tracks tracks;
+  // Line segments for the Manhattan prior are scene.line_image, line_xy and
+  // line_sigma; their axes are assigned by refine.
 };
 
 struct RefineOptions {
@@ -51,6 +59,11 @@ struct RefineOptions {
   // its pose (COLMAP registers an image from 30 inliers). Images below it are still
   // solved, but their poses come from the priors alone or nearly so (D76).
   int min_observations = 30;
+  // Manhattan prior from scene's line segments (document 02, section 5). Opt-in: it
+  // is strong, and wrong where the scene is not Manhattan.
+  bool use_manhattan = false;
+  ManhattanOptions manhattan;
+  double manhattan_min_angle_deg = 1;
 };
 
 struct RefineResult {
@@ -72,6 +85,10 @@ struct RefineResult {
   // Priors of `problem` by their index in the input (priors of images left out are
   // dropped). The report's down-weighted lists are already in input numbering.
   std::vector<std::int32_t> relative_prior_index, global_prior_index, gravity_prior_index;
+  // The last assignment of the segments (one entry per input segment; segments of
+  // images left out are -1), the frame as solved, and whether the support test
+  // accepted the prior. Empty when use_manhattan is off.
+  ManhattanAssignment manhattan;
 };
 
 RefineResult refine(const RefineInput& input, const RefineOptions& options = {});

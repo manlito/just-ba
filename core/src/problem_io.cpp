@@ -262,6 +262,36 @@ std::string validate_priors(const Problem& p) {
     if (!p.grav_sigma.empty() && !(p.grav_sigma[k] > 0 && std::isfinite(p.grav_sigma[k])))
       return "gravity prior " + std::to_string(k) + " has a sigma that is not positive and finite";
   }
+
+  const std::size_t n_lines = p.num_lines();
+  if (p.line_xy.size() != 4 * n_lines) return "line_xy must hold 4 values per segment";
+  if (!p.line_sigma.empty() && p.line_sigma.size() != n_lines) return "line_sigma must have one entry per segment";
+  if (!p.line_axis.empty() && p.line_axis.size() != n_lines) return "line_axis must have one entry per segment";
+  for (std::size_t k = 0; k < n_lines; ++k) {
+    const std::string seg = "line segment " + std::to_string(k);
+    if (p.line_image[k] < 0 || static_cast<std::size_t>(p.line_image[k]) >= n_img) return seg + " refers to a missing image";
+    const double* e = &p.line_xy[4 * k];
+    for (int a = 0; a < 4; ++a)
+      if (!std::isfinite(e[a])) return seg + " has an endpoint that is not finite";
+    if (e[0] == e[2] && e[1] == e[3]) return seg + " has zero length";
+    if (!p.line_sigma.empty() && !(p.line_sigma[k] > 0 && std::isfinite(p.line_sigma[k])))
+      return seg + " has a sigma that is not positive and finite";
+    if (!p.line_axis.empty() && (p.line_axis[k] < -1 || p.line_axis[k] > 2)) return seg + " has an axis other than -1, 0, 1, 2";
+  }
+  if (p.manhattan_dof != 1 && p.manhattan_dof != 3) return "manhattan_dof must be 1 or 3";
+  if (!p.manhattan_frame.empty()) {
+    if (p.manhattan_frame.size() != 4) return "manhattan_frame must hold 4 values";
+    if (!unit_quaternion(p.manhattan_frame.data())) return "manhattan_frame is not a unit quaternion";
+    if (p.manhattan_dof == 1) {
+      // The building's vertical must be the working frame's up.
+      double g[3], v[3];
+      gravity_direction(p, g);
+      const double e2[3] = {0, 0, 1};
+      quat_rotate(p.manhattan_frame.data(), e2, v);
+      if (std::abs(v[0] + g[0]) + std::abs(v[1] + g[1]) + std::abs(v[2] + g[2]) > 1e-6)
+        return "manhattan_frame with one degree of freedom must map axis 2 to up (-gravity_world)";
+    }
+  }
   for (auto r : p.set_relation) {
     if (r != FrameRelation::Identity && r != FrameRelation::Rigid && r != FrameRelation::Similarity)
       return "unknown prior set relation " + std::to_string(static_cast<int>(r));
@@ -285,6 +315,11 @@ std::string validate_priors(const Problem& p) {
 }
 
 }  // namespace
+
+bool Problem::has_manhattan() const {
+  if (manhattan_frame.empty()) return false;
+  return std::any_of(line_axis.begin(), line_axis.end(), [](std::int32_t a) { return a >= 0; });
+}
 
 void gravity_direction(const Problem& p, double* g) {
   if (p.gravity_world.size() == 3) {
@@ -394,6 +429,17 @@ void write_problem(const std::string& path, const Problem& p) {
   }
   if (!p.set_transform.empty()) w.array("prior.set.transform", p.set_transform, 8);
   if (!p.gravity_world.empty()) w.array("gravity.world", p.gravity_world, 1);
+  if (p.num_lines() > 0) {
+    w.array("lines.image", p.line_image, 1);
+    w.array("lines.xy", p.line_xy, 4);
+    if (!p.line_sigma.empty()) w.array("lines.sigma", p.line_sigma, 1);
+    if (!p.line_axis.empty()) w.array("lines.axis", p.line_axis, 1);
+  }
+  if (!p.manhattan_frame.empty()) {
+    w.array("manhattan.frame", p.manhattan_frame, 1);
+    const std::vector<std::int32_t> dof = {p.manhattan_dof};
+    w.array("manhattan.dof", dof, 1);
+  }
   if (p.num_gravity_priors() > 0) {
     w.array("prior.gravity.image", p.grav_image, 1);
     w.array("prior.gravity.direction", p.grav_dir, 3);
@@ -412,7 +458,8 @@ void write_problem(const std::string& path, const Problem& p) {
       "prior.global.image",    "prior.global.set",    "prior.global.pose",     "prior.global.sigma",
       "prior.global.sqrt_info", "prior.set.relation", "prior.set.transform", "loss.type",
       "loss.scale",            "gravity.world",       "prior.gravity.image",   "prior.gravity.direction",
-      "prior.gravity.sigma"};
+      "prior.gravity.sigma",   "lines.image",         "lines.xy",              "lines.sigma",
+      "lines.axis",            "manhattan.frame",     "manhattan.dof"};
   for (std::size_t i = 0; i < p.extra.size(); ++i) {
     const auto& s = p.extra[i];
     bool repeated = std::find(std::begin(kKnown), std::end(kKnown), s.name) != std::end(kKnown);
@@ -507,6 +554,17 @@ Problem read_problem(const std::string& path) {
     else if (n == "prior.gravity.image") take(path, s, 1, p.grav_image);
     else if (n == "prior.gravity.direction") take(path, s, 3, p.grav_dir);
     else if (n == "prior.gravity.sigma") take(path, s, 1, p.grav_sigma);
+    else if (n == "lines.image") take(path, s, 1, p.line_image);
+    else if (n == "lines.xy") take(path, s, 4, p.line_xy);
+    else if (n == "lines.sigma") take(path, s, 1, p.line_sigma);
+    else if (n == "lines.axis") take(path, s, 1, p.line_axis);
+    else if (n == "manhattan.frame") take(path, s, 1, p.manhattan_frame);
+    else if (n == "manhattan.dof") {
+      std::vector<std::int32_t> dof;
+      take(path, s, 1, dof);
+      if (dof.size() != 1) fail(path, "manhattan.dof must hold one value");
+      p.manhattan_dof = dof[0];
+    }
     else if (n == "loss.type") take(path, s, 1, p.loss_type);
     else if (n == "loss.scale") take(path, s, 1, p.loss_scale);
     else p.extra.push_back(std::move(s));

@@ -18,6 +18,7 @@ struct ResidualReport {
   double relative_prior_cost = 0;
   double global_prior_cost = 0;
   double gravity_cost = 0;
+  double line_cost = 0;
 
   // Per observation: reprojection error in pixels (not divided by sigma), and
   // whether the point is in front of the camera.
@@ -31,6 +32,10 @@ struct ResidualReport {
   // Per gravity prior: angle between the measured and the solved gravity direction
   // (radians), and the robust weight.
   std::vector<double> gravity_angle, gravity_weight;
+  // Per segment: the angle (radians) by which its assigned axis misses the segment's
+  // plane, and the robust weight; NaN and 0 for segments not in the Manhattan term
+  // (unassigned, or the term off).
+  std::vector<double> line_angle, line_weight;
 
   // Priors whose weight fell below the threshold given to evaluate(): what the
   // caller's cleanup let through (document 02).

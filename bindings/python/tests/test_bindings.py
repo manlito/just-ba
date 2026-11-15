@@ -225,3 +225,53 @@ def test_refine_end_to_end(tmp_path):
 
     with pytest.raises(ValueError):
         jba.refine(s, sc["keypoints"])  # neither matches nor tracks
+
+
+def test_manhattan_lines():
+    # Room edges and frames along the world axes, seen from the scene's cameras.
+    sc = scene.room(n_images=20, n_points=500)
+    rng = np.random.default_rng(3)
+    lo, hi = np.array([-3.0, -1.2, -2.5]), np.array([3.0, 1.5, 2.5])
+    segs = []
+    for _ in range(300):
+        axis = rng.integers(0, 3)
+        a = rng.uniform(lo, hi)
+        wall = rng.choice([k for k in range(3) if k != axis])
+        a[wall] = lo[wall] if rng.random() < 0.5 else hi[wall]
+        b = a.copy()
+        b[axis] = np.clip(a[axis] + rng.uniform(0.5, 2.0), lo[axis], hi[axis])
+        segs.append((a, b))
+    R = jba.matrix_from_quat(sc["poses"][:, :4])
+    line_image, line_xy = [], []
+    for i in range(len(sc["poses"])):
+        for a, b in segs:
+            ends = []
+            for X in (a, b):
+                pc = R[i] @ X + sc["poses"][i, 4:]
+                if pc[2] < 0.3:
+                    break
+                uv = scene.K[:2] * pc[:2] / pc[2] + scene.K[2:]
+                if not (0 <= uv[0] < scene.WIDTH and 0 <= uv[1] < scene.HEIGHT):
+                    break
+                ends.append(uv)
+            if len(ends) == 2 and np.linalg.norm(ends[1] - ends[0]) > 40:
+                line_image.append(i)
+                line_xy.append(np.concatenate(ends) + rng.normal(0, 0.3, 4))
+    p = jba.make_problem("PINHOLE", scene.K, poses=sc["poses"], gravity_world=[0, 1, 0],
+                         line_image=line_image, line_xy=np.array(line_xy))
+    assert p.num_lines > 300 and not p.has_manhattan()
+    a = jba.assign_lines(p)
+    assert a.accepted, a.message
+    assert a.support > 0.9 and sum(a.assigned) > 0.8 * p.num_lines
+    jba.apply_assignment(p, a)
+    assert p.has_manhattan() and p.manhattan_dof == 1
+    np.testing.assert_array_equal(p.line_axis, a.axis)
+    rep = jba.evaluate(p)
+    assigned = p.line_axis >= 0
+    assert np.nanmax(rep.line_angle[assigned]) < np.radians(3)
+    assert np.isnan(rep.line_angle[~assigned]).all()
+    # Random directions: refused.
+    q = p.copy()
+    q.line_xy = rng.uniform([0, 0, 0, 0], [640, 480, 640, 480], size=(p.num_lines, 4))
+    r = jba.assign_lines(q)
+    assert not r.accepted and "Manhattan" in r.message

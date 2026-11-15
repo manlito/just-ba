@@ -29,8 +29,12 @@ enum class GaugeMode {
 //   is held;
 // - otherwise the reference image's pose is held: the one with the most
 //   observations, then the most priors, then the lowest index. When gravity priors
-//   in the group set the vertical, only its translation and its heading about the
-//   vertical are held (Gauge::heading_images);
+//   in the group, or segments assigned to a one-degree-of-freedom Manhattan frame,
+//   set the vertical, only its translation and its heading about the vertical are
+//   held (Gauge::heading_images). The Manhattan frame is shared, so it ties the
+//   rotations of every group whose rotation its segments set: normally the frame is
+//   held and those groups hold their reference's translation alone
+//   (Gauge::translation_images, manhattan_frame_held; D86 has the exceptions);
 // - the scale is then set by relative priors or a rigid set if there are any;
 //   otherwise by holding the scale of a similarity set (the lowest index) if there
 //   is one; otherwise, as COLMAP does, by holding one translation coordinate of the
@@ -39,12 +43,19 @@ enum class GaugeMode {
 struct Gauge {
   std::vector<int> fixed_images;                     // poses held fixed
   // Poses whose translation and heading about the vertical are held, their tilt left
-  // free: the reference of a group whose vertical is set by gravity priors (D83).
+  // free: the reference of a group whose vertical is set by gravity priors or by
+  // segments assigned to a one-degree-of-freedom Manhattan frame (D83).
   std::vector<int> heading_images;
+  // Poses whose translation alone is held: the reference of a group whose rotation
+  // the shared Manhattan frame sets (D86).
+  std::vector<int> translation_images;
+  // The Manhattan frame is held at its starting value (D86).
+  bool manhattan_frame_held = false;
   std::vector<std::array<int, 2>> fixed_translations;  // (image, coordinate 0..2)
   std::vector<int> fixed_set_scales;                 // prior sets whose scale is held
   bool empty() const {
-    return fixed_images.empty() && heading_images.empty() && fixed_translations.empty() && fixed_set_scales.empty();
+    return fixed_images.empty() && heading_images.empty() && translation_images.empty() && fixed_translations.empty() &&
+           fixed_set_scales.empty() && !manhattan_frame_held;
   }
 };
 
@@ -73,6 +84,7 @@ struct SolverOptions {
   Loss relative_prior_loss{LossType::Cauchy, 3.0};
   Loss global_prior_loss{LossType::Cauchy, 3.0};
   Loss gravity_loss{LossType::Cauchy, 3.0};
+  Loss line_loss{LossType::Cauchy, 3.0};
   PriorDefaults prior_defaults;  // weights for priors that come without any
   GaugeMode gauge = GaugeMode::Auto;
 
@@ -133,7 +145,7 @@ Gauge choose_gauge(const Problem& problem);
 Loss* loss_of(SolverOptions& options, std::size_t type);
 const Loss* loss_of(const SolverOptions& options, std::size_t type);
 // Name of a residual type, as in command-line flags with '-' for '_':
-// "reprojection", "relative_prior", "global_prior", "gravity".
+// "reprojection", "relative_prior", "global_prior", "gravity", "line".
 std::string_view residual_type_name(std::size_t type);
 
 // The losses stored with a problem (Problem::loss_type, loss.* sections; D80) in

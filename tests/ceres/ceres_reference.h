@@ -82,6 +82,22 @@ class HeadingHeldPose final : public ceres::Manifold {
   double up_[3];
 };
 
+// A unit quaternion rotated about a fixed axis `up` only: q <- Exp(theta up) q. The
+// Manhattan frame with one degree of freedom (its heading about the vertical).
+class HeadingQuaternion final : public ceres::Manifold {
+ public:
+  explicit HeadingQuaternion(const double* up) : up_{up[0], up[1], up[2]} {}
+  int AmbientSize() const override { return 4; }
+  int TangentSize() const override { return 1; }
+  bool Plus(const double* x, const double* delta, double* x_plus_delta) const override;
+  bool PlusJacobian(const double* x, double* J) const override;
+  bool Minus(const double* y, const double* x, double* y_minus_x) const override;
+  bool MinusJacobian(const double* x, double* J) const override;
+
+ private:
+  double up_[3];
+};
+
 // Geman-McClure in the library's definition; Ceres has no such loss.
 class GemanMcClureLoss final : public ceres::LossFunction {
  public:
@@ -106,6 +122,10 @@ ceres::CostFunction* make_global_prior_cost(const double* q_prior, const double*
 
 // Gravity prior: parameters (pose 7); residual R g_world - g_camera divided by sigma.
 ceres::CostFunction* make_gravity_prior_cost(const double* g_world, const double* g_camera, double inv_sigma);
+
+// Manhattan line: parameters (pose 7, frame 4); residual n . (R R_M e_axis) divided by
+// sigma, with n the segment's plane normal in camera axes.
+ceres::CostFunction* make_line_cost(const double* normal, int axis, double inv_sigma);
 
 // A ceres::LossFunction matching `loss`, or nullptr for none. Caller owns it.
 ceres::LossFunction* make_loss(const jba::Loss& loss);

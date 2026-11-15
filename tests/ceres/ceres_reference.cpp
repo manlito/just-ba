@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "jba/geometry.h"
+#include "jba/manhattan.h"
 #include "jba/priors.h"
 
 namespace jba_ceres {
@@ -106,6 +107,35 @@ bool HeadingHeldPose::MinusJacobian(const double* x, double* J) const {
     for (int a = 0; a < 4; ++a) J[7 * c + a] = B[c] * Jq[a] + B[3 + c] * Jq[4 + a] + B[6 + c] * Jq[8 + a];
     for (int a = 4; a < 7; ++a) J[7 * c + a] = 0;
   }
+  return true;
+}
+
+bool HeadingQuaternion::Plus(const double* x, const double* delta, double* x_plus_delta) const {
+  const double v[3] = {delta[0] * up_[0], delta[0] * up_[1], delta[0] * up_[2]};
+  double dq[4];
+  jba::quat_exp(v, dq);
+  jba::quat_multiply(dq, x, x_plus_delta);
+  jba::quat_normalize(x_plus_delta);
+  return true;
+}
+
+bool HeadingQuaternion::PlusJacobian(const double* x, double* J) const {
+  const double e[4] = {0, 0.5 * up_[0], 0.5 * up_[1], 0.5 * up_[2]};
+  jba::quat_multiply(e, x, J);
+  return true;
+}
+
+bool HeadingQuaternion::Minus(const double* y, const double* x, double* y_minus_x) const {
+  double v[3];
+  LeftRotationVectorQuaternion{}.Minus(y, x, v);
+  y_minus_x[0] = v[0] * up_[0] + v[1] * up_[1] + v[2] * up_[2];
+  return true;
+}
+
+bool HeadingQuaternion::MinusJacobian(const double* x, double* J) const {
+  double Jq[12];
+  LeftRotationVectorQuaternion{}.MinusJacobian(x, Jq);
+  for (int a = 0; a < 4; ++a) J[a] = up_[0] * Jq[a] + up_[1] * Jq[4 + a] + up_[2] * Jq[8 + a];
   return true;
 }
 
@@ -301,7 +331,31 @@ struct GravityPrior {
   }
 };
 
+struct Line {
+  double n[3], w;
+  int axis;
+
+  template <typename T>
+  bool operator()(const T* pose, const T* frame, T* out) const {
+    T e[3] = {T(0), T(0), T(0)};
+    e[axis] = T(1);
+    T d[3], Rd[3];
+    ceres::UnitQuaternionRotatePoint(frame, e, d);
+    ceres::UnitQuaternionRotatePoint(pose, d, Rd);
+    out[0] = (n[0] * Rd[0] + n[1] * Rd[1] + n[2] * Rd[2]) * w;
+    return true;
+  }
+};
+
 }  // namespace
+
+ceres::CostFunction* make_line_cost(const double* normal, int axis, double inv_sigma) {
+  auto* f = new Line;
+  std::copy_n(normal, 3, f->n);
+  f->w = inv_sigma;
+  f->axis = axis;
+  return new ceres::AutoDiffCostFunction<Line, 1, 7, 4>(f);
+}
 
 ceres::CostFunction* make_gravity_prior_cost(const double* g_world, const double* g_camera, double inv_sigma) {
   auto* f = new GravityPrior;
@@ -380,6 +434,7 @@ Result solve(jba::Problem& p, const Options& o) {
   std::unique_ptr<ceres::LossFunction> rel_loss(make_loss(o.losses[jba::kLossRelativePrior]));
   std::unique_ptr<ceres::LossFunction> glob_loss(make_loss(o.losses[jba::kLossGlobalPrior]));
   std::unique_ptr<ceres::LossFunction> grav_loss(make_loss(o.losses[jba::kLossGravity]));
+  std::unique_ptr<ceres::LossFunction> line_loss(make_loss(o.losses[jba::kLossLine]));
   std::vector<double> W_rel, W_glob;
   jba::prior_whitening(p, o.prior_defaults, W_rel, W_glob);
   if (p.set_transform.empty() && p.num_prior_sets() > 0) {
@@ -418,6 +473,22 @@ Result solve(jba::Problem& p, const Options& o) {
   }
   const double up[3] = {-g_world[0], -g_world[1], -g_world[2]};
   auto heading_manifold = std::make_unique<HeadingHeldPose>(up);
+  // Manhattan lines: the frame is one more parameter block, 4 values.
+  std::unique_ptr<ceres::Manifold> frame_manifold;
+  if (p.has_manhattan()) {
+    for (std::size_t k = 0; k < p.num_lines(); ++k) {
+      if (p.line_axis[k] < 0) continue;
+      double n[3];
+      if (!jba::line_normal(p, k, n)) continue;
+      const double sigma = jba::line_residual_sigma(p, k, o.prior_defaults);
+      problem.AddResidualBlock(make_line_cost(n, p.line_axis[k], 1 / sigma), line_loss.get(),
+                               &p.poses[7 * static_cast<std::size_t>(p.line_image[k])], p.manhattan_frame.data());
+    }
+    if (p.manhattan_dof == 3) frame_manifold = std::make_unique<LeftRotationVectorQuaternion>();
+    else frame_manifold = std::make_unique<HeadingQuaternion>(up);
+    problem.SetManifold(p.manhattan_frame.data(), frame_manifold.get());
+    if (o.gauge.manhattan_frame_held) problem.SetParameterBlockConstant(p.manhattan_frame.data());
+  }
 
   auto* ordering = new ceres::ParameterBlockOrdering;
   for (std::size_t i = 0; i < p.num_images(); ++i) {
@@ -428,6 +499,9 @@ Result solve(jba::Problem& p, const Options& o) {
       if (img == static_cast<int>(i)) held.push_back(c);
     const bool heading_held = std::find(o.gauge.heading_images.begin(), o.gauge.heading_images.end(),
                                         static_cast<int>(i)) != o.gauge.heading_images.end();
+    const bool translation_held = std::find(o.gauge.translation_images.begin(), o.gauge.translation_images.end(),
+                                            static_cast<int>(i)) != o.gauge.translation_images.end();
+    if (translation_held) held = {0, 1, 2};
     if (heading_held) {
       problem.SetManifold(pose, heading_manifold.get());
     } else if (!held.empty()) {
@@ -455,6 +529,7 @@ Result solve(jba::Problem& p, const Options& o) {
     ordering->AddElementToGroup(rigid, 1);
     ordering->AddElementToGroup(rigid + 7, 1);
   }
+  if (p.has_manhattan()) ordering->AddElementToGroup(p.manhattan_frame.data(), 1);
   for (std::size_t j = 0; j < p.num_points(); ++j) {
     double* X = &p.points[3 * j];
     if (!problem.HasParameterBlock(X)) continue;

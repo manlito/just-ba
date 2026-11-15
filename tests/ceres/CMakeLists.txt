@@ -82,6 +82,21 @@ jba_parity_case(gravity_relative "--model PINHOLE --relative-priors 2 --gravity-
 jba_parity_case(gravity_similarity "--model PINHOLE --global-priors --global-relation similarity --gravity-priors"
                 "--check-parameters")
 jba_parity_case(gravity_sigma "--model PINHOLE --gravity-priors --gravity-sigma 0.002" "--check-parameters")
+# Manhattan lines (milestone 3), assigned by the truth (the assignment itself is
+# tested in test_manhattan). One or three degrees of freedom for the frame.
+jba_parity_case(lines "--model PINHOLE --lines 40" "--check-parameters")
+jba_parity_case(lines_dof3 "--model PINHOLE --lines 40 --line-dof 3" "--check-parameters")
+jba_parity_case(lines_outliers "--model SIMPLE_RADIAL --lines 40 --line-outliers 0.1" "--check-parameters")
+jba_parity_case(lines_huber "--model SIMPLE_RADIAL --lines 40 --line-outliers 0.1" "--line-loss huber:2 --check-parameters")
+jba_parity_case(lines_gravity "--model PINHOLE --lines 40 --gravity-priors --relative-priors 2" "--check-parameters")
+jba_parity_case(lines_dof3_opencv "--model OPENCV --lines 40 --line-dof 3 --relative-priors 2" "--check-parameters")
+jba_parity_case(lines_global "--model PINHOLE --lines 40 --global-priors" "--check-parameters")
+# Two groups of images joined only by the Manhattan frame: one holds a rotation, the
+# other its translation alone (D86).
+jba_parity_case(lines_two_groups "--model PINHOLE --points 0 --relative-priors 2 --prior-groups 2 --lines 40"
+                "--check-parameters")
+jba_parity_case(lines_two_groups_dof3 "--model PINHOLE --points 0 --relative-priors 2 --prior-groups 2 --lines 40 --line-dof 3"
+                "--check-parameters")
 
 # Against Ceres's exact solver: costs must agree, but an inexact inner solve takes
 # more outer iterations by design, so the iteration ratio is not the matched one.

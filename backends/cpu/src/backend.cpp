@@ -6,12 +6,14 @@
 #include <cmath>
 #include <cstdint>
 #include <numeric>
+#include <stdexcept>
 #include <vector>
 
 #include "jba/cpu/priors.h"
 #include "jba/cpu/reprojection.h"
 #include "jba/geometry.h"
 #include "jba/loss.h"
+#include "jba/manhattan.h"
 #include "jba/priors.h"
 #include "parallel.h"
 
@@ -112,9 +114,9 @@ constexpr int kPriorRows = 6;
 constexpr int kPriorCols = 13;
 constexpr double kIdentityTransform[8] = {1, 0, 0, 0, 0, 0, 0, 1};
 
-enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale };
+enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale, Frame };
 
-enum class FactorKind : std::uint8_t { PosePrior, Gravity };
+enum class FactorKind : std::uint8_t { PosePrior, Gravity, Line };
 
 struct PosePrior {
   bool relative = true;
@@ -128,6 +130,13 @@ struct PosePrior {
 struct GravityPrior {
   int image = -1;
   double g[3];   // measured, camera axes
+  double w = 1;  // 1 / sigma
+};
+
+struct LineFactor {
+  int image = -1;
+  int axis = 0;
+  double n[3];   // plane normal, camera axes
   double w = 1;  // 1 / sigma
 };
 
@@ -160,14 +169,16 @@ struct FactorSet {
 };
 
 // Parameter values: the current ones, or a candidate. `sets`: 8 per prior set
-// (q, t, s).
+// (q, t, s); `frame`: the Manhattan frame (q).
 struct Params {
   std::vector<double> poses, points, intr, sets;
+  double frame[4] = {1, 0, 0, 0};
   void swap(Params& o) {
     poses.swap(o.poses);
     points.swap(o.points);
     intr.swap(o.intr);
     sets.swap(o.sets);
+    std::swap(frame, o.frame);
   }
 };
 
@@ -208,6 +219,8 @@ struct CpuBackend::Impl {
   std::vector<PosePrior> pose_priors;
   std::vector<GravityPrior> gravity_priors;
   double g_world[3] = {0, -1, 0};
+  std::vector<LineFactor> lines;
+  int frame_dof = 0, frame_off = -1;  // the Manhattan frame block, when there is one
   std::vector<FactorSet> fsets;
 
   // Poses whose heading is held by the gauge (D83): rotation tangent basis, from the
@@ -249,6 +262,18 @@ struct CpuBackend::Impl {
     }
     for (auto i : p.rel_images) img_seen[static_cast<std::size_t>(i)] = 1;
     for (auto i : p.grav_image) img_seen[static_cast<std::size_t>(i)] = 1;
+    const bool manhattan = p.has_manhattan();
+    if (manhattan) {
+      for (std::size_t k = 0; k < p.num_lines(); ++k) {
+        if (p.line_axis[k] < 0) continue;
+        const auto i = static_cast<std::size_t>(p.line_image[k]);
+        img_seen[i] = 1;
+        const auto blk = static_cast<std::size_t>(image_block[i]);
+        if (!p.intrinsics_free.empty() && p.intrinsics_free[blk] != 0)
+          throw std::invalid_argument("the Manhattan term needs fixed intrinsics for images with assigned segments");
+      }
+      std::copy_n(p.manhattan_frame.data(), 4, cur.frame);
+    }
     for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
       img_seen[static_cast<std::size_t>(p.glob_image[k])] = 1;
       set_seen[static_cast<std::size_t>(p.set_of_global_prior(k))] = 1;
@@ -265,6 +290,7 @@ struct CpuBackend::Impl {
     gravity_direction(p, g_world);
     for (int c = 0; c < 3; ++c) up[c] = -g_world[c];
     basis_of.assign(n_img, -1);
+    for (int i : gauge.translation_images) pose_fixed_cols[static_cast<std::size_t>(i)] |= std::uint8_t(0x38);
     for (int i : gauge.heading_images) {
       pose_fixed_cols[static_cast<std::size_t>(i)] |= std::uint8_t(0x3c);
       basis_of[static_cast<std::size_t>(i)] = static_cast<int>(basis_image.size());
@@ -308,6 +334,15 @@ struct CpuBackend::Impl {
         scale_off[s] = off;
         fblocks.push_back({off, 1, 0, BlockKind::SetScale, static_cast<int>(s)});
         off += 1;
+      }
+    }
+    // The Manhattan frame: 1 (heading about the vertical) or 3 tangent values.
+    if (manhattan) {
+      frame_dof = p.manhattan_dof;
+      if (!gauge.manhattan_frame_held) {
+        frame_off = off;
+        fblocks.push_back({off, frame_dof, 0, BlockKind::Frame, 0});
+        off += frame_dof;
       }
     }
     nf = static_cast<std::size_t>(off);
@@ -457,6 +492,21 @@ struct CpuBackend::Impl {
     }
     if (gravity.count > 0) fsets.push_back(std::move(gravity));
 
+    if (frame_dof > 0) {
+      FactorSet line_set = make_set(FactorKind::Line, 1, {6, frame_dof});
+      for (std::size_t k = 0; k < p.num_lines(); ++k) {
+        if (p.line_axis[k] < 0) continue;
+        LineFactor f;
+        f.image = p.line_image[k];
+        f.axis = p.line_axis[k];
+        if (!line_normal(p, k, f.n)) continue;  // an endpoint outside the camera model
+        f.w = 1 / line_residual_sigma(p, k, o.prior_defaults);
+        add_factor(line_set, {{pose_off[static_cast<std::size_t>(f.image)], f.image}, {frame_off, -1}}, o.line_loss);
+        lines.push_back(f);
+      }
+      if (line_set.count > 0) fsets.push_back(std::move(line_set));
+    }
+
     for (FactorSet& fs : fsets) finish_set(fs);
   }
 
@@ -493,6 +543,23 @@ struct CpuBackend::Impl {
         for (int a = 0; a < 3; ++a) rw[a] *= g.w;
         if (J)
           for (int a = 0; a < 18; ++a) J[a] *= g.w;
+        return;
+      }
+      case FactorKind::Line: {
+        const LineFactor& l = lines[f];
+        double axis[3] = {0, 0, 0}, Jl[6], Jm[3];
+        axis[l.axis] = 1;
+        manhattan_line<double>(&P.poses[7 * static_cast<std::size_t>(l.image)], l.n, P.frame, axis, rw,
+                               J ? Jl : nullptr, J ? Jm : nullptr);
+        rw[0] *= l.w;
+        if (J) {
+          for (int c = 0; c < 6; ++c) J[c] = Jl[c] * l.w;
+          if (frame_dof == 3) {
+            for (int c = 0; c < 3; ++c) J[6 + c] = Jm[c] * l.w;
+          } else {
+            J[6] = (Jm[0] * up[0] + Jm[1] * up[1] + Jm[2] * up[2]) * l.w;
+          }
+        }
         return;
       }
     }
@@ -1189,6 +1256,21 @@ struct CpuBackend::Impl {
           cand.sets[8 * idx + 7] = cur.sets[8 * idx + 7] * std::exp(delta[0]);
           add_difference(&cand.sets[8 * idx + 7], &cur.sets[8 * idx + 7], 1);
           break;
+        // The Manhattan frame: R_M <- Exp(dphi) R_M, or Exp(dtheta up) R_M.
+        case BlockKind::Frame: {
+          double v[3];
+          if (frame_dof == 3) {
+            std::copy_n(delta, 3, v);
+          } else {
+            for (int c = 0; c < 3; ++c) v[c] = delta[0] * up[c];
+          }
+          double dq[4];
+          quat_exp(v, dq);
+          quat_multiply(dq, cur.frame, cand.frame);
+          quat_normalize(cand.frame);
+          add_difference(cand.frame, cur.frame, 4);
+          break;
+        }
       }
     }
     for (std::size_t j = 0; j < point_off.size(); ++j) {
@@ -1218,6 +1300,7 @@ struct CpuBackend::Impl {
         case BlockKind::Intrinsics: v = &cur.intr[static_cast<std::size_t>(np) * idx]; n = np; break;
         case BlockKind::SetRigid: v = &cur.sets[8 * idx]; n = 7; break;
         case BlockKind::SetScale: v = &cur.sets[8 * idx + 7]; n = 1; break;
+        case BlockKind::Frame: v = cur.frame; n = 4; break;
       }
       for (int a = 0; a < n; ++a) s += v[a] * v[a];
     }
@@ -1262,6 +1345,7 @@ void CpuBackend::write_back(Problem& problem) const {
   const bool any_transform = std::any_of(problem.set_relation.begin(), problem.set_relation.end(),
                                          [](FrameRelation r) { return r != FrameRelation::Identity; });
   if (!problem.set_transform.empty() || any_transform) problem.set_transform = impl_->cur.sets;
+  if (impl_->frame_dof > 0) problem.manhattan_frame.assign(impl_->cur.frame, impl_->cur.frame + 4);
 }
 
 }  // namespace jba::cpu

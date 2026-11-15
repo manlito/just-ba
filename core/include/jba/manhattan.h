@@ -1,0 +1,66 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "jba/priors.h"
+#include "jba/problem.h"
+
+namespace jba {
+
+// Manhattan prior from line segments (document 02, section 5): the caller detects
+// segments; the library estimates the building's axes, assigns each segment to an
+// axis or to none, and refuses the prior where the scene is not Manhattan.
+
+// Unit normal, in camera axes, of the plane through the camera centre and segment k
+// (the normalised cross product of its endpoint bearings). False when an endpoint
+// cannot be unprojected or the bearings coincide.
+bool line_normal(const Problem& problem, std::size_t k, double* n);
+
+// Standard deviation of segment k's residual (the sine of an angle): sqrt(2) times
+// its endpoint sigma over its length in pixels, at least defaults.line_min_sigma.
+double line_residual_sigma(const Problem& problem, std::size_t k, const PriorDefaults& defaults);
+
+struct ManhattanOptions {
+  // 1: the working frame is gravity-aligned (tracker poses or gravity priors) and
+  // only the heading of the walls about the vertical is estimated; 3: the whole
+  // rotation, the vertical taken as the strongest direction among the segments.
+  int dof = 1;
+  double max_angle_deg = 3;      // a segment fits an axis when the axis misses its plane by less
+  // Support test: the share of informative horizontal segment length (see
+  // ManhattanAssignment::support) the frame must explain, and the fewest segments it
+  // must assign. Provisional (D85).
+  double min_support = 0.35;
+  int min_segments = 20;
+  // Segments whose plane is within this of horizontal carry no heading: any
+  // horizontal direction lies nearly in it. They are left out of the vote and of
+  // the support test.
+  double horizontal_plane_deg = 10;
+};
+
+struct ManhattanAssignment {
+  bool accepted = false;  // the support test passed
+  std::string message;    // why it was refused, when it was
+  std::vector<double> frame;         // 4: building axes to working frame
+  std::vector<std::int32_t> axis;    // per segment: 0, 1, 2 or -1
+  int assigned[3] = {0, 0, 0};       // segments per axis
+  int unusable = 0;                  // segments whose endpoints could not be unprojected
+  // Length-weighted share of the informative segments (not along the vertical, plane
+  // not horizontal) that fit one of the horizontal axes. About 0.07 for segments in
+  // random directions at a 3 degree threshold; above 0.5 in a room.
+  double support = 0;
+};
+
+// Estimates the frame from the segments seen from the problem's current poses (a vote
+// over headings modulo 90 degrees about the vertical), assigns every segment that
+// fits exactly one axis, and runs the support test. With `frame` given (4 values),
+// nothing is estimated: segments are assigned to its axes and the test is run.
+ManhattanAssignment assign_lines(const Problem& problem, const ManhattanOptions& options,
+                                 const double* frame = nullptr);
+
+// Stores an assignment in the problem (line_axis, manhattan_frame, manhattan_dof),
+// which turns the Manhattan term on in solve(). A refused assignment clears them.
+void apply_assignment(Problem& problem, const ManhattanAssignment& assignment, int dof);
+
+}  // namespace jba

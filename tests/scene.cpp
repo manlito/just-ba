@@ -146,6 +146,84 @@ bool blocked(SceneKind kind, const double* a, const double* b) {
   return false;
 }
 
+// A 3-D segment and, for one on a surface, the face it lies on (-1 for floating).
+struct Segment3 {
+  double a[3], b[3];
+  int face = -1;
+  int axis = -1;  // building axis, -1 for a distractor
+};
+
+// World axis index of an axis-aligned direction: x 0, z 1, y (vertical) 2.
+int axis_of(const double* d) {
+  const double ax = std::abs(d[0]), ay = std::abs(d[1]), az = std::abs(d[2]);
+  if (ax >= ay && ax >= az) return 0;
+  return az >= ay ? 1 : 2;
+}
+
+std::vector<Segment3> make_segments(const SceneOptions& o, const std::vector<Face>& faces, std::mt19937_64& rng) {
+  Uniform u01(0, 1);
+  std::vector<Segment3> out;
+  // The volume random segments float in: the bounding box of the faces.
+  double lo[3] = {1e9, 1e9, 1e9}, hi[3] = {-1e9, -1e9, -1e9};
+  for (const Face& F : faces)
+    for (int c = 0; c < 3; ++c) {
+      lo[c] = std::min({lo[c], F.origin[c], F.origin[c] + F.u[c] + F.v[c]});
+      hi[c] = std::max({hi[c], F.origin[c], F.origin[c] + F.u[c] + F.v[c]});
+    }
+  int attempts = 0;
+  while (static_cast<int>(out.size()) < o.line_count && attempts++ < 100 * o.line_count) {
+    double r = u01(rng);
+    enum { Axis, Sloped, Floating, Wing } kind = Axis;
+    if (o.lines == LineMode::Random) kind = Floating;
+    else if (o.lines == LineMode::Mixed) kind = r < 0.6 ? Axis : r < 0.75 ? Sloped : r < 0.85 ? Floating : Wing;
+    Segment3 s;
+    const double len = 0.4 + 2.1 * u01(rng);
+    if (kind == Floating) {
+      double d[3] = {u01(rng) - 0.5, u01(rng) - 0.5, u01(rng) - 0.5};
+      normalize(d);
+      for (int c = 0; c < 3; ++c) {
+        const double m = lo[c] + (0.1 + 0.8 * u01(rng)) * (hi[c] - lo[c]);
+        s.a[c] = m - 0.5 * len * d[c];
+        s.b[c] = m + 0.5 * len * d[c];
+      }
+      out.push_back(s);
+      continue;
+    }
+    const std::size_t f = rng() % faces.size();
+    const Face& F = faces[f];
+    const bool horizontal_face = std::abs(F.normal[1]) > 0.5;
+    if (kind == Wing && !horizontal_face) continue;
+    const double lu = std::sqrt(dot(F.u, F.u)), lv = std::sqrt(dot(F.v, F.v));
+    double du[3], dv[3];
+    for (int c = 0; c < 3; ++c) du[c] = F.u[c] / lu, dv[c] = F.v[c] / lv;
+    // Direction within the face, in the face's (u, v) coordinates (metres).
+    double angle = 0;
+    if (kind == Axis) angle = (rng() % 2) ? kPi / 2 : 0;
+    else if (kind == Sloped) angle = (15 + 60 * u01(rng)) * kPi / 180;
+    else {
+      // 30 degrees off the world x axis about the vertical; u and v of a floor or
+      // ceiling are x and z.
+      angle = (rng() % 2 ? 30.0 : 120.0) * kPi / 180;
+    }
+    const double cu = std::cos(angle), cv = std::sin(angle);
+    const double mu = u01(rng) * lu, mv = u01(rng) * lv;
+    const double au = mu - 0.5 * len * cu, av = mv - 0.5 * len * cv, bu = mu + 0.5 * len * cu, bv = mv + 0.5 * len * cv;
+    if (au < 0 || au > lu || bu < 0 || bu > lu || av < 0 || av > lv || bv < 0 || bv > lv) continue;
+    for (int c = 0; c < 3; ++c) {
+      s.a[c] = F.origin[c] + au * du[c] + av * dv[c];
+      s.b[c] = F.origin[c] + bu * du[c] + bv * dv[c];
+    }
+    s.face = static_cast<int>(f);
+    if (kind == Axis) {
+      double d[3];
+      for (int c = 0; c < 3; ++c) d[c] = s.b[c] - s.a[c];
+      s.axis = axis_of(d);
+    }
+    out.push_back(s);
+  }
+  return out;
+}
+
 }  // namespace
 
 Scene make_scene(const SceneOptions& o) {
@@ -299,6 +377,68 @@ Scene make_scene(const SceneOptions& o) {
       seen_by[static_cast<std::size_t>(vis[q].first)].push_back({i, static_cast<int>(q)});
     }
   }
+  // Line segments, with their own random numbers so the rest of a scene does not
+  // depend on whether it has lines.
+  std::vector<std::int32_t> line_image;
+  std::vector<double> line_xy;
+  if (o.lines != LineMode::None) {
+    std::mt19937_64 lrng(o.seed + 7777);
+    const auto segs = make_segments(o, faces, lrng);
+    constexpr int kSamples = 25;
+    for (int i = 0; i < N; ++i) {
+      const double* pose = &truth.poses[7 * static_cast<std::size_t>(i)];
+      double C[3];
+      centre_of(pose, C);
+      for (std::size_t s = 0; s < segs.size(); ++s) {
+        const Segment3& S = segs[s];
+        // Longest run of visible samples along the segment.
+        int best_start = -1, best_len = 0, start = -1;
+        double px[kSamples], py[kSamples];
+        for (int q = 0; q <= kSamples; ++q) {
+          bool vis = false;
+          if (q < kSamples) {
+            const double t = static_cast<double>(q) / (kSamples - 1);
+            double X[3];
+            for (int c = 0; c < 3; ++c) X[c] = S.a[c] + t * (S.b[c] - S.a[c]);
+            const double toC[3] = {C[0] - X[0], C[1] - X[1], C[2] - X[2]};
+            vis = true;
+            if (S.face >= 0) {
+              const Face& F = faces[static_cast<std::size_t>(S.face)];
+              if (dot(F.normal, toC) <= 0.05 * std::sqrt(dot(toC, toC))) vis = false;
+              if (o.kind == SceneKind::House && F.room >= 0 && ((F.room == 0) != (C[0] < 3))) vis = false;
+            }
+            if (vis && (dot(toC, toC) > 14 * 14 || blocked(o.kind, C, X))) vis = false;
+            if (vis) {
+              double pc[3];
+              jba::quat_rotate(pose, X, pc);
+              for (int c = 0; c < 3; ++c) pc[c] += pose[4 + c];
+              vis = pc[2] > 0.3 && jba::project(o.model, truth.intrinsics.data(), pc, &px[q], &py[q]) && px[q] >= 0 &&
+                    px[q] < kWidth && py[q] >= 0 && py[q] < kHeight;
+            }
+          }
+          if (vis && start < 0) start = q;
+          if (!vis && start >= 0) {
+            if (q - start > best_len) best_len = q - start, best_start = start;
+            start = -1;
+          }
+        }
+        if (best_len < 2) continue;
+        const int e = best_start + best_len - 1;
+        if (std::hypot(px[e] - px[best_start], py[e] - py[best_start]) < o.min_line_length) continue;
+        line_image.push_back(i);
+        line_xy.insert(line_xy.end(), {px[best_start] + o.line_noise * n(lrng), py[best_start] + o.line_noise * n(lrng),
+                                       px[e] + o.line_noise * n(lrng), py[e] + o.line_noise * n(lrng)});
+        sc.line_truth_axis.push_back(S.axis);
+      }
+    }
+  }
+  // Building axes to world (y down): e0 = x, e1 = z, e2 = up = -y, a rotation of 90
+  // degrees about x.
+  {
+    const double R[9] = {1, 0, 0, 0, 0, -1, 0, 1, 0};
+    jba::quat_from_matrix(R, sc.truth_frame);
+  }
+
   jba::Keypoints& K = sc.input.keypoints;
   K.begin.assign(1, 0);
   for (int i = 0; i < N; ++i) {
@@ -382,6 +522,9 @@ Scene make_scene(const SceneOptions& o) {
   scene.model = o.model;
   scene.intrinsics = truth.intrinsics;
   scene.poses = sc.tracker_poses;
+  scene.gravity_world = {0, 1, 0};  // world y is down
+  scene.line_image = std::move(line_image);
+  scene.line_xy = std::move(line_xy);
   if (o.relative_priors) {
     std::vector<std::int32_t> pairs;
     std::vector<char> spans_jump;

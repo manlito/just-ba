@@ -19,6 +19,16 @@ enum class SceneKind {
   Exterior,  // a box building walked around from outside, looking in; a loop the tracker has not closed
 };
 
+// Line segments for the Manhattan prior (document 05): on the surfaces along the
+// building's axes, plus distractors.
+enum class LineMode {
+  None,
+  Manhattan,  // along the axes only
+  Mixed,      // 60% along the axes; the rest sloped in their surface, in random directions, or on the floor and
+              // ceiling at a second heading (a wing 30 degrees off)
+  Random,     // random directions only: a scene that is not Manhattan
+};
+
 struct SceneOptions {
   SceneKind kind = SceneKind::Room;
   jba::CameraModel model = jba::CameraModel::Pinhole;
@@ -57,6 +67,11 @@ struct SceneOptions {
 
   bool relative_priors = true;
   bool shuffle_frames = false;  // frames in random order (D12)
+
+  LineMode lines = LineMode::None;
+  int line_count = 400;        // 3-D segments; each image sees some of them
+  double line_noise = 0.5;     // endpoint noise, pixels
+  double min_line_length = 30;  // pixels
 };
 
 struct Scene {
@@ -66,6 +81,11 @@ struct Scene {
   std::vector<std::int32_t> bad_relative;      // relative priors that are wrong (jumps left in, or corrupted)
   std::vector<std::int32_t> bad_global;        // global priors that are outliers
   std::vector<std::int32_t> capture_order;     // frame index of each capture step
+  // Per 2-D segment in input.scene: the true building axis (0 world x, 1 world z,
+  // 2 vertical) or -1 for a distractor. The true Manhattan frame (building axes to
+  // world, world y down) is truth_frame.
+  std::vector<std::int32_t> line_truth_axis;
+  double truth_frame[4] = {1, 0, 0, 0};
   jba::RefineInput input;
 };
 

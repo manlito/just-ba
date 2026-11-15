@@ -96,8 +96,8 @@ Types appended later take the next indices.
 | `loss.type` | i32 | [T] | with `loss.scale` | 0 none, 1 Huber, 2 Cauchy, 3 Geman-McClure (definitions in document 02) |
 | `loss.scale` | f64 | [T] | with `loss.type` | Scale a of each loss, in whitened units (pixels for reprojection, standard deviations for priors) |
 
-Absent, or for types past T, the solver options decide. Index 3 is the gravity prior
-(milestone 3). The CLI and the parity tool
+Absent, or for types past T, the solver options decide. Index 3 is the gravity prior,
+4 the Manhattan line (milestone 3). The CLI and the parity tool
 start from these and let their flags override them; `refine` writes the losses it
 solved with; the library's `solve` takes its losses from its options, and
 `with_problem_losses` copies these in.
@@ -122,6 +122,21 @@ Gravity priors (milestone 3; all optional, D82). `Q` gravity priors.
 | `prior.gravity.direction` | f64 | [Q, 3] | with gravity priors | Direction of gravity measured in the image's camera axes, unit |
 | `prior.gravity.sigma` | f64 | [Q] | no | Standard deviation in radians. Absent: the solver's default |
 
+Line segments and the Manhattan frame (milestone 3; all optional, D84 to D86). `L`
+segments.
+
+| Name | dtype | Shape | Required | Meaning |
+|---|---|---|---|---|
+| `lines.image` | i32 | [L] | with segments | Image of each segment |
+| `lines.xy` | f64 | [L, 4] | with segments | Endpoints x0, y0, x1, y1 in pixels; not equal |
+| `lines.sigma` | f64 | [L] | no | Endpoint standard deviation in pixels. Absent: the solver's default |
+| `lines.axis` | i32 | [L] | no | Building axis: 0 and 1 horizontal, 2 vertical, -1 none. Absent: none assigned |
+| `manhattan.frame` | f64 | [4] | no | Quaternion from the building's axes to the working frame. Absent: no Manhattan term |
+| `manhattan.dof` | i32 | [1] | no | 1: the frame's heading about the vertical only, axis 2 must be up (-`gravity.world`); 3: its whole rotation. Absent: 1 |
+
+The Manhattan term is in the problem when `manhattan.frame` is present and some
+segment has an axis.
+
 ## Planned sections
 
 Reserved names, added in the milestones that need them. Each will be optional.
@@ -129,7 +144,6 @@ Reserved names, added in the milestones that need them. Each will be optional.
 | Prefix | Milestone | Content |
 |---|---|---|
 | `depth.*` | 3 | Depth at keypoints, confidence, per-image scale and offset |
-| `lines.*` | 3 | Line segments per image for the Manhattan prior |
 
 ## BAL conversion
 

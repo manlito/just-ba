@@ -5,6 +5,7 @@
 #include "jba/camera_model.h"
 #include "jba/initialize.h"
 #include "jba/loss.h"
+#include "jba/manhattan.h"
 #include "jba/priors.h"
 #include "jba/problem.h"
 #include "jba/problem_io.h"

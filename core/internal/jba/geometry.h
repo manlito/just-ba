@@ -72,6 +72,41 @@ void pose_retract(const T* pose, const T* step, T* out) {
   out[6] = pose[6] + step[5];
 }
 
+// Unit quaternion (w >= 0) of a rotation matrix R (3 x 3, row-major).
+template <typename T>
+void quat_from_matrix(const T* R, T* q) {
+  using std::sqrt;
+  const T tr = R[0] + R[4] + R[8];
+  if (tr > T(0)) {
+    const T s = sqrt(tr + T(1)) * T(2);
+    q[0] = s / T(4);
+    q[1] = (R[7] - R[5]) / s;
+    q[2] = (R[2] - R[6]) / s;
+    q[3] = (R[3] - R[1]) / s;
+  } else if (R[0] > R[4] && R[0] > R[8]) {
+    const T s = sqrt(T(1) + R[0] - R[4] - R[8]) * T(2);
+    q[0] = (R[7] - R[5]) / s;
+    q[1] = s / T(4);
+    q[2] = (R[1] + R[3]) / s;
+    q[3] = (R[2] + R[6]) / s;
+  } else if (R[4] > R[8]) {
+    const T s = sqrt(T(1) + R[4] - R[0] - R[8]) * T(2);
+    q[0] = (R[2] - R[6]) / s;
+    q[1] = (R[1] + R[3]) / s;
+    q[2] = s / T(4);
+    q[3] = (R[5] + R[7]) / s;
+  } else {
+    const T s = sqrt(T(1) + R[8] - R[0] - R[4]) * T(2);
+    q[0] = (R[3] - R[1]) / s;
+    q[1] = (R[2] + R[6]) / s;
+    q[2] = (R[5] + R[7]) / s;
+    q[3] = s / T(4);
+  }
+  if (q[0] < T(0))
+    for (int a = 0; a < 4; ++a) q[a] = -q[a];
+  quat_normalize(q);
+}
+
 // Rotation tangent basis of a pose whose heading about the vertical is held, the
 // rest of its rotation free (gauge, D83). Columns (b0, b1, a) of B (3 x 3, row-major):
 // a = R up, the vertical in camera axes, and b0, b1 complete a right-handed

@@ -486,6 +486,21 @@ Prior art read: LIMAP uses the same sine-of-angle residual between a line and a
 vanishing direction, with a soft perpendicularity term between vanishing-point pairs.
 The single shared frame used here is the stricter, classical Manhattan form.
 
+#### As built (milestone 3)
+
+- Residual and weights: D84. Assignment, the vote and the support test: D85
+  (`assign_lines` in `manhattan.h`). The gauge: the frame is held and each group
+  with segments holds only its reference's position (D86).
+- In `refine` (opt-in, `use_manhattan`), segments are assigned after the prior-only
+  solve, the priors are solved again with them, then assigned again each round
+  with a tighter angle.
+- Synthetic results (document 07): heading drift in a room and in two rooms joined
+  by a doorway is removed far better than by the images alone; random segments are
+  refused; a mixed scene is not made worse.
+- At the pose-only stage the relative priors still pull, since their default
+  weights (D77) trust a tracker more than the synthetic one deserves: there the
+  drift is about halved, and the images finish the job.
+
 ### 6. Planned residuals
 
 Not in the first release; formulations recorded so the data layout leaves room.

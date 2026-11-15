@@ -24,6 +24,10 @@ struct PriorDefaults {
   double global_position_sigma = 0.05;                // the set's own units
   // Gravity priors (provisional, D82).
   double gravity_sigma = 0.01;                        // rad
+  // Manhattan line segments (provisional, D84): sigma = max(line_min_sigma,
+  // sqrt(2) * endpoint sigma / length in pixels), the sine of the angle.
+  double line_endpoint_sigma = 1.0;                   // pixels
+  double line_min_sigma = 0.002;
 };
 
 // Whitening matrices W (6 x 6, row-major, residual W r) for every relative and
