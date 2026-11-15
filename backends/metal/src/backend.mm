@@ -169,7 +169,7 @@ class MetalDevice final : public gpu::Device {
 
   std::string name() const override { return "metal"; }
 
-  Buffer alloc(std::size_t bytes, const void* init) override {
+  Buffer alloc(std::size_t bytes, const void* init, bool) override {
     id<MTLBuffer> b = [lib_.device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
     if (b == nil) fail("buffer allocation failed (" + std::to_string(bytes) + " bytes)", nil);
     if (init != nullptr) std::memcpy(b.contents, init, bytes);

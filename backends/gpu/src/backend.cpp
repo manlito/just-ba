@@ -111,11 +111,17 @@ struct GpuBackend::Impl {
 
   // A buffer of `count` T, copied from init or zeroed; its device address in `field`.
   template <typename T, typename F>
-  Buffer buffer(std::size_t count, F*& field, const T* init = nullptr) {
+  Buffer buffer(std::size_t count, F*& field, const T* init = nullptr, bool host_visible = false) {
     static_assert(sizeof(T) == sizeof(F));
-    const Buffer b = dev->alloc(std::max<std::size_t>(count * sizeof(T), 16), count > 0 ? init : nullptr);
+    const Buffer b = dev->alloc(std::max<std::size_t>(count * sizeof(T), 16), count > 0 ? init : nullptr, host_visible);
     field = reinterpret_cast<F*>(static_cast<std::uintptr_t>(b.address));
     return b;
+  }
+
+  // A buffer the host reads or writes.
+  template <typename T, typename F>
+  Buffer mirrored(std::size_t count, F*& field) {
+    return buffer<T>(count, field, nullptr, true);
   }
 
   template <typename T, typename S, typename F>
@@ -251,14 +257,14 @@ struct GpuBackend::Impl {
     buffer<uint_pair>(fb_fac.size(), args.fb_fac, fb_fac.data());
 
     // Parameters, written before each linearization.
-    poses = buffer<float>(8 * n_img, args.poses);
-    rc = buffer<float>(4 * n_img, args.rc);
-    points = buffer<float>(3 * npts, args.points);
-    intr = buffer<float>(np * n_blk, args.intr);
-    basis = buffer<float>(sys.basis.size(), args.basis);
-    f_scale = buffer<float>(sys.nf, args.f_scale);
-    e_scale = buffer<float>(sys.ne, args.e_scale);
-    hres = buffer<float>(2 * nobs, args.hres);
+    poses = mirrored<float>(8 * n_img, args.poses);
+    rc = mirrored<float>(4 * n_img, args.rc);
+    points = mirrored<float>(3 * npts, args.points);
+    intr = mirrored<float>(np * n_blk, args.intr);
+    basis = mirrored<float>(sys.basis.size(), args.basis);
+    f_scale = mirrored<float>(sys.nf, args.f_scale);
+    e_scale = mirrored<float>(sys.ne, args.e_scale);
+    hres = mirrored<float>(2 * nobs, args.hres);
     res_cur.assign(2 * nobs, 0);
     res_cand.assign(2 * nobs, 0);
 
@@ -268,17 +274,17 @@ struct GpuBackend::Impl {
     buffer<float>(6 * nobs, args.Jx);
     buffer<float>(any_intr ? 2 * np * nobs : 1, args.Jk);
     const std::size_t nd = sys.has_depth ? nobs : 1;
-    dr = buffer<float>(nd, args.dr);
-    dJp = buffer<float>(6 * nd, args.dJp);
-    dJx = buffer<float>(3 * nd, args.dJx);
-    dJc = buffer<float>(2 * nd, args.dJc);
-    fr = buffer<float>(roff, args.fr);
-    fJ = buffer<float>(joff, args.fJ);
+    dr = mirrored<float>(nd, args.dr);
+    dJp = mirrored<float>(6 * nd, args.dJp);
+    dJx = mirrored<float>(3 * nd, args.dJx);
+    dJc = mirrored<float>(2 * nd, args.dJc);
+    fr = mirrored<float>(roff, args.fr);
+    fJ = mirrored<float>(joff, args.fJ);
     buffer<float>(roff, args.fm);
-    diag_f = buffer<float>(sys.nf, args.diag_f);
-    g_f = buffer<float>(sys.nf, args.g_f);
-    diag_e = buffer<float>(sys.ne, args.diag_e);
-    g_e = buffer<float>(sys.ne, args.g_e);
+    diag_f = mirrored<float>(sys.nf, args.diag_f);
+    g_f = mirrored<float>(sys.nf, args.g_f);
+    diag_e = mirrored<float>(sys.ne, args.diag_e);
+    g_e = mirrored<float>(sys.ne, args.g_e);
     buffer<float>(sys.nf, args.d2_f);
     buffer<float>(sys.ne, args.d2_e);
     buffer<float>(9 * npts, args.Cinv);
@@ -287,13 +293,13 @@ struct GpuBackend::Impl {
     buffer<float>(nd, args.td);
     buffer<float>(kChunkFloats * nchunks, args.partial);
     buffer<float>(2 * (npts + nfac), args.vals);
-    bvec = buffer<float>(sys.nf, args.b);
-    x = buffer<float>(sys.nf, args.x);
+    bvec = mirrored<float>(sys.nf, args.b);
+    x = mirrored<float>(sys.nf, args.x);
     buffer<float>(sys.nf, args.res);
     buffer<float>(sys.nf, args.z);
     buffer<float>(sys.nf, args.p);
     buffer<float>(sys.nf, args.q);
-    dx_e = buffer<float>(sys.ne, args.dx_e);
+    dx_e = mirrored<float>(sys.ne, args.dx_e);
 
     if (direct) setup_direct();
     else {
@@ -319,7 +325,7 @@ struct GpuBackend::Impl {
     args.loss_type = static_cast<std::int32_t>(sys.loss.type);
     args.loss_scale = static_cast<float>(sys.loss.scale);
     args.pivot_floor = kPivotFloor;
-    state_buf = dev->alloc(sizeof(State), nullptr);
+    state_buf = dev->alloc(sizeof(State), nullptr, true);
     dev->bind(args, state_buf);
     linearize_k = linearize_kernel(sys.model);
   }
@@ -403,7 +409,7 @@ struct GpuBackend::Impl {
     buffer<TileChunk>(tchunks.size(), args.tile_chunks, tchunks.data());
     buffer<TileEntry>(entries.size(), args.entries, entries.data());
     buffer<float>(kChunkFloats * tchunks.size(), args.tile_partial);
-    tile_vals = buffer<float>(nvals, args.tile_vals);
+    tile_vals = mirrored<float>(nvals, args.tile_vals);
 
     // Lower triangle, compressed columns: column c of block A holds rows r >= c of
     // every tile (A, B), B >= A, in increasing B.

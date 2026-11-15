@@ -210,9 +210,12 @@ NB_MODULE(_core, m) {
   m.attr("DEPTH_SCALE") = jba::kDepthScale;
   m.attr("DEPTH_OFFSET") = jba::kDepthOffset;
   nb::enum_<jba::GaugeMode>(m, "GaugeMode").value("AUTO", jba::GaugeMode::Auto).value("NONE", jba::GaugeMode::None);
-  nb::enum_<jba::BackendKind>(m, "Backend", "Where a solve runs: CPU (double, the reference) or Metal (Apple GPUs).")
+  nb::enum_<jba::BackendKind>(m, "Backend",
+                              "Where a solve runs: CPU (double, the reference), Metal (Apple GPUs) or CUDA "
+                              "(NVIDIA GPUs).")
       .value("CPU", jba::BackendKind::Cpu)
-      .value("METAL", jba::BackendKind::Metal);
+      .value("METAL", jba::BackendKind::Metal)
+      .value("CUDA", jba::BackendKind::Cuda);
   nb::enum_<jba::LinearSolverType>(m, "LinearSolver",
                                    "Inner solve: AUTO (the backend's fastest), ITERATIVE_SCHUR (every backend) "
                                    "or SPARSE_SCHUR (Metal).")

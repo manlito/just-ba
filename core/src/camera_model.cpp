@@ -112,7 +112,7 @@ double fisheye_theta_d(const double* k, double theta) {
 
 bool project(CameraModel model, const double* k, const double* p, double* x, double* y) {
   if (!(p[2] > 0)) return false;
-  double fx, fy, cx, cy;
+  double fx = 0, fy = 0, cx = 0, cy = 0;  // set by linear_part for every model
   linear_part(model, k, fx, fy, cx, cy);
   const double u = p[0] / p[2], v = p[1] / p[2];
   double ud, vd;
@@ -130,7 +130,7 @@ bool project(CameraModel model, const double* k, const double* p, double* x, dou
 }
 
 bool unproject(CameraModel model, const double* k, double x, double y, double* bearing) {
-  double fx, fy, cx, cy;
+  double fx = 0, fy = 0, cx = 0, cy = 0;  // set by linear_part for every model
   linear_part(model, k, fx, fy, cx, cy);
   const double ud = (x - cx) / fx, vd = (y - cy) / fy;
   double u = ud, v = vd;

@@ -388,3 +388,23 @@ def test_metal_backend():
     o.linear_solver = jba.LinearSolver.SPARSE_SCHUR
     with pytest.raises(ValueError):
         jba.solve(p.copy(), o)  # sparse_schur needs the Metal backend
+
+
+def test_cuda_backend():
+    if not jba.backend_available(jba.Backend.CUDA):
+        pytest.skip("no CUDA device")
+    p, _, _ = small_problem()
+    perturb(p)
+    results = {}
+    for name, backend in [("cpu", jba.Backend.CPU), ("cuda", jba.Backend.CUDA)]:
+        q = p.copy()
+        o = jba.SolverOptions()
+        o.backend = backend
+        o.linear_solver = jba.LinearSolver.ITERATIVE_SCHUR
+        o.function_tolerance = 1e-12
+        o.parameter_tolerance = 1e-12
+        o.max_iterations = 200
+        s = jba.solve(q, o)
+        assert s.termination == jba.Termination.CONVERGENCE, s.message
+        results[name] = s.final_cost
+    assert abs(results["cuda"] - results["cpu"]) <= 1e-6 * results["cpu"]

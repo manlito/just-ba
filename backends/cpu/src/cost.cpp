@@ -20,7 +20,7 @@ double reprojection_cost(const Problem& p) {
       const double* pose = &p.poses[7 * i];
       const double* intr = &p.intrinsics[np * static_cast<std::size_t>(p.intrinsics_of_image(i))];
       const double* X = &p.points[3 * static_cast<std::size_t>(p.obs_point[k])];
-      double r[2];
+      double r[2] = {0, 0};
       reprojection<double>(p.model, pose, pose + 4, X, intr, &p.obs_xy[2 * k], r, nullptr, nullptr, nullptr);
       const double s = p.obs_sigma.empty() ? 1.0 : p.obs_sigma[k];
       block += (r[0] * r[0] + r[1] * r[1]) / (s * s);

@@ -67,7 +67,8 @@ inline constexpr const char* kKernelNames[] = {
 static_assert(sizeof(kKernelNames) / sizeof(kKernelNames[0]) == static_cast<std::size_t>(Kernel::Count));
 
 // A device buffer and its host side: on Metal the same shared memory, on CUDA a host
-// mirror. `address` is the device address the kernels see.
+// mirror (only for buffers allocated host-visible; `host` is null otherwise).
+// `address` is the device address the kernels see.
 struct Buffer {
   void* host = nullptr;
   std::uint64_t address = 0;
@@ -90,8 +91,9 @@ class Device {
   virtual ~Device() = default;
   virtual std::string name() const = 0;
 
-  // `bytes` (at least 16), copied from `init` or zeroed, on both sides.
-  virtual Buffer alloc(std::size_t bytes, const void* init) = 0;
+  // `bytes` (at least 16), copied from `init` or zeroed. A host-visible buffer has a
+  // host side the host may read and write (with to_device / to_host).
+  virtual Buffer alloc(std::size_t bytes, const void* init, bool host_visible) = 0;
   // Host side to device after the host wrote it, and back before the host reads it.
   // No-ops where the memory is shared.
   virtual void to_device(const Buffer& b) = 0;

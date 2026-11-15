@@ -1,22 +1,24 @@
-// Metal backend against the CPU reference on one problem file (milestone 4).
+// A GPU backend against the CPU reference on one problem file (milestones 4 and 5).
 //
-//   jba_metal_check <problem> [--gauge auto|none] [--loss NAME[:SCALE]] [--<type>-loss NAME[:SCALE]]
-//                   [--max-iterations N] [--function-tolerance X] [--parameter-tolerance X]
-//                   [--max-cost-diff X] [--max-centre-diff X] [--max-rotation-diff X] [--no-repeat]
-//                   [--linear-solver iterative_schur|sparse_schur] [--expect-fallback]
+//   jba_gpu_check <problem> [--backend metal|cuda] [--gauge auto|none]
+//                 [--loss NAME[:SCALE]] [--<type>-loss NAME[:SCALE]]
+//                 [--max-iterations N] [--function-tolerance X] [--parameter-tolerance X]
+//                 [--max-cost-diff X] [--max-centre-diff X] [--max-rotation-diff X] [--no-repeat]
+//                 [--linear-solver iterative_schur|sparse_schur] [--expect-fallback]
 //
-// Solves with both backends from the same start and options (the CPU always with
-// iterative_schur, Metal with --linear-solver), then checks:
+// Solves with the CPU and the GPU backend (default metal) from the same start and
+// options (the CPU always with iterative_schur, the GPU with --linear-solver), then
+// checks:
 // - final costs: relative difference at most --max-cost-diff (default 1e-6);
 // - median camera centre difference relative to the scene scale, and median rotation
 //   difference in radians, at most --max-centre-diff and --max-rotation-diff
 //   (defaults 1e-4); 0 skips a check;
-// - a second Metal solve gives bit-identical parameters (unless --no-repeat);
+// - a second GPU solve gives bit-identical parameters (unless --no-repeat);
 // - with --expect-fallback, at least one sparse_schur step fell back to conjugate
 //   gradients (so that path is tested; the option fails with iterative_schur).
 // Document 05 asks for 1e-3 in cost in single precision; the defaults are what the
 // backend actually reaches on the synthetic cases. Prints JSON; skips (exit 77)
-// without a Metal device.
+// without a device for the backend.
 
 #include <algorithm>
 #include <chrono>
@@ -57,11 +59,18 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "usage: %s <problem> [options]\n", argv[0]);
       return 2;
     }
-    if (!jba::backend_available(jba::BackendKind::Metal)) {
-      std::printf("no Metal device; skipped\n");
+    const std::string path = argv[1];
+    jba::BackendKind backend = jba::BackendKind::Metal;
+    for (int a = 2; a + 1 < argc; ++a)
+      if (std::string(argv[a]) == "--backend") {
+        const auto b = jba::backend_from_name(argv[a + 1]);
+        if (!b || *b == jba::BackendKind::Cpu) throw std::invalid_argument(std::string("not a GPU backend: ") + argv[a + 1]);
+        backend = *b;
+      }
+    if (!jba::backend_available(backend)) {
+      std::printf("no %s device; skipped\n", std::string(jba::backend_name(backend)).c_str());
       return 77;
     }
-    const std::string path = argv[1];
     jba::Problem start = ends_with(path, ".txt") ? jba::read_bal(path) : jba::read_problem(path);
     jba::SolverOptions o = jba::with_problem_losses({}, start);
     o.max_iterations = 200;
@@ -69,7 +78,7 @@ int main(int argc, char** argv) {
     o.parameter_tolerance = 1e-12;
     double max_cost = 1e-6, max_centre = 1e-4, max_rotation = 1e-4;
     bool repeat = true, expect_fallback = false;
-    jba::LinearSolverType metal_solver = jba::LinearSolverType::IterativeSchur;  // the flag's default
+    jba::LinearSolverType gpu_solver = jba::LinearSolverType::IterativeSchur;  // the flag's default
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
       if (key == "--no-repeat") {
@@ -88,6 +97,7 @@ int main(int argc, char** argv) {
         if (!type) throw std::invalid_argument("unknown loss " + val);
         return jba::Loss{*type, colon != std::string::npos ? std::stod(val.substr(colon + 1)) : 1.0};
       };
+      if (key == "--backend") continue;  // read above
       if (key == "--gauge") o.gauge = val == "none" ? jba::GaugeMode::None : jba::GaugeMode::Auto;
       else if (key == "--max-iterations") o.max_iterations = std::stoi(val);
       else if (key == "--function-tolerance") o.function_tolerance = std::stod(val);
@@ -99,7 +109,7 @@ int main(int argc, char** argv) {
       else if (key == "--linear-solver") {
         const auto l = jba::linear_solver_from_name(val);
         if (!l) throw std::invalid_argument("unknown linear solver " + val);
-        metal_solver = *l;
+        gpu_solver = *l;
       }
       else {
         bool found = false;
@@ -119,7 +129,7 @@ int main(int argc, char** argv) {
     auto run = [&](jba::BackendKind kind, jba::Problem& p, double& seconds) {
       jba::SolverOptions opts = o;
       opts.backend = kind;
-      opts.linear_solver = kind == jba::BackendKind::Metal ? metal_solver : jba::LinearSolverType::IterativeSchur;
+      opts.linear_solver = kind == jba::BackendKind::Cpu ? jba::LinearSolverType::IterativeSchur : gpu_solver;
       const auto t0 = std::chrono::steady_clock::now();
       const jba::SolverSummary s = jba::solve(p, opts);
       seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -128,7 +138,7 @@ int main(int argc, char** argv) {
     jba::Problem cpu = start, gpu = start;
     double t_cpu = 0, t_gpu = 0;
     const jba::SolverSummary sc = run(jba::BackendKind::Cpu, cpu, t_cpu);
-    const jba::SolverSummary sg = run(jba::BackendKind::Metal, gpu, t_gpu);
+    const jba::SolverSummary sg = run(backend, gpu, t_gpu);
 
     const double cost_diff = std::abs(sg.final_cost - sc.final_cost) / std::max(sc.final_cost, 1e-300);
     // Scene scale: RMS distance of the camera centres from their mean.
@@ -159,14 +169,14 @@ int main(int argc, char** argv) {
     if (repeat) {
       jba::Problem again = start;
       double t = 0;
-      run(jba::BackendKind::Metal, again, t);
+      run(backend, again, t);
       identical = again.poses == gpu.poses && again.points == gpu.points && again.intrinsics == gpu.intrinsics;
     }
 
     // sparse_schur takes one linear iteration per step when it factorizes, more when
     // the step fell back to conjugate gradients.
     int fallback_steps = 0;
-    if (metal_solver == jba::LinearSolverType::SparseSchur)
+    if (gpu_solver == jba::LinearSolverType::SparseSchur)
       for (const jba::IterationSummary& it : sg.history) fallback_steps += it.linear_iterations > 1;
 
     const bool ok = (!expect_fallback || fallback_steps > 0) && cost_diff <= max_cost &&
@@ -174,11 +184,11 @@ int main(int argc, char** argv) {
                     (max_rotation == 0 || rotation_diff <= max_rotation) && identical &&
                     sg.termination != jba::Termination::Failure;
     std::printf(
-        "{\"problem\": \"%s\", \"cpu_cost\": %.12g, \"metal_cost\": %.12g, \"cost_diff\": %.3g, "
-        "\"centre_diff\": %.3g, \"rotation_diff\": %.3g, \"cpu_iterations\": %d, \"metal_iterations\": %d, "
-        "\"metal_termination\": \"%s\", \"metal_message\": \"%s\", \"repeatable\": %s, \"cpu_seconds\": %.3f, "
-        "\"metal_seconds\": %.3f, \"fallback_steps\": %d, \"ok\": %s}\n",
-        path.c_str(), sc.final_cost, sg.final_cost, cost_diff, centre_diff, rotation_diff, sc.iterations,
+        "{\"problem\": \"%s\", \"backend\": \"%s\", \"cpu_cost\": %.12g, \"gpu_cost\": %.12g, \"cost_diff\": %.3g, "
+        "\"centre_diff\": %.3g, \"rotation_diff\": %.3g, \"cpu_iterations\": %d, \"gpu_iterations\": %d, "
+        "\"gpu_termination\": \"%s\", \"gpu_message\": \"%s\", \"repeatable\": %s, \"cpu_seconds\": %.3f, "
+        "\"gpu_seconds\": %.3f, \"fallback_steps\": %d, \"ok\": %s}\n",
+        path.c_str(), std::string(jba::backend_name(backend)).c_str(), sc.final_cost, sg.final_cost, cost_diff, centre_diff, rotation_diff, sc.iterations,
         sg.iterations, std::string(jba::termination_name(sg.termination)).c_str(), sg.message.c_str(),
         repeat ? (identical ? "true" : "false") : "null", t_cpu, t_gpu, fallback_steps, ok ? "true" : "false");
     return ok ? 0 : 1;

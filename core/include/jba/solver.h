@@ -62,16 +62,17 @@ struct Gauge {
 };
 
 // Where the solve runs (document 03). The CPU backend works in double and is the
-// reference. The Metal backend (Apple GPUs) does the per-observation work and the
-// linear solve in single precision on the GPU, and every decision (costs, accepting
-// a step) on the host in double; its answers agree with the CPU's within
-// single-precision tolerance, not bit for bit.
+// reference. The GPU backends, Metal (Apple GPUs) and CUDA (NVIDIA GPUs), do the
+// per-observation work and the linear solve in single precision on the GPU, and
+// every decision (costs, accepting a step) on the host in double; their answers
+// agree with the CPU's within single-precision tolerance, not bit for bit.
 enum class BackendKind {
   Cpu,
   Metal,
+  Cuda,
 };
 
-std::string_view backend_name(BackendKind kind);  // "cpu", "metal"
+std::string_view backend_name(BackendKind kind);  // "cpu", "metal", "cuda"
 std::optional<BackendKind> backend_from_name(std::string_view name);
 // Whether this build has the backend and the machine can run it.
 bool backend_available(BackendKind kind);
@@ -79,8 +80,8 @@ bool backend_available(BackendKind kind);
 // The linear solver of each step (document 03, strategies A and B). Both eliminate
 // the points by the Schur complement.
 enum class LinearSolverType {
-  // The backend's fastest: SparseSchur on Metal, IterativeSchur on the CPU (the only
-  // one it has). Measured from 16 to 2,000 images (D92).
+  // The backend's fastest: SparseSchur on Metal, IterativeSchur on the CPU and CUDA
+  // (the only one they have so far). Measured from 16 to 2,000 images (D92).
   Auto,
   // A: the reduced camera system applied implicitly, preconditioned conjugate
   // gradients, preconditioner its camera blocks (Ceres's ITERATIVE_SCHUR with

@@ -35,7 +35,7 @@ constexpr const char* kUsage =
     "  --<type>-loss <name>[:<scale>]  the same for relative-prior, global-prior, gravity; default\n"
     "                               the file's loss.* sections, else the library's defaults\n"
     "  --gauge <auto|none>          default auto\n"
-    "  --backend <cpu|metal>        default cpu\n"
+    "  --backend <cpu|metal|cuda>   default cpu\n"
     "  --linear-solver <auto|iterative_schur|sparse_schur>  default auto: sparse_schur on\n"
     "                               metal, iterative_schur on cpu (sparse_schur needs metal)\n"
     "  --threads <n>                default 0 (all hardware threads)\n";

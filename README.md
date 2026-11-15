@@ -5,7 +5,7 @@ for refining reconstructions that come with noisy camera poses from ARKit, ARCor
 or another tracker. Early development: milestones 0 to 4 done, the main use case (`jba::refine`)
 with gravity, the Manhattan prior from line segments, depth at keypoints, covariances
 and export to COLMAP, checked against Ceres and synthetic ground truth, on the CPU and
-on Apple GPUs (Metal).
+on Apple GPUs (Metal); the CUDA backend is milestone 5, in progress.
 The plan is in [docs/](docs/README.md).
 
 ## Build
@@ -100,20 +100,30 @@ build/cli/just-ba solve problem.jba --loss huber:2 --output solved.jba --history
 
 Run `build/cli/just-ba` without arguments for every option.
 
-## Metal backend (Apple GPUs)
+## GPU backends (Metal, CUDA)
 
-On a Mac the solve can run on the GPU: `SolverOptions::backend = BackendKind::Metal`
-in C++, `options.backend = just_ba.Backend.METAL` in Python, or:
+The solve can run on the GPU: `SolverOptions::backend = BackendKind::Metal` (Apple
+GPUs) or `BackendKind::Cuda` (NVIDIA GPUs) in C++, `options.backend =
+just_ba.Backend.METAL` or `CUDA` in Python, or:
 
 ```bash
 build/cli/just-ba solve problem.jba --backend metal
 ```
 
-It works in single precision on the GPU and takes every decision in double on the
-host; its answers agree with the CPU's to single-precision tolerance, not bit for bit
-(document 03, D91). Its default linear solver forms the reduced camera system and
-factorizes it with Accelerate (`sparse_schur`, D92). `ctest -L gpu` compares it with
-the CPU backend on every parity problem.
+Both work in single precision on the GPU and take every decision in double on the
+host; their answers agree with the CPU's to single-precision tolerance, not bit for
+bit (document 03, D91). They share one kernel source and one host side (D96). On
+Metal the default linear solver forms the reduced camera system and factorizes it
+with Accelerate (`sparse_schur`, D92); CUDA has conjugate gradients so far (D97).
+`ctest -L gpu` compares each GPU backend built with the CPU backend on every parity
+problem.
+
+Metal is built by default on macOS. CUDA needs the CUDA toolkit, 13.3 or later, and
+is built for the GPU of the build machine unless `CMAKE_CUDA_ARCHITECTURES` is set:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CUDA=ON
+```
 
 ## Parity with Ceres
 

@@ -10,6 +10,9 @@
 #include "jba/metal/backend.h"
 #include "jba/metal/reprojection.h"
 #endif
+#ifdef JBA_HAVE_CUDA
+#include "jba/cuda/backend.h"
+#endif
 
 namespace jba {
 
@@ -17,12 +20,13 @@ std::string_view backend_name(BackendKind kind) {
   switch (kind) {
     case BackendKind::Cpu: return "cpu";
     case BackendKind::Metal: return "metal";
+    case BackendKind::Cuda: return "cuda";
   }
   return "cpu";
 }
 
 std::optional<BackendKind> backend_from_name(std::string_view name) {
-  for (BackendKind k : {BackendKind::Cpu, BackendKind::Metal})
+  for (BackendKind k : {BackendKind::Cpu, BackendKind::Metal, BackendKind::Cuda})
     if (backend_name(k) == name) return k;
   return std::nullopt;
 }
@@ -33,6 +37,12 @@ bool backend_available(BackendKind kind) {
     case BackendKind::Metal:
 #ifdef JBA_HAVE_METAL
       return metal::available();
+#else
+      return false;
+#endif
+    case BackendKind::Cuda:
+#ifdef JBA_HAVE_CUDA
+      return cuda::available();
 #else
       return false;
 #endif
@@ -93,6 +103,12 @@ SolverSummary solve(Problem& problem, const SolverOptions& requested, const Iter
 #ifdef JBA_HAVE_METAL
   if (options.backend == BackendKind::Metal) {
     metal::MetalBackend backend(problem, options, gauge);
+    return run(backend, problem, options, callback, gauge);
+  }
+#endif
+#ifdef JBA_HAVE_CUDA
+  if (options.backend == BackendKind::Cuda) {
+    cuda::CudaBackend backend(problem, options, gauge);
     return run(backend, problem, options, callback, gauge);
   }
 #endif

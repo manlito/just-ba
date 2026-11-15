@@ -202,7 +202,7 @@ def main():
     ap.add_argument("--max-slowdown", type=float, default=0.10, help="allowed growth of time per iteration")
     ap.add_argument("--repeats", type=int, default=3, help="runs per problem; the best time is kept")
     ap.add_argument("--threads", type=int, default=0, help="solver threads (0: all)")
-    ap.add_argument("--backend", default="cpu", choices=["cpu", "metal"])
+    ap.add_argument("--backend", default="cpu", choices=["cpu", "metal", "cuda"])
     ap.add_argument("--linear-solver", default="auto", choices=["auto", "iterative_schur", "sparse_schur"],
                     help="auto: sparse_schur on metal, iterative_schur on cpu (the library's rule)")
     ap.add_argument("--large", action="store_true", help="add the main-size-range problems (LARGE)")
