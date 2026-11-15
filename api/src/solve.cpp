@@ -100,6 +100,7 @@ SolverSummary run(B& backend, Problem& problem, const SolverOptions& options, co
   // A GPU backend that changed solver (Auto, D102) says so.
   if constexpr (requires { backend.note(); }) {
     summary.linear_solver = backend.linear_solver();
+    summary.linear_solver_fallbacks = backend.fallback_steps();
     if (const std::string note = backend.note(); !note.empty()) summary.message += "; " + note;
   }
   summary.time_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();

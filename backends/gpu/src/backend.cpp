@@ -51,6 +51,7 @@ constexpr float kPivotFloor = 1e-6f;
 constexpr std::size_t kChunkObservations = 32;
 constexpr std::size_t kTileChunk = 1024;  // entries per group of schur_tiles
 constexpr int kResidualResetPeriod = 10;  // Ceres's conjugate gradients default
+constexpr int kMaxFailedFactorizations = 3;  // in a row, for a reason other than the matrix
 // Test hooks (testing::).
 int testing_factor_failures = 0;
 FactorStatus testing_factor_status = FactorStatus::NotPositiveDefinite;
@@ -98,6 +99,8 @@ struct GpuBackend::Impl {
   bool direct = false;
   bool allow_fallback = false;  // Auto: strategy B may give way to A (D102)
   std::string note;             // why it did
+  int fallback_steps = 0;       // sparse_schur steps solved by conjugate gradients instead
+  int failed_in_a_row = 0;      // factorizations that failed for a reason other than the matrix
   std::vector<int> block_at;    // f offset -> camera-side block
   std::vector<std::pair<const cpu::FactorSet*, std::size_t>> fac_index;  // factor -> (set, index in it)
   std::size_t ntiles = 0, ntile_chunks = 0;
@@ -507,7 +510,7 @@ struct GpuBackend::Impl {
     const std::size_t nfb = sys.fblocks.size();
     std::string why;
     if (P.entries > 0xffffffffu || P.nvals > 0xffffffffu || P.eo_floats > 0xffffffffu ||
-        P.nnz > 0x7fffffffu)
+        P.nnz > 0x7fffffffu || kChunkFloats * P.tile_chunks > 0xffffffffu)
       why = "the reduced camera system passes sparse_schur's 32-bit indices (" + std::to_string(P.entries) +
             " tile entries, " + std::to_string(P.nnz) + " non-zeros)";
     else if (P.device_bytes > dev->free_memory() / 10 * 8)
@@ -892,7 +895,17 @@ struct GpuBackend::Impl {
         solver.reset();
         note = "auto: sparse_schur ran out of device memory in the factorization; iterative_schur from there on";
       }
-      if (st != FactorStatus::Solved) iterative = true;
+      // A failure that is not about the matrix (FactorStatus::Failed) falls back
+      // too, but three in a row mean the solver itself is broken (document 15,
+      // finding 4).
+      failed_in_a_row = st == FactorStatus::Failed ? failed_in_a_row + 1 : 0;
+      if (failed_in_a_row >= kMaxFailedFactorizations)
+        throw std::runtime_error(dev->name() + ": sparse_schur's factorization failed " +
+                                 std::to_string(failed_in_a_row) + " times in a row (not a matrix property)");
+      if (st != FactorStatus::Solved) {
+        iterative = true;
+        ++fallback_steps;
+      }
     }
     if (iterative) {
       {
@@ -964,6 +977,8 @@ LinearSolverType GpuBackend::linear_solver() const {
 }
 
 std::string GpuBackend::note() const { return impl_->note; }
+
+int GpuBackend::fallback_steps() const { return impl_->fallback_steps; }
 
 namespace testing {
 void fail_factorizations(int count, FactorStatus status) {

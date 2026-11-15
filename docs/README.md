@@ -82,10 +82,8 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
    invalid steps (a camera block of the reduced system losing definiteness in single
    precision) is studied before milestone 6. Its other two questions are answered
    by D101 and D102.
-4. **From the review of the fixes** (document 15): whether `Auto` on CUDA should take
-   the iterative solver for small dense problems, where it is the faster end to end;
-   and whether the equal-cost comparison with Caspar is redone with its costs
-   recomputed in double or quoted as a lower bound.
+4. **From the review of the fixes** (document 15): its two questions are answered by
+   D105 (`Auto` keeps one rule) and D106 (Caspar compared on its own scale).
 
 ## Reference material
 

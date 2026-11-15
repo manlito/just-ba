@@ -187,8 +187,9 @@ solve, because for small problems set-up is a large share. As built (D101):
 `SolverSummary::time_seconds` is the whole call to `solve()` and `setup_seconds` the
 part before the iterations; the iteration history's times count from the call too.
 `bench/run.py` records the best of several warm calls (the device already started,
-as in a process that solves more than once) and one cold call in a fresh process (the
-device's start-up included, as a command-line run pays it). Competitors are timed the
+as in a process that solves more than once) and one cold call, the first call to
+`solve()` in a fresh process (the device's start-up included; a whole command-line
+run adds about 0.15 s more on CUDA for the process and libraries, D107). Competitors are timed the
 same way: Ceres from building its problem to the end of `Solve()`. BAL problems fall mostly
 in the medium and large classes and have more points per camera than phone sessions,
 so real and synthetic phone-shaped problems carry the headline numbers.

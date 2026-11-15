@@ -185,6 +185,10 @@ struct SolverSummary {
   // device, or the type asked for. A SparseSchur solve that ran out of device memory
   // part way continues with IterativeSchur and reports it here and in the message.
   LinearSolverType linear_solver = LinearSolverType::IterativeSchur;
+  // SparseSchur steps whose factorization failed (a reduced system not positive
+  // definite in single precision, or a solver failure) and that were solved by
+  // conjugate gradients instead (D98).
+  int linear_solver_fallbacks = 0;
   std::vector<IterationSummary> history;  // iteration 0 first
   Gauge gauge;  // freedoms actually held fixed
 };

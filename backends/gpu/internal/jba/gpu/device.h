@@ -87,7 +87,8 @@ struct DoesNotFit : std::runtime_error {
 
 enum class FactorStatus {
   Solved,
-  NotPositiveDefinite,  // or any other failure of the factorization itself: the step falls back
+  NotPositiveDefinite,  // the step falls back to conjugate gradients
+  Failed,               // the solver failed for another reason: the step falls back; repeated, an error
   OutOfMemory,          // the factorization could not get its memory
 };
 

@@ -104,7 +104,9 @@ jobs:
     name: CUDA backend compiled (not run)
     runs-on: ubuntu-24.04
     env:
-      CUDA_VERSION: "13-0"
+      # D52: C++23 in CUDA sources needs CUDA 13.3 or later; the laptop's is 13.4.
+      CUDA_VERSION: "13-4"
+      CUDA_DIR: /usr/local/cuda-13.4
       CUDSS_ARCHIVE: libcudss-linux-x86_64-1.0.0.35_cuda13-archive
     steps:
       - uses: actions/checkout@v4
@@ -114,7 +116,8 @@ jobs:
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update -q
           sudo apt-get install -y -q cuda-nvcc-${CUDA_VERSION} cuda-cudart-dev-${CUDA_VERSION} libcublas-dev-${CUDA_VERSION} cuda-nvrtc-${CUDA_VERSION}
-          echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+          echo "${CUDA_DIR}/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=${CUDA_DIR}/lib64" >> "$GITHUB_ENV"
       - name: Fetch cuDSS
         run: |
           wget -q https://developer.download.nvidia.com/compute/cudss/redist/libcudss/linux-x86_64/${CUDSS_ARCHIVE}.tar.xz
@@ -122,7 +125,7 @@ jobs:
       - name: Configure
         run: >
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CUDA=ON -DJBA_WITH_CUDSS=ON
-          -DCMAKE_CUDA_ARCHITECTURES=75 -Dcudss_DIR=${{ github.workspace }}/${{ env.CUDSS_ARCHIVE }}/lib/cmake/cudss
+          -DCMAKE_CUDA_COMPILER=${CUDA_DIR}/bin/nvcc -DCMAKE_CUDA_ARCHITECTURES=75 -Dcudss_DIR=${{ github.workspace }}/${{ env.CUDSS_ARCHIVE }}/lib/cmake/cudss
       - name: Build
         run: cmake --build build --parallel
       - name: Test (CUDA tests skip without a device)

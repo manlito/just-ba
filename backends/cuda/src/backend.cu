@@ -183,7 +183,7 @@ class CudssSolver final : public gpu::DirectSolver {
     // not get its memory says so.
     const cudssStatus_t fs = cudssExecute(handle_, CUDSS_PHASE_FACTORIZATION, config_, data_, A_, X_, B_);
     if (fs == CUDSS_STATUS_ALLOC_FAILED) return gpu::FactorStatus::OutOfMemory;
-    if (fs != CUDSS_STATUS_SUCCESS) return gpu::FactorStatus::NotPositiveDefinite;
+    if (fs != CUDSS_STATUS_SUCCESS) return gpu::FactorStatus::Failed;
     // Not positive definite: a zero or negative pivot (info), or pivots cuDSS had to
     // replace; the step then falls back to conjugate gradients, as on Metal.
     std::size_t written = 0;
@@ -193,7 +193,7 @@ class CudssSolver final : public gpu::DirectSolver {
     if (info != 0 || npivots != 0) return gpu::FactorStatus::NotPositiveDefinite;
     const cudssStatus_t ss = cudssExecute(handle_, CUDSS_PHASE_SOLVE, config_, data_, A_, X_, B_);
     if (ss == CUDSS_STATUS_ALLOC_FAILED) return gpu::FactorStatus::OutOfMemory;
-    if (ss != CUDSS_STATUS_SUCCESS) return gpu::FactorStatus::NotPositiveDefinite;
+    if (ss != CUDSS_STATUS_SUCCESS) return gpu::FactorStatus::Failed;
     check(cudaMemcpyAsync(rhs.data(), x_, n_ * sizeof(double), cudaMemcpyDeviceToHost, stream_), "cudss download");
     check(cudaStreamSynchronize(stream_), "cudss solve");
     for (double v : rhs)

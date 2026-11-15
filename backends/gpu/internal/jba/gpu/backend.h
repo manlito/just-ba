@@ -60,6 +60,8 @@ class GpuBackend : public Backend {
   // solve should report about a change of solver; empty when there was none.
   LinearSolverType linear_solver() const;
   std::string note() const;
+  // sparse_schur steps that fell back to conjugate gradients (D98).
+  int fallback_steps() const;
 
  private:
   struct Impl;

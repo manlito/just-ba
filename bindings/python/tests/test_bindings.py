@@ -119,6 +119,9 @@ def test_solve_callback_and_cancellation():
     assert s.final_cost < 1e-12 * s.initial_cost
     assert len(seen) == s.iterations + 1 and seen == [h.cost for h in s.history]
     assert len(s.gauge.fixed_images) == 1
+    # Times of the whole call (D101); the history's count from the call too.
+    assert s.time_seconds >= s.history[-1].time_seconds >= s.history[0].time_seconds >= s.setup_seconds > 0
+    assert s.linear_solver == jba.LinearSolver.ITERATIVE_SCHUR and s.linear_solver_fallbacks == 0
 
     p2, _, _ = small_problem()
     perturb(p2)
@@ -413,6 +416,8 @@ def test_cuda_backend():
         s = jba.solve(q, o)
         assert s.termination == jba.Termination.CONVERGENCE, s.message
         assert s.time_seconds >= s.setup_seconds > 0
+        expect = jba.resolve_linear_solver(solver, backend)
+        assert s.linear_solver == expect, (name, s.linear_solver, expect)
         results[name] = s.final_cost
     for name in ("cuda", "cuda_auto"):
         assert abs(results[name] - results["cpu"]) <= 1e-6 * results["cpu"]

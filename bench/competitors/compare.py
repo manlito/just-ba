@@ -15,10 +15,13 @@ call (time, set-up, final cost, cost history with times since the call), and:
     (relative 1e-6), from the histories (D99), and their ratio, cold and warm.
 
 just-ba's times are of the whole call, set-up included (D101). Caspar's time runs from
-"Creating Caspar bundle adjuster" to its termination line ("Caspar: MAX_ITERATIONS" or another status; glog timestamps), its
-history from its per-iteration lines (dt_tot, from its own start, so the equal-cost
-figure credits Caspar as if it had stopped when it got there); its final cost is
-recomputed in double (colmap_cost.py). bae's time runs from its first step, which
+"Creating Caspar bundle adjuster" to its termination line ("Caspar: MAX_ITERATIONS" or
+another status; glog timestamps), in the run whose model is costed (the last of
+three; all three times are kept); its history from that run's per-iteration lines
+(score_best, its single-precision score, and dt_tot, from its own start, so the
+equal-cost figure credits Caspar as if it had stopped when it got there); its final
+cost is recomputed in double (colmap_cost.py). Equal cost on Caspar's side is
+measured on its own scale: the target times its final score over its final cost. bae's time runs from its first step, which
 includes that step's set-up; its history from its per-step lines. Standard library
 only.
 """
@@ -60,7 +63,11 @@ def ratios(comp, cold, warm):
            "end_to_end_warm": comp["time_seconds"] / warm["time_seconds"]}
     for label, ours in (("cold", cold), ("warm", warm)):
         target = max(comp["final_cost"], ours["final_cost"])
-        tc, to = time_to(comp["history"], target), time_to(ours["history"], target)
+        # A competitor whose history is on another scale (Caspar's single-precision
+        # score) is compared on its own scale: the target times its final score over
+        # its final cost, so its own final model is the target when that is the worse.
+        scale = comp.get("score_final", comp["final_cost"]) / comp["final_cost"]
+        tc, to = time_to(comp["history"], target * scale), time_to(ours["history"], target)
         out[f"equal_cost_target_{label}"] = target
         out[f"equal_cost_seconds_{label}"] = [tc, to]
         out[f"equal_cost_{label}"] = tc / to if tc and to else None
@@ -100,15 +107,12 @@ def caspar(d):
         cost_file = os.path.join(d, f"{name}.caspar.cost")
         with open(cost_file) as f:
             final = float(f.read().split()[-1])
-        timed = [r for r in runs if r["time_seconds"]]
-        best = min(timed, key=lambda r: r["time_seconds"])
-        # Caspar's history is its own single-precision score; its last entry is
-        # replaced by the cost recomputed in double, against which just-ba is compared.
-        hist = best["history"]
-        if hist:
-            hist[-1][0] = final
-        comp = {"time_seconds": best["time_seconds"], "times_all_runs": [r["time_seconds"] for r in runs],
-                "final_cost": final, "history": hist}
+        # The run whose model was costed (caspar.sh costs the last run's output):
+        # its time, its history and its cost belong together. Caspar's history is its
+        # own single-precision score, a scale of its own (document 15, finding 3).
+        costed = runs[-1]
+        comp = {"time_seconds": costed["time_seconds"], "times_all_runs": [r["time_seconds"] for r in runs],
+                "final_cost": final, "score_final": costed["history"][-1][0], "history": costed["history"]}
         cold, warm = jba_runs(d, name)
         with open(conv) as f:
             shape = json.load(f)

@@ -5,7 +5,8 @@
 //                 [--max-iterations N] [--function-tolerance X] [--parameter-tolerance X]
 //                 [--max-cost-diff X] [--max-centre-diff X] [--max-rotation-diff X] [--no-repeat]
 //                 [--linear-solver auto|iterative_schur|sparse_schur] [--expect-fallback]
-//                 [--fail-factorizations N] [--fail-factorization-oom] [--fail-direct-setup]
+//                 [--fail-factorizations N] [--fail-solver N] [--fail-factorization-oom]
+//                 [--fail-direct-setup]
 //                 [--expect-solver iterative_schur|sparse_schur] [--expect-error]
 //
 // Solves with the CPU and the GPU backend (default metal) from the same start and
@@ -21,7 +22,8 @@
 // - with --expect-solver, the linear solver the GPU solve reports having used.
 // The fallbacks of D102 are forced through the test hooks of jba/gpu/backend.h:
 // --fail-factorizations N makes the next N factorizations of each GPU solve report a
-// matrix that is not positive definite, --fail-factorization-oom the first one report
+// matrix that is not positive definite, --fail-solver N a failure of the solver
+// itself (three in a row are an error), --fail-factorization-oom the first one report
 // that it ran out of memory, --fail-direct-setup strategy B's set-up throw DoesNotFit.
 // With --expect-error the GPU solve must throw (sparse_schur asked for and not
 // fitting), and nothing else is checked.
@@ -88,7 +90,7 @@ int main(int argc, char** argv) {
     o.parameter_tolerance = 1e-12;
     double max_cost = 1e-6, max_centre = 1e-4, max_rotation = 1e-4;
     bool repeat = true, expect_fallback = false, fail_oom = false, fail_setup = false, expect_error = false;
-    int fail_factorizations = 0;
+    int fail_factorizations = 0, fail_solver = 0;
     std::string expect_solver;
     jba::LinearSolverType gpu_solver = jba::LinearSolverType::IterativeSchur;  // the flag's default
     for (int a = 2; a < argc; ++a) {
@@ -119,6 +121,7 @@ int main(int argc, char** argv) {
       else if (key == "--function-tolerance") o.function_tolerance = std::stod(val);
       else if (key == "--parameter-tolerance") o.parameter_tolerance = std::stod(val);
       else if (key == "--fail-factorizations") fail_factorizations = std::stoi(val);
+      else if (key == "--fail-solver") fail_solver = std::stoi(val);
       else if (key == "--expect-solver") expect_solver = val;
       else if (key == "--max-cost-diff") max_cost = std::stod(val);
       else if (key == "--max-centre-diff") max_centre = std::stod(val);
@@ -150,6 +153,7 @@ int main(int argc, char** argv) {
       opts.linear_solver = kind == jba::BackendKind::Cpu ? jba::LinearSolverType::IterativeSchur : gpu_solver;
       if (kind != jba::BackendKind::Cpu) {  // armed for each GPU solve, so the repeat sees the same
         if (fail_oom) jba::gpu::testing::fail_factorizations(1, jba::gpu::FactorStatus::OutOfMemory);
+        else if (fail_solver > 0) jba::gpu::testing::fail_factorizations(fail_solver, jba::gpu::FactorStatus::Failed);
         else jba::gpu::testing::fail_factorizations(fail_factorizations, jba::gpu::FactorStatus::NotPositiveDefinite);
         jba::gpu::testing::fail_direct_setup(fail_setup);
       }
@@ -209,9 +213,7 @@ int main(int argc, char** argv) {
 
     // sparse_schur takes one linear iteration per step when it factorizes, more when
     // the step fell back to conjugate gradients.
-    int fallback_steps = 0;
-    if (sg.linear_solver == jba::LinearSolverType::SparseSchur)
-      for (const jba::IterationSummary& it : sg.history) fallback_steps += it.linear_iterations > 1;
+    const int fallback_steps = sg.linear_solver_fallbacks;
     const std::string used(jba::linear_solver_name(sg.linear_solver));
 
     const bool ok = (!expect_fallback || fallback_steps > 0) && (expect_solver.empty() || used == expect_solver) &&

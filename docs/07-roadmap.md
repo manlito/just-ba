@@ -427,14 +427,9 @@ CUDA 13.4; the M5 Pro for Metal):
   at equal cost 2.5 to 10.9, cold 1.4 to 9.9.
 - Against COLMAP's Caspar (reprojection-only problems: BAL reduced to SIMPLE_RADIAL,
   walks without priors; Caspar timed from creating its adjuster to its termination,
-  its history from its own iteration clock): end to end 1.3 to 5.5 times faster cold
-  and 1.5 to 14.4 warm, with a lower final cost on every problem; at Caspar's final
-  cost 1.8 to 23 times warm, and cold 2.8 to 6.3 on all but venice-52, where Caspar
-  reaches its cost (368,625, against just-ba's 247,684) in 0.93 of just-ba's cold
-  time. (Document 15, finding 3: that is when Caspar's own single-precision score
-  passes 368,625; its score reads below the cost of its model recomputed in double,
-  by 29 percent on venice-52, so the equal-cost figures against Caspar are lower
-  bounds and this exception is not shown.)
+  its history from its own iteration clock and on its own score scale, D106): end to
+  end 1.3 to 5.5 times faster cold and 1.5 to 14.5 warm, with a lower final cost on
+  every problem; at Caspar's final cost 3.1 to 7.2 times cold and 7.8 to 25 warm.
 - Against bae (BAL, its 20 steps, timed from its first step): end to end 6.2 to 18.8
   times faster cold and 7.1 to 52 warm; at the worse of the two final costs 2.7 to
   15 cold and 2.9 to 73 warm. On venice-52 bae ends lower (245,653 against 271,831).
@@ -457,9 +452,10 @@ CUDA 13.4; the M5 Pro for Metal):
 - Not done: the Windows build and tests on the laptop's Windows; double-precision
   kernels and full-system conjugate gradients (both deferred, D100).
 
-Status: exit met on Linux, venice-52 excepted as above: faster than every competitor
-at equal accuracy on every problem of the small and medium classes, warm and cold,
-but for venice-52 against Caspar cold. The Windows confirmation is outstanding.
+Status: exit met on Linux: faster than every competitor at equal accuracy on every
+problem of the small and medium classes, warm and cold. venice-52 is excepted as
+above in where it ends (bae and Metal end lower), not in speed. The Windows
+confirmation is outstanding.
 
 Reviewed in document 14, whose findings changed the figures above: the first
 version of them timed the iterations only (`time_seconds` then started after the
@@ -472,10 +468,12 @@ backend.
 
 The fixes were reviewed in document 15: they hold, Metal's results are unchanged bit
 for bit but for venice-52 with the iterative solver (D103), and the recorded figures
-above follow from the recorded files. Found: the CI job for CUDA installs CUDA 13.0,
-which cannot compile C++23 (D52), so it will fail when first run; on CUDA `Auto` is
-the slower choice on four of the five small dense synthetic problems, by 1.3 to 1.9
-times warm; and the equal-cost figures against Caspar, as above.
+above follow from the recorded files. Found and fixed since (D105 to D107): the CI
+job for CUDA installed CUDA 13.0, which cannot compile C++23 (D52); the equal-cost
+figures against Caspar compared its single-precision score with a cost in double
+(now on its own scale: the earlier exception for venice-52 is gone); fallback steps
+were not counted. Kept: on CUDA `Auto` is the slower choice on four of the five small
+dense synthetic problems, by 20 to 45 ms (D105).
 
 ## Milestone 6: release to PyPI
 

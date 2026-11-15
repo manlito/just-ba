@@ -98,6 +98,15 @@ if(_gpu_backends)
   include(gpu_cases.cmake)
 endif()
 
+# The CLI's --warm-up and the summary fields of D101 (document 15, finding 8).
+if(TARGET just-ba)
+  add_test(NAME cli_make_problem COMMAND jba_make_problem ${CMAKE_CURRENT_BINARY_DIR}/cli_problem.jba --images 8 --points 200)
+  set_tests_properties(cli_make_problem PROPERTIES FIXTURES_SETUP cli_problem)
+  add_test(NAME cli_warm_up COMMAND just-ba solve ${CMAKE_CURRENT_BINARY_DIR}/cli_problem.jba --warm-up)
+  set_tests_properties(cli_warm_up PROPERTIES FIXTURES_REQUIRED cli_problem
+                       PASS_REGULAR_EXPRESSION "\"setup_seconds\": [0-9.]+, \"warm_up\": true, \"linear_solver_fallbacks\": 0")
+endif()
+
 if(JBA_WITH_CERES)
   add_subdirectory(ceres)
 endif()

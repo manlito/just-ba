@@ -204,14 +204,15 @@ int solve(int argc, char** argv) {
       "\"loss_scale\": %g, \"gauge\": %s, \"backend\": \"%s\", \"linear_solver\": \"%s\", "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
       "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f, "
-      "\"setup_seconds\": %.4f, \"warm_up\": %s, \"cost_by_type\": %s}\n",
+      "\"setup_seconds\": %.4f, \"warm_up\": %s, \"linear_solver_fallbacks\": %d, \"cost_by_type\": %s}\n",
       json_string(input).c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
       p.num_observations(), p.num_relative_priors(), p.num_global_priors(), p.num_gravity_priors(),
       std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, gauge_json(s.gauge).c_str(),
       std::string(jba::backend_name(o.backend)).c_str(),
       std::string(jba::linear_solver_name(s.linear_solver)).c_str(), s.initial_cost, s.final_cost, s.iterations,
       s.accepted_steps, s.linear_iterations, std::string(jba::termination_name(s.termination)).c_str(),
-      json_string(s.message).c_str(), s.time_seconds, s.setup_seconds, warm_up ? "true" : "false", by_type.c_str());
+      json_string(s.message).c_str(), s.time_seconds, s.setup_seconds, warm_up ? "true" : "false",
+      s.linear_solver_fallbacks, by_type.c_str());
   return s.termination == jba::Termination::Failure ? 1 : 0;
 }
 

@@ -65,8 +65,9 @@ Caspar's per-iteration `score_best` and `dt_tot` (its own iteration clock, which
 starts after its set-up, so Caspar is credited as if it had stopped as soon as it
 reached its final cost, and against just-ba's cold call, whose clock includes the
 device's start-up, the comparison leans towards Caspar), and bae's per-step costs.
-Caspar's `score_best` is its own single-precision score, and on BAL it reads below
-the cost of the same model recomputed in double (by 0.05 to 1.4 percent, and 29
-percent on venice-52), which is the target: Caspar is credited from the iteration
-where its score passes the target, earlier than its model was that good, so the
-equal-cost ratios against Caspar are lower bounds (document 15, finding 3).
+Caspar's `score_best` is its own single-precision score, and it reads below the cost
+of the same model recomputed in double (by 0.05 to 1.4 percent on BAL, 29 percent on
+venice-52), so Caspar's side is measured on its own scale: the target times its final
+score over its final cost, which makes the target exactly its final score when its
+model is the worse (D106; document 15, finding 3). Caspar's time, history and cost
+come from the run whose model was costed, the last of three.

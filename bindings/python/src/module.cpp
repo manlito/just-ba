@@ -224,6 +224,8 @@ NB_MODULE(_core, m) {
       .value("SPARSE_SCHUR", jba::LinearSolverType::SparseSchur);
   m.def("backend_available", &jba::backend_available, "kind"_a,
         "Whether this build has the backend and the machine can run it.");
+  m.def("resolve_linear_solver", &jba::resolve_linear_solver, "type"_a, "backend"_a,
+        "The solver AUTO stands for on a backend before the problem is seen; other types as they are.");
   nb::enum_<jba::Termination>(m, "Termination")
       .value("CONVERGENCE", jba::Termination::Convergence)
       .value("NO_CONVERGENCE", jba::Termination::NoConvergence)
@@ -447,6 +449,8 @@ NB_MODULE(_core, m) {
       .def_ro("time_seconds", &jba::SolverSummary::time_seconds, "Wall time of the whole call, set-up included.")
       .def_ro("setup_seconds", &jba::SolverSummary::setup_seconds, "The part of it before the iterations.")
       .def_ro("linear_solver", &jba::SolverSummary::linear_solver, "The linear solver the steps used.")
+      .def_ro("linear_solver_fallbacks", &jba::SolverSummary::linear_solver_fallbacks,
+              "sparse_schur steps solved by conjugate gradients instead.")
       .def_ro("history", &jba::SolverSummary::history)
       .def_ro("gauge", &jba::SolverSummary::gauge)
       .def("__repr__", [](const jba::SolverSummary& s) {

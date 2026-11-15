@@ -78,3 +78,5 @@ python3 bench/run.py --build <build> --backend cuda --huge --ceres <ceres 2.2.0 
 ```
 
 Baselines recorded before D101 (times without the set-up) are refused by `--compare`.
+The CUDA baselines were recorded from the working tree of `6eb33fb` (marked dirty:
+the same code with a temporary debug print to stderr).

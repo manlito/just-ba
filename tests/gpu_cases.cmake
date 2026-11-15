@@ -87,6 +87,10 @@ jba_gpu_case(bal_shape "--model RADIAL --images 30 --points 2000 --track-length 
 # sparse_schur for iterative_schur; asked for explicitly, a set-up that does not fit
 # is an error.
 jba_gpu_sparse_check(sparse_forced_fallback pinhole "--linear-solver sparse_schur --fail-factorizations 3 --expect-fallback")
+# A failure of the solver itself (not of the matrix) falls back too; three in a row
+# are an error (document 15, finding 4).
+jba_gpu_sparse_check(sparse_solver_failure pinhole "--linear-solver sparse_schur --fail-solver 2 --expect-fallback")
+jba_gpu_sparse_check(sparse_solver_failures pinhole "--linear-solver sparse_schur --fail-solver 3 --expect-error")
 jba_gpu_sparse_check(auto_sparse pinhole "--linear-solver auto --expect-solver sparse_schur")
 jba_gpu_sparse_check(auto_factorization_oom pinhole "--linear-solver auto --fail-factorization-oom --expect-solver iterative_schur")
 jba_gpu_sparse_check(auto_setup_oom pinhole "--linear-solver auto --fail-direct-setup --expect-solver iterative_schur")
