@@ -58,7 +58,9 @@ jobs:
           # laptop's and the CI job's.
           - { os: ubuntu-24.04, variant: cu12, cuda: "12.9.1" }
           - { os: ubuntu-24.04, variant: cu13, cuda: "13.4.3" }
-          - { os: windows-2025, variant: cu12, cuda: "12.9.1" }
+          # CUDA 12.9's nvcc accepts Visual Studio 2017 to 2022 only; the runner's
+          # default is Visual Studio 2026 (first release run), so take its 2022.
+          - { os: windows-2025, variant: cu12, cuda: "12.9.1", vs: "2022" }
           - { os: windows-2025, variant: cu13, cuda: "13.4.3" }
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +98,7 @@ jobs:
         if: matrix.variant != 'cpu' && runner.os == 'Windows'
         with:
           arch: x64
+          vsversion: ${{ matrix.vs }}
 
       - uses: pypa/cibuildwheel@v4.3.5
         with:
