@@ -13,6 +13,7 @@
 #include "check.h"
 #include "jba/priors.h"
 #include "jba/problem_io.h"
+#include "jba/solver.h"
 #include "synthetic.h"
 
 namespace fs = std::filesystem;
@@ -46,7 +47,8 @@ bool same(const jba::Problem& a, const jba::Problem& b) {
          a.rel_images == b.rel_images && a.rel_pose == b.rel_pose && a.rel_sigma == b.rel_sigma &&
          a.rel_sqrt_info == b.rel_sqrt_info && a.glob_image == b.glob_image && a.glob_set == b.glob_set &&
          a.glob_pose == b.glob_pose && a.glob_sigma == b.glob_sigma && a.glob_sqrt_info == b.glob_sqrt_info &&
-         a.set_relation == b.set_relation && a.set_transform == b.set_transform && extra_same;
+         a.set_relation == b.set_relation && a.set_transform == b.set_transform && a.loss_type == b.loss_type &&
+         a.loss_scale == b.loss_scale && extra_same;
 }
 
 }  // namespace
@@ -88,6 +90,50 @@ int main() {
     bad = p;
     bad.glob_sigma[0] = 0;
     EXPECT(!jba::validate(bad).empty());
+  }
+
+  // Losses stored with the problem (loss.* sections, D80): round trip, the options
+  // they produce, and validation.
+  {
+    auto p = jba_test::random_problem(jba::CameraModel::Pinhole, 4, 20, 3);
+    jba::SolverOptions o;
+    o.loss = {jba::LossType::Cauchy, 2.0};
+    o.relative_prior_loss = {jba::LossType::Huber, 4.0};
+    o.global_prior_loss = {jba::LossType::None, 1.0};
+    jba::store_losses(p, o);
+    EXPECT(p.loss_type.size() == jba::kNumLossTypes && p.loss_scale[0] == 2.0);
+    const auto path = temp_path("losses.jba");
+    jba::write_problem(path, p);
+    const auto q = jba::read_problem(path);
+    EXPECT(same(p, q) && q.extra.empty());
+    fs::remove(path);
+    const auto back = jba::with_problem_losses(jba::SolverOptions{}, q);
+    EXPECT(back.loss.type == jba::LossType::Cauchy && back.loss.scale == 2.0);
+    EXPECT(back.relative_prior_loss.type == jba::LossType::Huber && back.relative_prior_loss.scale == 4.0);
+    EXPECT(back.global_prior_loss.type == jba::LossType::None);
+    // Fewer entries than residual types: the rest keep the options' values.
+    auto one = q;
+    one.loss_type.resize(1);
+    one.loss_scale.resize(1);
+    const auto partial = jba::with_problem_losses(jba::SolverOptions{}, one);
+    EXPECT(partial.loss.type == jba::LossType::Cauchy &&
+           partial.relative_prior_loss.type == jba::SolverOptions{}.relative_prior_loss.type);
+    // No sections: the options are unchanged.
+    EXPECT(jba::with_problem_losses(o, jba::Problem{}).loss.scale == 2.0);
+
+    auto bad = q;
+    bad.loss_scale.pop_back();
+    EXPECT(!jba::validate(bad).empty());
+    bad = q;
+    bad.loss_type[1] = 9;
+    EXPECT(!jba::validate(bad).empty());
+    bad = q;
+    bad.loss_scale[0] = 0;
+    EXPECT(!jba::validate(bad).empty());
+    bad = q;
+    bad.loss_type.push_back(0);
+    bad.loss_scale.push_back(1);
+    EXPECT(!jba::validate(bad).empty());  // more than there are residual types
   }
 
   // Minimal problem: required sections only.

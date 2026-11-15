@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -74,6 +75,7 @@ int main(int argc, char** argv) {
     std::string linear_name = "iterative_schur";
     bool check_parameters = false, verbose = false;
     int ceres_threads = 1;
+    std::optional<jba::Loss> loss_flags[jba::kNumLossTypes];  // override the file's loss.* sections
     double max_cost_diff = 1e-6, max_iteration_ratio = 1.5, max_centre_diff = 1e-6, max_rotation_diff = 1e-6;
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
@@ -87,19 +89,18 @@ int main(int argc, char** argv) {
       }
       if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
       const std::string val = argv[++a];
-      auto parse_loss = [&](jba::Loss& loss) {
+      auto parse_loss = [&](std::optional<jba::Loss>& loss) {
         const auto colon = val.find(':');
         const auto type = jba::loss_from_name(val.substr(0, colon));
         if (!type) throw std::invalid_argument("unknown loss " + val);
-        loss.type = *type;
-        if (colon != std::string::npos) loss.scale = std::stod(val.substr(colon + 1));
+        loss = jba::Loss{*type, colon != std::string::npos ? std::stod(val.substr(colon + 1)) : 1.0};
       };
       if (key == "--loss") {
-        parse_loss(o.loss);
+        parse_loss(loss_flags[jba::kLossReprojection]);
       } else if (key == "--relative-prior-loss") {
-        parse_loss(o.relative_prior_loss);
+        parse_loss(loss_flags[jba::kLossRelativePrior]);
       } else if (key == "--global-prior-loss") {
-        parse_loss(o.global_prior_loss);
+        parse_loss(loss_flags[jba::kLossGlobalPrior]);
       } else if (key == "--gauge") {
         o.gauge = val == "none" ? jba::GaugeMode::None : jba::GaugeMode::Auto;
       } else if (key == "--max-iterations") {
@@ -133,6 +134,10 @@ int main(int argc, char** argv) {
     }
 
     const jba::Problem initial = ends_with(input, ".txt") ? jba::read_bal(input) : jba::read_problem(input);
+    o = jba::with_problem_losses(o, initial);  // D80
+    if (loss_flags[jba::kLossReprojection]) o.loss = *loss_flags[jba::kLossReprojection];
+    if (loss_flags[jba::kLossRelativePrior]) o.relative_prior_loss = *loss_flags[jba::kLossRelativePrior];
+    if (loss_flags[jba::kLossGlobalPrior]) o.global_prior_loss = *loss_flags[jba::kLossGlobalPrior];
     jba::Problem ours = initial, ref = initial;
     auto copts = jba_ceres::options_from(o, initial, linear);
     copts.num_threads = ceres_threads;

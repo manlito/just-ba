@@ -247,6 +247,10 @@ NB_MODULE(_core, m) {
   array_field(problem, "glob_sqrt_info", &jba::Problem::glob_sqrt_info, {6, 6}, "(G, 6, 6) whitening matrices.");
   array_field(problem, "set_transform", &jba::Problem::set_transform, {8},
               "(S, 8) qw qx qy qz tx ty tz s per prior set: X_working = s R X_set + t.", true);
+  array_field(problem, "loss_type", &jba::Problem::loss_type, {},
+              "Stored losses (loss.* sections): LossType values for reprojection, relative prior, global prior. "
+              "Empty: the solver options decide. Applied with with_problem_losses.");
+  array_field(problem, "loss_scale", &jba::Problem::loss_scale, {}, "Scale of each stored loss.");
   problem.def_prop_rw(
       "set_relation",
       [](const jba::Problem& p) {
@@ -372,6 +376,10 @@ NB_MODULE(_core, m) {
       "problem"_a, "options"_a = jba::SolverOptions{}, "callback"_a = nb::none(),
       "Solves in place on the CPU. callback(IterationSummary) is called after every iteration; "
       "returning False stops the solve.");
+  m.def("with_problem_losses", &jba::with_problem_losses, "options"_a, "problem"_a,
+        "A copy of the options with the problem's stored losses (loss_type, loss_scale) in place of theirs.");
+  m.def("store_losses", &jba::store_losses, "problem"_a, "options"_a,
+        "Stores the options' three losses in the problem, written as the loss.* sections.");
   m.def("choose_gauge", &jba::choose_gauge, "problem"_a, "The gauge GaugeMode.AUTO would hold fixed.");
 
   nb::class_<jba::ResidualReport>(m, "ResidualReport", "Per-residual diagnostics at the current parameters.")

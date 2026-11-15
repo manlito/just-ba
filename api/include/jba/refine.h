@@ -54,7 +54,8 @@ struct RefineOptions {
 };
 
 struct RefineResult {
-  // Solved problem: poses, points, inlier observations, priors, set transforms.
+  // Solved problem: poses, points, inlier observations, priors, set transforms, and
+  // the losses refine solved with (loss.* sections when written).
   Problem problem;
   std::vector<std::int32_t> obs_keypoint;  // keypoint (in its image) of each observation
   std::vector<std::int32_t> group;         // per image, from initialize_poses; -1 left out (no prior places it)

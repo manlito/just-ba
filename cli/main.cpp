@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -29,7 +30,8 @@ constexpr const char* kUsage =
     "  --function-tolerance <x>     default 1e-6\n"
     "  --gradient-tolerance <x>     default 1e-10\n"
     "  --parameter-tolerance <x>    default 1e-8\n"
-    "  --loss <name>[:<scale>]      none, huber, cauchy, geman_mcclure; default none, scale 1\n"
+    "  --loss <name>[:<scale>]      none, huber, cauchy, geman_mcclure, for reprojection; default\n"
+    "                               the file's loss.* sections, else none, scale 1\n"
     "  --gauge <auto|none>          default auto\n"
     "  --threads <n>                default 0 (all hardware threads)\n";
 
@@ -111,6 +113,7 @@ int solve(int argc, char** argv) {
   const std::string input = argv[2];
   std::string output, history;
   jba::SolverOptions o;
+  std::optional<jba::Loss> loss_flag;  // overrides the file's reprojection loss
   for (int a = 3; a < argc; a += 2) {
     const std::string key = argv[a];
     if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
@@ -130,15 +133,17 @@ int solve(int argc, char** argv) {
       const auto colon = val.find(':');
       const auto type = jba::loss_from_name(val.substr(0, colon));
       if (!type) throw std::invalid_argument("unknown loss " + val);
-      o.loss.type = *type;
-      if (colon != std::string::npos) o.loss.scale = std::stod(val.substr(colon + 1));
+      loss_flag = jba::Loss{*type, colon != std::string::npos ? std::stod(val.substr(colon + 1)) : 1.0};
     } else {
       throw std::invalid_argument("unknown option " + key);
     }
   }
 
   jba::Problem p = load(input);
+  o = jba::with_problem_losses(o, p);  // loss.* sections, if any (D80)
+  if (loss_flag) o.loss = *loss_flag;
   const jba::SolverSummary s = jba::solve(p, o);
+  jba::store_losses(p, o);  // the output records the losses it was solved with
   if (!output.empty()) jba::write_problem(output, p);
   if (!history.empty()) write_history(history, s);
   std::printf(

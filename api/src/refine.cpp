@@ -239,6 +239,7 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   // Report prior indices in the caller's numbering.
   for (auto& k : out.report.downweighted_relative) k = rel_index[static_cast<std::size_t>(k)];
   for (auto& k : out.report.downweighted_global) k = glob_index[static_cast<std::size_t>(k)];
+  store_losses(problem, o.solver);  // so the solved problem replays with them (D80)
   out.problem = std::move(problem);
   out.obs_keypoint = std::move(obs_keypoint);
   out.relative_prior_index = std::move(rel_index);

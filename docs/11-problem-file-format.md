@@ -86,12 +86,27 @@ Pose priors (milestone 2; all optional). `R` relative priors, `G` global priors,
 | `prior.set.transform` | f64 | [S, 8] | no | qw, qx, qy, qz, tx, ty, tz, s with X_working = s R X_set + t. Starting value, and the estimate after a solve. Absent: identity |
 
 Without sigma or sqrt_info a prior gets the solver's default weights (D67).
+
+Robust losses (milestone 2; optional, D80). `T` is at most the number of residual
+types, indexed in this order: 0 reprojection, 1 relative prior, 2 global prior.
+Types appended later take the next indices.
+
+| Name | dtype | Shape | Required | Meaning |
+|---|---|---|---|---|
+| `loss.type` | i32 | [T] | with `loss.scale` | 0 none, 1 Huber, 2 Cauchy, 3 Geman-McClure (definitions in document 02) |
+| `loss.scale` | f64 | [T] | with `loss.type` | Scale a of each loss, in whitened units (pixels for reprojection, standard deviations for priors) |
+
+Absent, or for types past T, the solver options decide. The CLI and the parity tool
+start from these and let their flags override them; `refine` writes the losses it
+solved with; the library's `solve` takes its losses from its options, and
+`with_problem_losses` copies these in.
 Residual definitions: decisions D64 and D65.
 
 Validation: index ranges, array lengths, finite values, positive sigmas (prior
-sigmas may be +inf), and quaternion norms within 1e-9 of one. A relative prior may
-not tie an image to itself; a set that is the working frame must have the identity
-transform, and a rigid set scale 1.
+sigmas may be +inf), known loss types with positive finite scales, and quaternion
+norms within 1e-9 of one. A relative prior may not tie an image to itself; a set
+that is the working frame must have the identity transform, and a rigid set scale
+1.
 
 Normally a session has one intrinsics block (D11). Several blocks, all of the
 model in `camera.model`, are allowed so that BAL problems, which have one camera
@@ -106,7 +121,6 @@ Reserved names, added in the milestones that need them. Each will be optional.
 | `image.gravity` | 3 | Gravity direction per image |
 | `depth.*` | 3 | Depth at keypoints, confidence, per-image scale and offset |
 | `lines.*` | 3 | Line segments per image for the Manhattan prior |
-| `loss.*` | 2 | Robust loss per residual type. Planned for milestone 1 and not built; until then the loss is a solver option |
 
 ## BAL conversion
 

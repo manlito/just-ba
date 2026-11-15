@@ -184,7 +184,7 @@ def test_build_tracks():
         assert len(ids) == 1
 
 
-def test_refine_end_to_end():
+def test_refine_end_to_end(tmp_path):
     sc = scene.room()
     truth, tracked = sc["poses"], sc["tracked"]
     n = truth.shape[0]
@@ -211,6 +211,13 @@ def test_refine_end_to_end():
         np.testing.assert_array_equal(r.problem.obs_xy[k], sc["keypoints"][i][r.obs_keypoint[k]])
     assert len(r.report.downweighted_relative) == 0
     assert all(sm.termination == jba.Termination.CONVERGENCE for sm in r.summaries)
+    # The solved problem carries the losses refine used (loss.* sections, D80).
+    np.testing.assert_array_equal(r.problem.loss_type, [jba.LossType.CAUCHY.value] * 3)
+    np.testing.assert_array_equal(r.problem.loss_scale, [2.0, 3.0, 3.0])
+    path = str(tmp_path / "solved.jba")
+    jba.write_problem(path, r.problem)
+    o = jba.with_problem_losses(jba.SolverOptions(), jba.read_problem(path))
+    assert o.loss.type == jba.LossType.CAUCHY and o.loss.scale == 2.0
 
     with pytest.raises(ValueError):
         jba.refine(s, sc["keypoints"])  # neither matches nor tracks

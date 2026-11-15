@@ -181,4 +181,34 @@ Gauge choose_gauge(const Problem& p) {
   return g;
 }
 
+namespace {
+Loss* loss_slot(SolverOptions& o, std::size_t t) {
+  switch (t) {
+    case kLossReprojection: return &o.loss;
+    case kLossRelativePrior: return &o.relative_prior_loss;
+    case kLossGlobalPrior: return &o.global_prior_loss;
+    default: return nullptr;
+  }
+}
+}  // namespace
+
+SolverOptions with_problem_losses(SolverOptions options, const Problem& problem) {
+  const std::size_t n = std::min(problem.loss_type.size(), problem.loss_scale.size());
+  for (std::size_t t = 0; t < n; ++t) {
+    if (Loss* l = loss_slot(options, t)) *l = {static_cast<LossType>(problem.loss_type[t]), problem.loss_scale[t]};
+  }
+  return options;
+}
+
+void store_losses(Problem& problem, const SolverOptions& options) {
+  SolverOptions o = options;
+  problem.loss_type.assign(kNumLossTypes, 0);
+  problem.loss_scale.assign(kNumLossTypes, 1.0);
+  for (std::size_t t = 0; t < kNumLossTypes; ++t) {
+    const Loss* l = loss_slot(o, t);
+    problem.loss_type[t] = static_cast<std::int32_t>(l->type);
+    problem.loss_scale[t] = l->scale;
+  }
+}
+
 }  // namespace jba

@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "jba/geometry.h"
+#include "jba/loss.h"
 
 static_assert(std::endian::native == std::endian::little,
               "the problem file format is little-endian; big-endian hosts are not supported");
@@ -304,6 +305,14 @@ std::string validate(const Problem& p) {
     if (!unit_quaternion(&p.poses[7 * i])) return "image " + std::to_string(i) + " has a non-unit quaternion";
   }
   if (auto err = validate_priors(p); !err.empty()) return err;
+  if (p.loss_type.size() != p.loss_scale.size()) return "loss_type and loss_scale must have the same length";
+  if (p.loss_type.size() > kNumLossTypes) return "more losses than residual types";
+  for (std::size_t t = 0; t < p.loss_type.size(); ++t) {
+    if (p.loss_type[t] < 0 || p.loss_type[t] > static_cast<std::int32_t>(LossType::GemanMcClure))
+      return "loss " + std::to_string(t) + " has an unknown type";
+    if (!(p.loss_scale[t] > 0 && std::isfinite(p.loss_scale[t])))
+      return "loss " + std::to_string(t) + " has a scale that is not positive and finite";
+  }
   for (std::size_t k = 0; k < n_obs; ++k) {
     if (p.obs_image[k] < 0 || static_cast<std::size_t>(p.obs_image[k]) >= n_img)
       return "observation " + std::to_string(k) + " refers to a missing image";
@@ -353,6 +362,10 @@ void write_problem(const std::string& path, const Problem& p) {
     w.array("prior.set.relation", rel, 1);
   }
   if (!p.set_transform.empty()) w.array("prior.set.transform", p.set_transform, 8);
+  if (!p.loss_type.empty()) {
+    w.array("loss.type", p.loss_type, 1);
+    w.array("loss.scale", p.loss_scale, 1);
+  }
   // A name may appear once (document 11); the reader refuses anything else.
   static constexpr std::string_view kKnown[] = {
       "camera.model",          "intrinsics",          "intrinsics.free",       "image.pose",
@@ -360,7 +373,8 @@ void write_problem(const std::string& path, const Problem& p) {
       "obs.image",             "obs.point",           "obs.xy",                "obs.sigma",
       "prior.relative.images", "prior.relative.pose", "prior.relative.sigma",  "prior.relative.sqrt_info",
       "prior.global.image",    "prior.global.set",    "prior.global.pose",     "prior.global.sigma",
-      "prior.global.sqrt_info", "prior.set.relation", "prior.set.transform"};
+      "prior.global.sqrt_info", "prior.set.relation", "prior.set.transform", "loss.type",
+      "loss.scale"};
   for (std::size_t i = 0; i < p.extra.size(); ++i) {
     const auto& s = p.extra[i];
     bool repeated = std::find(std::begin(kKnown), std::end(kKnown), s.name) != std::end(kKnown);
@@ -451,6 +465,8 @@ Problem read_problem(const std::string& path) {
       for (std::size_t a = 0; a < rel.size(); ++a) p.set_relation[a] = static_cast<FrameRelation>(rel[a]);
     }
     else if (n == "prior.set.transform") take(path, s, 8, p.set_transform);
+    else if (n == "loss.type") take(path, s, 1, p.loss_type);
+    else if (n == "loss.scale") take(path, s, 1, p.loss_scale);
     else p.extra.push_back(std::move(s));
   }
   if (!have_intr) fail(path, "missing section 'intrinsics'");

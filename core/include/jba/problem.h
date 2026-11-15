@@ -83,6 +83,15 @@ struct Problem {
   // solve. Empty means the identity for every set.
   std::vector<double> set_transform;
 
+  // Robust losses stored with the problem (loss.* sections, D80), one per residual
+  // type in the order reprojection, relative prior, global prior (kLossReprojection
+  // and so on). loss_type holds LossType values; loss_scale the scale a. Empty, or
+  // shorter than the number of types, means the solver options decide for the rest.
+  // solve() takes its losses from the options; with_problem_losses (solver.h)
+  // copies these in.
+  std::vector<std::int32_t> loss_type;
+  std::vector<double> loss_scale;
+
   std::vector<RawSection> extra;
 
   std::size_t num_images() const { return poses.size() / 7; }
@@ -104,6 +113,9 @@ struct Problem {
     return set_relation.empty() ? FrameRelation::Identity : set_relation[s];
   }
 };
+
+// Positions in Problem::loss_type and loss_scale.
+inline constexpr std::size_t kLossReprojection = 0, kLossRelativePrior = 1, kLossGlobalPrior = 2, kNumLossTypes = 3;
 
 // Checks sizes and index ranges. Returns an empty string when valid, otherwise a
 // description of the first problem found.

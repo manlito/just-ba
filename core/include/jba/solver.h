@@ -120,6 +120,12 @@ using IterationCallback = std::function<bool(const IterationSummary&)>;
 // apply the same one.
 Gauge choose_gauge(const Problem& problem);
 
+// The losses stored with a problem (Problem::loss_type, loss.* sections; D80) in
+// place of the options' own, for the residual types the problem names.
+SolverOptions with_problem_losses(SolverOptions options, const Problem& problem);
+// Stores the options' losses in the problem, one per residual type.
+void store_losses(Problem& problem, const SolverOptions& options);
+
 // Solves in place on the CPU. Throws std::invalid_argument for an invalid problem.
 SolverSummary solve(Problem& problem, const SolverOptions& options = {},
                     const IterationCallback& callback = {});
