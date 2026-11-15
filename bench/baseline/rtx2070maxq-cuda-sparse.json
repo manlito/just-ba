@@ -1,0 +1,367 @@
+{
+ "commit": "81f0296",
+ "machine": {
+  "system": "Linux",
+  "release": "7.3.4-1-cachyos",
+  "machine": "x86_64",
+  "cpus": 12,
+  "cpu": "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz",
+  "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design, 8 GB, CUDA 13.4, cuDSS 1.0.0"
+ },
+ "backend": "cuda",
+ "linear_solver": "sparse_schur",
+ "threads": 0,
+ "repeats": 3,
+ "problems": {
+  "problem-49-7776-pre": {
+   "images": 49,
+   "points": 7776,
+   "observations": 31843,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 850912.4606808365,
+   "final_cost": 13344.705560622211,
+   "iterations": 45,
+   "accepted_steps": 45,
+   "linear_iterations": 46,
+   "termination": "convergence",
+   "time_seconds": 0.28,
+   "time_per_iteration": 0.006222222222222223,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 30,
+    "final_cost": 13344.328061214319,
+    "termination": "CONVERGENCE",
+    "time_seconds": 1.1101
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 30,
+    "final_cost": 13344.328061214472,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.7368
+   }
+  },
+  "problem-21-11315-pre": {
+   "images": 21,
+   "points": 11315,
+   "observations": 36455,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 4413239.314432231,
+   "final_cost": 30378.65588518983,
+   "iterations": 11,
+   "accepted_steps": 11,
+   "linear_iterations": 12,
+   "termination": "convergence",
+   "time_seconds": 0.0732,
+   "time_per_iteration": 0.006654545454545455,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 9,
+    "final_cost": 30378.654458568588,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.3724
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 9,
+    "final_cost": 30378.654458568635,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.4371
+   }
+  },
+  "problem-16-22106-pre": {
+   "images": 16,
+   "points": 22106,
+   "observations": 83718,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 4185659.518249677,
+   "final_cost": 18033.907197194847,
+   "iterations": 12,
+   "accepted_steps": 12,
+   "linear_iterations": 13,
+   "termination": "convergence",
+   "time_seconds": 0.0945,
+   "time_per_iteration": 0.007875,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 12,
+    "final_cost": 18033.905020534476,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.9101
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 12,
+    "final_cost": 18033.905020534472,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.837
+   }
+  },
+  "problem-52-64053-pre": {
+   "images": 52,
+   "points": 64053,
+   "observations": 347173,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 11152062.772763021,
+   "final_cost": 270448.40974768135,
+   "iterations": 50,
+   "accepted_steps": 28,
+   "linear_iterations": 39,
+   "termination": "no_convergence",
+   "time_seconds": 1.5468,
+   "time_per_iteration": 0.030935999999999998,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 50,
+    "final_cost": 261812.94978433027,
+    "termination": "NO_CONVERGENCE",
+    "time_seconds": 14.8653
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 50,
+    "final_cost": 261817.2763912886,
+    "termination": "NO_CONVERGENCE",
+    "time_seconds": 12.7179
+   }
+  },
+  "problem-93-61203-pre": {
+   "images": 93,
+   "points": 61203,
+   "observations": 287451,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 5646900.249339148,
+   "final_cost": 145545.13978620872,
+   "iterations": 10,
+   "accepted_steps": 10,
+   "linear_iterations": 11,
+   "termination": "convergence",
+   "time_seconds": 0.3407,
+   "time_per_iteration": 0.03407,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 8,
+    "final_cost": 145545.0681223734,
+    "termination": "CONVERGENCE",
+    "time_seconds": 2.6879
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 8,
+    "final_cost": 145545.0681223736,
+    "termination": "CONVERGENCE",
+    "time_seconds": 3.1105
+   }
+  },
+  "synthetic-pinhole-50": {
+   "images": 50,
+   "points": 4000,
+   "observations": 200000,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 1443045.6951701592,
+   "final_cost": 48399.17160816485,
+   "iterations": 4,
+   "accepted_steps": 4,
+   "linear_iterations": 5,
+   "termination": "convergence",
+   "time_seconds": 0.0681,
+   "time_per_iteration": 0.017025,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 4,
+    "final_cost": 48399.17160863969,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.9447
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 4,
+    "final_cost": 48399.17160863969,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.9869
+   }
+  },
+  "synthetic-radial-free-30": {
+   "images": 30,
+   "points": 3000,
+   "observations": 90000,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 1742174.1227471442,
+   "final_cost": 21289.755527076468,
+   "iterations": 14,
+   "accepted_steps": 14,
+   "linear_iterations": 15,
+   "termination": "convergence",
+   "time_seconds": 0.3593,
+   "time_per_iteration": 0.025664285714285716,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 14,
+    "final_cost": 21289.754445361177,
+    "termination": "CONVERGENCE",
+    "time_seconds": 1.2445
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 14,
+    "final_cost": 21289.754445361228,
+    "termination": "CONVERGENCE",
+    "time_seconds": 1.2318
+   }
+  },
+  "synthetic-relative-priors-50": {
+   "images": 50,
+   "points": 4000,
+   "observations": 200000,
+   "relative_priors": 150,
+   "global_priors": 0,
+   "initial_cost": 1421976.2219551513,
+   "final_cost": 48787.1853915321,
+   "iterations": 3,
+   "accepted_steps": 3,
+   "linear_iterations": 4,
+   "termination": "convergence",
+   "time_seconds": 0.0591,
+   "time_per_iteration": 0.0197,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 3,
+    "final_cost": 48787.18536125401,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.8285
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 3,
+    "final_cost": 48787.18536125406,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.878
+   }
+  },
+  "synthetic-global-similarity-50": {
+   "images": 50,
+   "points": 4000,
+   "observations": 200000,
+   "relative_priors": 100,
+   "global_priors": 50,
+   "initial_cost": 1424692.7548414855,
+   "final_cost": 48622.62269083852,
+   "iterations": 3,
+   "accepted_steps": 3,
+   "linear_iterations": 4,
+   "termination": "convergence",
+   "time_seconds": 0.0573,
+   "time_per_iteration": 0.0191,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 3,
+    "final_cost": 48622.622756130375,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.7975
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 3,
+    "final_cost": 48622.62275613033,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.8512
+   }
+  },
+  "synthetic-opencv-30": {
+   "images": 30,
+   "points": 3000,
+   "observations": 90000,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 656932.9373788263,
+   "final_cost": 21379.577026472714,
+   "iterations": 2,
+   "accepted_steps": 2,
+   "linear_iterations": 3,
+   "termination": "convergence",
+   "time_seconds": 0.03,
+   "time_per_iteration": 0.015,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 2,
+    "final_cost": 21379.577025300372,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.2667
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 2,
+    "final_cost": 21379.577025300357,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.4103
+   }
+  },
+  "synthetic-walk-500": {
+   "images": 500,
+   "points": 60000,
+   "observations": 480000,
+   "relative_priors": 1000,
+   "global_priors": 0,
+   "initial_cost": 3513408.6504158755,
+   "final_cost": 98044.06076968045,
+   "iterations": 5,
+   "accepted_steps": 5,
+   "linear_iterations": 6,
+   "termination": "convergence",
+   "time_seconds": 0.1139,
+   "time_per_iteration": 0.02278,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 5,
+    "final_cost": 98044.060113776,
+    "termination": "CONVERGENCE",
+    "time_seconds": 1.4996
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 5,
+    "final_cost": 98044.06011377585,
+    "termination": "CONVERGENCE",
+    "time_seconds": 1.2735
+   }
+  },
+  "synthetic-walk-2000": {
+   "images": 2000,
+   "points": 240000,
+   "observations": 1920000,
+   "relative_priors": 4000,
+   "global_priors": 0,
+   "initial_cost": 14316978.931134839,
+   "final_cost": 391877.7170244727,
+   "iterations": 7,
+   "accepted_steps": 7,
+   "linear_iterations": 8,
+   "termination": "convergence",
+   "time_seconds": 0.3901,
+   "time_per_iteration": 0.055728571428571426,
+   "ceres": {
+    "sparse_library": "suite_sparse",
+    "iterations": 7,
+    "final_cost": 391877.7164540566,
+    "termination": "CONVERGENCE",
+    "time_seconds": 6.8712
+   },
+   "ceres_gpu": {
+    "sparse_library": "cuda",
+    "iterations": 7,
+    "final_cost": 391877.71645405376,
+    "termination": "CONVERGENCE",
+    "time_seconds": 5.7577
+   }
+  }
+ },
+ "ceres_build": "Ceres 2.2.0, SuiteSparse 7.14.1 (CHOLMOD), OpenBLAS 0.3.34",
+ "ceres_gpu_build": "Ceres master e831bfef (2.3.0), CUDA_SPARSE with cuDSS 1.0.0"
+}

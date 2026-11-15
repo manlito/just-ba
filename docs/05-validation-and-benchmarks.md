@@ -204,6 +204,14 @@ the `bae` paper reports about 9.8 s total on its BAL set against 84 s for Ceres 
 CUDA on an RTX 4090; the Caspar paper reports 5 to 20 times faster than the best of
 Ceres, DeepLM and MegBA on six BAL problems.
 
+As run in milestone 5 (D99; how, in `bench/competitors/README.md`; results in
+document 07): Ceres 2.2.0 with SuiteSparse and Ceres master with cuDSS, COLMAP
+4.2.1's Caspar and bae 0.2, each on the same problem as just-ba on the owner's
+laptop. Caspar needs the problem reduced to its residual and camera models
+(`jba_to_colmap`); it runs a fixed 200 iterations in single precision and its
+results differ from run to run. "Equal accuracy" is the time to reach the worse of
+the two final costs. Kornia-rs and GTSAM were not run.
+
 ### Regression gate
 
 - A fixed set of small and medium problems runs on every pull request on CPU.

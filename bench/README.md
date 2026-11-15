@@ -37,6 +37,10 @@ are taken by hand on an otherwise idle machine; CI does not run this.
 | `apple-m5pro.json` | The owner's Mac (Apple M5 Pro), all threads; CPU backend |
 | `apple-m5pro-metal-sparse.json` | The same Mac; Metal backend, sparse_schur (its default), with Ceres with Accelerate alongside |
 | `apple-m5pro-metal-iterative.json` | The same Mac; Metal backend, iterative_schur, with Ceres with Accelerate alongside |
+| `rtx2070maxq-cuda-sparse.json` | The owner's laptop (i7-9750H, RTX 2070 Max-Q, Linux); CUDA backend, sparse_schur with cuDSS (its default), `--large`; Ceres 2.2.0 with SuiteSparse (`ceres`) and Ceres master with cuDSS (`ceres_gpu`) alongside |
+
+The milestone 5 comparison with Caspar and bae, which `run.py` does not drive, is in
+`competitors/`.
 
 `--backend metal|cuda` and `--linear-solver` select the configuration (default: the CPU;
 the linear solver defaults to auto, the library's rule). A baseline records its

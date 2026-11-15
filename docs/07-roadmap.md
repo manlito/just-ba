@@ -399,6 +399,44 @@ than every competitor at equal accuracy on the small and medium size classes
 (50 to 2,000 images). If it is not faster there, this milestone is not finished.
 The large class (up to 10,000 images) must be correct and competitive.
 
+Results (2026-11-15, the owner's laptop: RTX 2070 Max-Q 8 GB, i7-9750H, CachyOS,
+CUDA 13.4; the M5 Pro for Metal):
+
+- Built: the CUDA backend as the second device under a shared GPU layer (D96 to
+  D98). Metal and CUDA compile one kernel source and share one host side; the CUDA
+  device is about 240 lines. Strategy A (conjugate gradients on the GPU) and strategy
+  B (the reduced camera system formed on the GPU, factorized in double by cuDSS,
+  falling back to conjugate gradients where it is not positive definite). `Auto` is
+  B with cuDSS. Kernel work for B (each observation's E and G once, stored in list
+  order; fixed-shape pose tiles) made the tile kernel 4 times faster on CUDA and
+  Metal 4 to 50 percent faster per iteration, with Metal's results bit-identical.
+- Same answers: every GPU case (55 parity problems and two of their own) on CUDA with
+  both solvers agrees with the CPU within the Metal tests' limits and repeats bit for
+  bit; all 300 tests pass on Linux, all 303 on the Mac.
+- Against Ceres 2.2.0 (SuiteSparse, 12 threads) on the same problems: 3.5 to 17.6
+  times faster at the same cost (BAL 3.5 to 9.6, the 500- and 2,000-image walks 13.2
+  and 17.6). Against Ceres master on the same GPU (cuDSS): 2.6 to 14.6 times.
+- Against COLMAP's Caspar (reprojection-only problems: BAL reduced to SIMPLE_RADIAL,
+  walks without priors): to Caspar's final cost, 6.8 to 41 times faster; end to end,
+  1.7 to 18.5 times, with a lower final cost on every problem (Caspar's fixed 200
+  iterations stop short on BAL: dubrovnik 27,095 against 24,714).
+- Against bae (BAL, its 20 steps): to bae's final cost 26 to 67 times faster on four
+  of five problems.
+- Exception, venice-52 (52 images): its end point depends on the path (D60, D99).
+  With the defaults (sparse_schur, Ceres's tolerances) CUDA ends at 270,448 in 50
+  iterations, Ceres at 261,813 and bae at 245,656; CUDA's conjugate gradients reach
+  bae's cost in 8.4 s against bae's 11.6 s when run at tight tolerances, and 251,831
+  in 3.2 s at the default ones.
+- Large class: a 10,000-image walk (9.6 million observations) in 1.6 s, against 32.2 s
+  for Ceres on the CPU and 26.2 s for Ceres master on the GPU, the same cost to 3e-8;
+  at most 3.6 GB of GPU memory. Caspar and bae were not run at this size.
+- How the competitors were built and run: `bench/competitors/README.md`.
+- Not done: the Windows build and tests on the laptop's Windows; double-precision
+  kernels and full-system conjugate gradients (both deferred, D100).
+
+Status: exit met on Linux, venice-52 excepted as above; the Windows confirmation is
+outstanding.
+
 ## Milestone 6: release to PyPI
 
 Details in document 08.
