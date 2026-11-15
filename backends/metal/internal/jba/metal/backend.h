@@ -14,9 +14,12 @@ namespace jba::metal {
 // loop with Ceres's stopping test), every decision on the host in double (the cost
 // of the current and the candidate parameters, accepting a step, the retraction).
 // Camera-side factors and depth rows, few by comparison, are linearized on the host
-// in double and uploaded. Same linear solver as the CPU backend: implicit Schur
-// complement with preconditioned conjugate gradients, preconditioner the camera
-// blocks of the Schur complement. Results are the same from run to run.
+// in double and uploaded. Two linear solvers (D92): sparse_schur, the default here,
+// forms the reduced camera system on the GPU and factorizes it on the host in double
+// with Accelerate's sparse Cholesky, falling back to conjugate gradients when the
+// single-precision system is not positive definite; iterative_schur runs the CPU
+// backend's implicit Schur complement with preconditioned conjugate gradients
+// entirely on the GPU. Results are the same from run to run.
 //
 // Throws std::runtime_error when no Metal device is present or a kernel fails.
 class MetalBackend final : public Backend {
