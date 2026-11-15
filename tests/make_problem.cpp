@@ -1,4 +1,5 @@
-// Writes a synthetic problem for the parity tests, with perturbed starting values.
+// Writes a synthetic problem for the parity tests and the benchmark, with perturbed
+// starting values.
 //
 //   jba_make_problem <out.jba> [--model NAME] [--images N] [--points N] [--seed N]
 //                    [--noise PX] [--outliers FRACTION] [--free-intrinsics MASK]

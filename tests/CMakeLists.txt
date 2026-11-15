@@ -22,6 +22,10 @@ if(JBA_WITH_METAL)
   set_tests_properties(test_metal_reprojection PROPERTIES LABELS gpu)
 endif()
 
+# Synthetic problem files, for the parity cases and the benchmark (bench/).
+add_executable(jba_make_problem make_problem.cpp)
+target_link_libraries(jba_make_problem PRIVATE jba jba_internal)
+
 if(JBA_WITH_CERES)
   add_subdirectory(ceres)
 endif()
