@@ -1586,13 +1586,19 @@ struct CpuBackend::Impl {
   }
 
   // In-place inverse of a dense symmetric positive definite matrix (n x n), by
-  // Cholesky; rows run in parallel. False when it is not positive definite.
-  bool dense_spd_inverse(std::vector<double>& A, std::size_t n) {
+  // Cholesky; rows run in parallel. False when it is not positive definite, or a
+  // pivot falls below 1e-14 of its diagonal entry: the matrix is singular up to
+  // rounding (Ceres's covariance uses the same reciprocal condition number).
+  bool dense_spd_inverse(std::vector<double>& A, std::size_t n, std::size_t* failed = nullptr) {
     // A = L L^T, L in the lower triangle.
     for (std::size_t j = 0; j < n; ++j) {
-      double d = A[j * n + j];
+      const double diag = A[j * n + j];
+      double d = diag;
       for (std::size_t k = 0; k < j; ++k) d -= A[j * n + k] * A[j * n + k];
-      if (!(d > 0) || !std::isfinite(d)) return false;
+      if (!(d > 1e-14 * diag) || !std::isfinite(d)) {
+        if (failed) *failed = j;
+        return false;
+      }
       const double ljj = std::sqrt(d);
       A[j * n + j] = ljj;
       pool.parallel_for(n - j - 1, [&](std::size_t a0, std::size_t a1) {
@@ -1770,8 +1776,19 @@ struct CpuBackend::Impl {
       for (std::size_t a = 0; a < n; ++a) S[c * n + a] = S[a * n + c] = 0;
       S[c * n + c] = 1;
     }
-    if (n > 0 && !dense_spd_inverse(S, n))
-      throw std::runtime_error("covariance: the system is singular; some freedom is not held (gauge) or not observed");
+    std::size_t failed = 0;
+    if (n > 0 && !dense_spd_inverse(S, n, &failed)) {
+      std::string what = "unknown " + std::to_string(failed);
+      for (const FBlock& fb : fblocks) {
+        if (static_cast<int>(failed) < fb.offset || static_cast<int>(failed) >= fb.offset + fb.size) continue;
+        static constexpr const char* kKinds[] = {"pose of image", "intrinsics block", "prior set", "prior set scale",
+                                                 "Manhattan frame", "depth correction of image"};
+        what = std::string(kKinds[static_cast<int>(fb.kind)]) + " " + std::to_string(fb.index) + ", coordinate " +
+               std::to_string(static_cast<int>(failed) - fb.offset);
+      }
+      throw std::runtime_error("covariance: the system is singular at " + what +
+                               "; some freedom is not held (gauge) or not observed");
+    }
     for (std::size_t c = 0; c < n; ++c) {
       if (free[c]) continue;
       for (std::size_t a = 0; a < n; ++a) S[c * n + a] = S[a * n + c] = 0;

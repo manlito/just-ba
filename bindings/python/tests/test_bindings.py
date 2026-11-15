@@ -304,7 +304,10 @@ def test_depth_in_refine():
 
 
 def test_covariance():
-    sc = scene.room(n_images=12, n_points=800)
+    # Neighbouring images must share enough points: with too few, groups of images are
+    # joined through a handful of points and their relative scale is all but free,
+    # which the covariance reports as singular.
+    sc = scene.room(n_images=24, n_points=4000)
     p = jba.make_problem("PINHOLE", scene.K, poses=sc["poses"])
     obs_image, obs_point, obs_xy = [], [], []
     for i, (kp, pts) in enumerate(zip(sc["keypoints"], sc["point_of"])):
@@ -319,10 +322,10 @@ def test_covariance():
     p.obs_sigma = np.full(p.num_observations, 0.5)
     jba.solve(p)
     c = jba.covariance(p, points=[0, 5])
-    assert c.pose.shape == (12, 6, 6) and c.centre.shape == (12, 3, 3) and c.point.shape == (2, 3, 3)
+    assert c.pose.shape == (24, 6, 6) and c.centre.shape == (24, 3, 3) and c.point.shape == (2, 3, 3)
     ref = c.gauge.fixed_images[0]
     assert np.all(c.pose[ref] == 0)
-    others = [i for i in range(12) if i != ref]
+    others = [i for i in range(24) if i != ref]
     for i in others:
         np.testing.assert_allclose(c.pose[i], c.pose[i].T, atol=1e-18)
         assert np.all(np.linalg.eigvalsh(c.centre[i]) > -1e-18)
@@ -330,19 +333,29 @@ def test_covariance():
 
 
 def test_export(tmp_path):
-    p = jba.make_problem("PINHOLE", scene.K, poses=[[1, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, -0.5, 0, 0]],
-                         points=[[0, 0, 4], [0.5, 0.2, 5], [-0.4, 0.1, 3]],
-                         obs_image=[0, 0, 0, 1, 1, 1], obs_point=[0, 1, 2, 0, 1, 2],
-                         obs_xy=np.zeros((6, 2)))
+    # Three images and eight points: enough observations for a nonsingular covariance.
+    rng = np.random.default_rng(2)
+    pts = rng.uniform([-1, -1, 3], [1, 1, 5], size=(8, 3))
+    poses = [[1, 0, 0, 0, 0, 0, 0], [1, 0, 0, 0, -0.5, 0, 0], [1, 0, 0, 0, 0.4, 0.2, 0]]
+    n_img, n_pts = len(poses), len(pts)
+    p = jba.make_problem("PINHOLE", scene.K, poses=poses, points=pts,
+                         obs_image=np.repeat(np.arange(n_img), n_pts), obs_point=np.tile(np.arange(n_pts), n_img),
+                         obs_xy=np.zeros((n_img * n_pts, 2)))
     R = jba.matrix_from_quat(p.poses[:, :4])
     p.obs_xy = np.array([scene.K[:2] * (R[i] @ X + p.poses[i, 4:])[:2] / (R[i] @ X + p.poses[i, 4:])[2] + scene.K[2:]
                          for i, X in zip(p.obs_image, p.points[p.obs_point])])
-    jba.export_colmap(p, str(tmp_path), image_names=["a.jpg", "b.jpg"])
+    jba.export_colmap(p, str(tmp_path), image_names=["a.jpg", "b.jpg", "c.jpg"])
     lines = [l for l in (tmp_path / "images.txt").read_text().splitlines() if not l.startswith("#")]
-    assert lines[0].split()[-1] == "a.jpg" and len(lines) == 4
-    pts = [l for l in (tmp_path / "points3D.txt").read_text().splitlines() if not l.startswith("#")]
-    assert len(pts) == 3 and float(pts[0].split()[7]) < 1e-9
+    assert lines[0].split()[-1] == "a.jpg" and len(lines) == 6
+    lines3d = [l for l in (tmp_path / "points3D.txt").read_text().splitlines() if not l.startswith("#")]
+    assert len(lines3d) == 8 and float(lines3d[0].split()[7]) < 1e-9
     jba.write_result(str(tmp_path / "r.jba"), p, covariance=jba.covariance(p), report=jba.evaluate(p))
     d = read_jba(str(tmp_path / "r.jba"))
-    assert d["result.pose_covariance"].shape == (2, 6, 6)
-    assert d["result.reprojection_error"].shape == (6,)
+    assert d["result.pose_covariance"].shape == (3, 6, 6)
+    assert d["result.reprojection_error"].shape == (24,)
+
+    # The two-image, three-point version is singular, and says so on every platform.
+    q = jba.make_problem("PINHOLE", scene.K, poses=poses[:2], points=pts[:3], obs_image=[0, 0, 0, 1, 1, 1],
+                         obs_point=[0, 1, 2, 0, 1, 2], obs_xy=p.obs_xy[np.r_[0:3, 8:11]])
+    with pytest.raises(RuntimeError, match="singular"):
+        jba.covariance(q)
