@@ -204,7 +204,8 @@ Results so far (2026-11-14, M5 Pro):
 - Exit met and milestone finished on 2026-11-14, with every item from the review
   done. Baseline (`bench/baseline/apple-m5pro.json`): ladybug-49 31 iterations at
   13 ms each, venice-52 50 at 142 ms, final-93 15 at 112 ms; repeat runs on the
-  same machine vary by up to 5% per iteration.
+  same machine vary by up to 5% per iteration. CI passes on Linux and Windows, Ceres parity
+  included (quick mode).
 
 ## Milestone 3: Manhattan prior and depth
 
