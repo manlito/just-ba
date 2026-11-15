@@ -48,6 +48,7 @@ instructions:
 | 13 | [Review of milestones 3 and 4](13-review-milestones-3-4.md) | What was checked and re-measured, what was found, what changes before milestone 5 |
 | 14 | [Review of milestone 5](14-review-milestone-5.md) | The CUDA backend and the shared GPU layer: what was checked on the Mac and the laptop, what was found, what changes before milestone 6 |
 | 15 | [Review of the fixes after the review of milestone 5](15-review-milestone-5-fixes.md) | D101 to D104 checked on both machines: what holds, what was found in the fixes, the recorded comparison recomputed |
+| 16 | [WebGPU and WebAssembly: an exploration](16-webgpu-exploration.md) | Branch only: a WebGPU backend natively and in the browser, its speed against Metal, and the determinism defect that keeps it from merging |
 
 ## Decisions waiting on the owner
 
