@@ -190,9 +190,10 @@ NB_MODULE(_core, m) {
       .value("OPENCV", jba::CameraModel::OpenCV)
       .value("OPENCV_FISHEYE", jba::CameraModel::OpenCVFisheye);
   m.def("num_params", [](nb::handle model) { return jba::num_params(model_of(model)); }, "model"_a,
-        "Number of intrinsic parameters of a camera model.");
+        "Number of intrinsic parameters of a camera model.\n\n"
+        ">>> jba.num_params(\"OPENCV\")\n8");
 
-  nb::enum_<jba::LossType>(m, "LossType")
+  nb::enum_<jba::LossType>(m, "LossType", "Robust loss of the squared whitened residual s, as Ceres defines it: NONE rho = s; HUBER s up to a^2, then 2 a sqrt(s) - a^2; CAUCHY a^2 log(1 + s / a^2); GEMAN_MCCLURE a^2 s / (a^2 + s). The objective is 0.5 * sum rho(s).")
       .value("NONE", jba::LossType::None)
       .value("HUBER", jba::LossType::Huber)
       .value("CAUCHY", jba::LossType::Cauchy)
@@ -209,7 +210,7 @@ NB_MODULE(_core, m) {
       .value("INVERSE", jba::DepthForm::Inverse);
   m.attr("DEPTH_SCALE") = jba::kDepthScale;
   m.attr("DEPTH_OFFSET") = jba::kDepthOffset;
-  nb::enum_<jba::GaugeMode>(m, "GaugeMode").value("AUTO", jba::GaugeMode::Auto).value("NONE", jba::GaugeMode::None);
+  nb::enum_<jba::GaugeMode>(m, "GaugeMode", "How global freedoms are removed when nothing else does: AUTO holds a reference pose per connected group whose frame nothing defines, and the scale when nothing metric sets it; NONE leaves them to the damping.").value("AUTO", jba::GaugeMode::Auto).value("NONE", jba::GaugeMode::None);
   nb::enum_<jba::BackendKind>(m, "Backend",
                               "Where a solve runs: CPU (double, the reference), Metal (Apple GPUs) or CUDA "
                               "(NVIDIA GPUs).")
@@ -233,15 +234,16 @@ NB_MODULE(_core, m) {
         return out;
       },
       "The backends this build has, whether or not the machine can run them: CPU always, Metal in the "
-      "macOS package, CUDA in just-ba-cu12 and just-ba-cu13.");
+      "macOS package, CUDA in just-ba-cu12 and just-ba-cu13.\n\n"
+      ">>> jba.Backend.CPU in jba.compiled_backends()\nTrue");
   m.def("resolve_linear_solver", &jba::resolve_linear_solver, "type"_a, "backend"_a,
         "The solver AUTO stands for on a backend before the problem is seen; other types as they are.");
-  nb::enum_<jba::Termination>(m, "Termination")
+  nb::enum_<jba::Termination>(m, "Termination", "Why a solve stopped: CONVERGENCE (a tolerance was met), NO_CONVERGENCE (iteration limit), FAILURE (numerical failure; the parameters are the last accepted ones), CANCELLED (the callback returned False).")
       .value("CONVERGENCE", jba::Termination::Convergence)
       .value("NO_CONVERGENCE", jba::Termination::NoConvergence)
       .value("FAILURE", jba::Termination::Failure)
       .value("CANCELLED", jba::Termination::Cancelled);
-  nb::enum_<jba::ConflictPolicy>(m, "ConflictPolicy")
+  nb::enum_<jba::ConflictPolicy>(m, "ConflictPolicy", "A track with two keypoints in one image: DROP removes it; REPAIR splits it by triangulation from the poses.")
       .value("DROP", jba::ConflictPolicy::Drop)
       .value("REPAIR", jba::ConflictPolicy::Repair);
 
@@ -374,68 +376,68 @@ NB_MODULE(_core, m) {
       .def(nb::init<>())
       .def("__init__", [](jba::Loss* l, nb::handle type, double scale) { new (l) jba::Loss{loss_type_of(type), scale}; },
            "type"_a, "scale"_a = 1.0)
-      .def_rw("type", &jba::Loss::type)
-      .def_rw("scale", &jba::Loss::scale)
+      .def_rw("type", &jba::Loss::type, "LossType.")
+      .def_rw("scale", &jba::Loss::scale, "Scale a, in standard deviations of the whitened residual.")
       .def("__repr__", [](const jba::Loss& l) {
         return "Loss('" + std::string(jba::loss_name(l.type)) + "', " + std::to_string(l.scale) + ")";
       });
 
   nb::class_<jba::PriorDefaults>(m, "PriorDefaults", "Weights for priors given without any (provisional, D67).")
       .def(nb::init<>())
-      .def_rw("relative_rotation_sigma", &jba::PriorDefaults::relative_rotation_sigma)
-      .def_rw("relative_rotation_per_radian", &jba::PriorDefaults::relative_rotation_per_radian)
-      .def_rw("relative_translation_sigma", &jba::PriorDefaults::relative_translation_sigma)
-      .def_rw("relative_translation_per_metre", &jba::PriorDefaults::relative_translation_per_metre)
-      .def_rw("global_rotation_sigma", &jba::PriorDefaults::global_rotation_sigma)
-      .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma)
-      .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma)
-      .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma)
-      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma)
-      .def_rw("depth_sigma", &jba::PriorDefaults::depth_sigma)
-      .def_rw("depth_sigma_per_metre", &jba::PriorDefaults::depth_sigma_per_metre)
-      .def_rw("depth_scale_sigma", &jba::PriorDefaults::depth_scale_sigma)
-      .def_rw("depth_offset_sigma", &jba::PriorDefaults::depth_offset_sigma);
+      .def_rw("relative_rotation_sigma", &jba::PriorDefaults::relative_rotation_sigma, "Relative priors: sigma = base + per-unit times the motion. Rotation base, radians.")
+      .def_rw("relative_rotation_per_radian", &jba::PriorDefaults::relative_rotation_per_radian, "Radians of sigma per radian of relative rotation.")
+      .def_rw("relative_translation_sigma", &jba::PriorDefaults::relative_translation_sigma, "Translation base, metres.")
+      .def_rw("relative_translation_per_metre", &jba::PriorDefaults::relative_translation_per_metre, "Metres of sigma per metre travelled.")
+      .def_rw("global_rotation_sigma", &jba::PriorDefaults::global_rotation_sigma, "Global priors, rotation, radians (provisional).")
+      .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma, "Global priors, position, in the prior set's own units (provisional).")
+      .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma, "Gravity priors, radians (provisional).")
+      .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma, "Manhattan segments: endpoint sigma in pixels; the residual's sigma is max(line_min_sigma, sqrt(2) * this / length).")
+      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma, "Smallest sigma of a segment's residual (the sine of an angle).")
+      .def_rw("depth_sigma", &jba::PriorDefaults::depth_sigma, "Depth at keypoints: sigma = this + depth_sigma_per_metre * reading, metres.")
+      .def_rw("depth_sigma_per_metre", &jba::PriorDefaults::depth_sigma_per_metre, "Metres of depth sigma per metre of reading.")
+      .def_rw("depth_scale_sigma", &jba::PriorDefaults::depth_scale_sigma, "Prior on a free depth scale correction toward 1; +inf for none.")
+      .def_rw("depth_offset_sigma", &jba::PriorDefaults::depth_offset_sigma, "Prior on a free depth offset correction toward 0, metres; +inf for none.");
 
   nb::class_<jba::SolverOptions>(m, "SolverOptions", "Levenberg-Marquardt options; defaults are Ceres's.")
       .def(nb::init<>())
-      .def_rw("max_iterations", &jba::SolverOptions::max_iterations)
-      .def_rw("function_tolerance", &jba::SolverOptions::function_tolerance)
-      .def_rw("gradient_tolerance", &jba::SolverOptions::gradient_tolerance)
-      .def_rw("parameter_tolerance", &jba::SolverOptions::parameter_tolerance)
-      .def_rw("initial_trust_region_radius", &jba::SolverOptions::initial_trust_region_radius)
-      .def_rw("max_trust_region_radius", &jba::SolverOptions::max_trust_region_radius)
-      .def_rw("min_trust_region_radius", &jba::SolverOptions::min_trust_region_radius)
-      .def_rw("min_relative_decrease", &jba::SolverOptions::min_relative_decrease)
-      .def_rw("max_consecutive_invalid_steps", &jba::SolverOptions::max_consecutive_invalid_steps)
-      .def_rw("max_linear_iterations", &jba::SolverOptions::max_linear_iterations)
-      .def_rw("min_linear_iterations", &jba::SolverOptions::min_linear_iterations)
-      .def_rw("eta", &jba::SolverOptions::eta)
+      .def_rw("max_iterations", &jba::SolverOptions::max_iterations, "Iteration limit (Ceres's default, 50).")
+      .def_rw("function_tolerance", &jba::SolverOptions::function_tolerance, "Stop when abs(cost change) <= tolerance * cost.")
+      .def_rw("gradient_tolerance", &jba::SolverOptions::gradient_tolerance, "Stop when the largest gradient component <= tolerance in absolute value.")
+      .def_rw("parameter_tolerance", &jba::SolverOptions::parameter_tolerance, "Stop when norm(step) <= tolerance * (norm(x) + tolerance).")
+      .def_rw("initial_trust_region_radius", &jba::SolverOptions::initial_trust_region_radius, "Starting trust-region radius.")
+      .def_rw("max_trust_region_radius", &jba::SolverOptions::max_trust_region_radius, "Largest trust-region radius.")
+      .def_rw("min_trust_region_radius", &jba::SolverOptions::min_trust_region_radius, "The solve stops when the radius falls below this.")
+      .def_rw("min_relative_decrease", &jba::SolverOptions::min_relative_decrease, "A step is accepted when actual over predicted decrease exceeds this.")
+      .def_rw("max_consecutive_invalid_steps", &jba::SolverOptions::max_consecutive_invalid_steps, "The solve fails on reaching this many invalid steps in a row.")
+      .def_rw("max_linear_iterations", &jba::SolverOptions::max_linear_iterations, "Conjugate gradients iteration limit per step (ITERATIVE_SCHUR).")
+      .def_rw("min_linear_iterations", &jba::SolverOptions::min_linear_iterations, "Conjugate gradients minimum iterations per step.")
+      .def_rw("eta", &jba::SolverOptions::eta, "Forcing parameter of the conjugate gradients stopping test.")
       .def_rw("loss", &jba::SolverOptions::loss, "Loss on reprojection residuals.")
-      .def_rw("relative_prior_loss", &jba::SolverOptions::relative_prior_loss)
-      .def_rw("global_prior_loss", &jba::SolverOptions::global_prior_loss)
-      .def_rw("gravity_loss", &jba::SolverOptions::gravity_loss)
-      .def_rw("line_loss", &jba::SolverOptions::line_loss)
-      .def_rw("depth_loss", &jba::SolverOptions::depth_loss)
-      .def_rw("prior_defaults", &jba::SolverOptions::prior_defaults)
-      .def_rw("gauge", &jba::SolverOptions::gauge)
-      .def_rw("backend", &jba::SolverOptions::backend)
-      .def_rw("linear_solver", &jba::SolverOptions::linear_solver)
+      .def_rw("relative_prior_loss", &jba::SolverOptions::relative_prior_loss, "Loss on relative pose priors (always robust; scale in standard deviations).")
+      .def_rw("global_prior_loss", &jba::SolverOptions::global_prior_loss, "Loss on global pose priors.")
+      .def_rw("gravity_loss", &jba::SolverOptions::gravity_loss, "Loss on gravity priors.")
+      .def_rw("line_loss", &jba::SolverOptions::line_loss, "Loss on Manhattan line residuals.")
+      .def_rw("depth_loss", &jba::SolverOptions::depth_loss, "Loss on depth residuals.")
+      .def_rw("prior_defaults", &jba::SolverOptions::prior_defaults, "Weights for priors given without any.")
+      .def_rw("gauge", &jba::SolverOptions::gauge, "How global freedoms are removed (GaugeMode).")
+      .def_rw("backend", &jba::SolverOptions::backend, "Where the solve runs (Backend); see backend_available().")
+      .def_rw("linear_solver", &jba::SolverOptions::linear_solver, "Inner solve (LinearSolver); AUTO is the backend's fastest.")
       .def_rw("num_threads", &jba::SolverOptions::num_threads, "0: all hardware threads. Results do not depend on it.");
 
   // --- Solve ---------------------------------------------------------------
-  nb::class_<jba::IterationSummary>(m, "IterationSummary")
-      .def_ro("iteration", &jba::IterationSummary::iteration)
-      .def_ro("cost", &jba::IterationSummary::cost)
-      .def_ro("cost_change", &jba::IterationSummary::cost_change)
-      .def_ro("gradient_max_norm", &jba::IterationSummary::gradient_max_norm)
-      .def_ro("step_norm", &jba::IterationSummary::step_norm)
-      .def_ro("relative_decrease", &jba::IterationSummary::relative_decrease)
-      .def_ro("trust_region_radius", &jba::IterationSummary::trust_region_radius)
-      .def_ro("linear_iterations", &jba::IterationSummary::linear_iterations)
-      .def_ro("step_valid", &jba::IterationSummary::step_valid)
-      .def_ro("step_accepted", &jba::IterationSummary::step_accepted)
-      .def_ro("time_seconds", &jba::IterationSummary::time_seconds);
-  nb::class_<jba::Gauge>(m, "Gauge")
+  nb::class_<jba::IterationSummary>(m, "IterationSummary", "One iteration of a solve.")
+      .def_ro("iteration", &jba::IterationSummary::iteration, "Iteration number, from 0 (the starting point).")
+      .def_ro("cost", &jba::IterationSummary::cost, "Cost after this iteration.")
+      .def_ro("cost_change", &jba::IterationSummary::cost_change, "Cost change of the candidate step, accepted or not.")
+      .def_ro("gradient_max_norm", &jba::IterationSummary::gradient_max_norm, "Largest gradient component.")
+      .def_ro("step_norm", &jba::IterationSummary::step_norm, "Norm of the candidate step.")
+      .def_ro("relative_decrease", &jba::IterationSummary::relative_decrease, "Actual over predicted decrease of the step.")
+      .def_ro("trust_region_radius", &jba::IterationSummary::trust_region_radius, "Trust-region radius after this iteration.")
+      .def_ro("linear_iterations", &jba::IterationSummary::linear_iterations, "Conjugate gradients iterations of the step.")
+      .def_ro("step_valid", &jba::IterationSummary::step_valid, "Whether the linear solve produced a step.")
+      .def_ro("step_accepted", &jba::IterationSummary::step_accepted, "Whether the step was taken.")
+      .def_ro("time_seconds", &jba::IterationSummary::time_seconds, "Wall time since solve() was called.");
+  nb::class_<jba::Gauge>(m, "Gauge", "What the solver held fixed to remove the global freedoms.")
       .def_ro("fixed_images", &jba::Gauge::fixed_images)
       .def_ro("heading_images", &jba::Gauge::heading_images,
               "Poses whose translation and heading are held, their tilt free (gravity known, D83).")
@@ -444,25 +446,25 @@ NB_MODULE(_core, m) {
       .def_ro("manhattan_frame_held", &jba::Gauge::manhattan_frame_held)
       .def_ro("fixed_translations", &jba::Gauge::fixed_translations)
       .def_ro("fixed_set_scales", &jba::Gauge::fixed_set_scales);
-  nb::class_<jba::SolverSummary>(m, "SolverSummary")
-      .def_ro("termination", &jba::SolverSummary::termination)
-      .def_ro("message", &jba::SolverSummary::message)
-      .def_ro("initial_cost", &jba::SolverSummary::initial_cost)
-      .def_ro("final_cost", &jba::SolverSummary::final_cost)
+  nb::class_<jba::SolverSummary>(m, "SolverSummary", "Result of solve(): termination, costs, counts, times and the iteration history.")
+      .def_ro("termination", &jba::SolverSummary::termination, "Why the solve stopped (Termination).")
+      .def_ro("message", &jba::SolverSummary::message, "Details of the termination.")
+      .def_ro("initial_cost", &jba::SolverSummary::initial_cost, "Cost at the start.")
+      .def_ro("final_cost", &jba::SolverSummary::final_cost, "Cost at the end.")
       .def_prop_ro("initial_cost_by_type", [](const jba::SolverSummary& s) { return cost_dict(s.initial_cost_by_type); },
                    "Initial cost by residual type, a dict.")
       .def_prop_ro("final_cost_by_type", [](const jba::SolverSummary& s) { return cost_dict(s.final_cost_by_type); },
                    "Final cost by residual type, a dict.")
-      .def_ro("iterations", &jba::SolverSummary::iterations)
-      .def_ro("accepted_steps", &jba::SolverSummary::accepted_steps)
-      .def_ro("linear_iterations", &jba::SolverSummary::linear_iterations)
+      .def_ro("iterations", &jba::SolverSummary::iterations, "Iterations made.")
+      .def_ro("accepted_steps", &jba::SolverSummary::accepted_steps, "Steps taken.")
+      .def_ro("linear_iterations", &jba::SolverSummary::linear_iterations, "Conjugate gradients iterations in all.")
       .def_ro("time_seconds", &jba::SolverSummary::time_seconds, "Wall time of the whole call, set-up included.")
       .def_ro("setup_seconds", &jba::SolverSummary::setup_seconds, "The part of it before the iterations.")
       .def_ro("linear_solver", &jba::SolverSummary::linear_solver, "The linear solver the steps used.")
       .def_ro("linear_solver_fallbacks", &jba::SolverSummary::linear_solver_fallbacks,
               "sparse_schur steps solved by conjugate gradients instead.")
-      .def_ro("history", &jba::SolverSummary::history)
-      .def_ro("gauge", &jba::SolverSummary::gauge)
+      .def_ro("history", &jba::SolverSummary::history, "IterationSummary per iteration.")
+      .def_ro("gauge", &jba::SolverSummary::gauge, "What the gauge held (Gauge).")
       .def("__repr__", [](const jba::SolverSummary& s) {
         return "SolverSummary(" + std::string(jba::termination_name(s.termination)) + ", cost " +
                std::to_string(s.initial_cost) + " -> " + std::to_string(s.final_cost) + ", " +
@@ -486,8 +488,8 @@ NB_MODULE(_core, m) {
         }
         return s;
       },
-      "problem"_a, "options"_a = jba::SolverOptions{}, "callback"_a = nb::none(),
-      "Solves in place on the CPU. callback(IterationSummary) is called after every iteration; "
+      "problem"_a, "options"_a.sig("SolverOptions()") = jba::SolverOptions{}, "callback"_a = nb::none(),
+      "Solves in place, on options.backend (the CPU by default). callback(IterationSummary) is called after every iteration; "
       "returning False stops the solve.");
   m.def("with_problem_losses", &jba::with_problem_losses, "options"_a, "problem"_a,
         "A copy of the options with the problem's stored losses (loss_type, loss_scale) in place of theirs.");
@@ -526,20 +528,20 @@ NB_MODULE(_core, m) {
                    "Per gravity prior: angle between measured and solved gravity, rad.", nb::rv_policy::move)
       .def_prop_ro("gravity_weight", [](const jba::ResidualReport& r) { return to_numpy(r.gravity_weight); }, nb::rv_policy::move)
       .def_prop_ro("downweighted_gravity", [](const jba::ResidualReport& r) { return to_numpy(r.downweighted_gravity); }, nb::rv_policy::move);
-  m.def("evaluate", &jba::evaluate, "problem"_a, "options"_a = jba::SolverOptions{}, "downweight_threshold"_a = 0.1,
+  m.def("evaluate", &jba::evaluate, "problem"_a, "options"_a.sig("SolverOptions()") = jba::SolverOptions{}, "downweight_threshold"_a = 0.1,
         nb::call_guard<nb::gil_scoped_release>(), "Cost by residual type, reprojection errors, prior weights.");
 
   // --- Starting poses --------------------------------------------------------
-  nb::class_<jba::PoseInitialization>(m, "PoseInitialization")
+  nb::class_<jba::PoseInitialization>(m, "PoseInitialization", "Starting poses from the priors (initialize_poses).")
       .def_prop_ro("poses", [](const jba::PoseInitialization& i) { return to_numpy(i.poses, {7}); }, nb::rv_policy::move)
       .def_prop_ro("set_transform", [](const jba::PoseInitialization& i) { return to_numpy(i.set_transform, {8}); }, nb::rv_policy::move)
       .def_prop_ro("group", [](const jba::PoseInitialization& i) { return to_numpy(i.group); }, nb::rv_policy::move)
       .def_ro("num_groups", &jba::PoseInitialization::num_groups);
-  m.def("initialize_poses", &jba::initialize_poses, "problem"_a, "defaults"_a = jba::PriorDefaults{},
+  m.def("initialize_poses", &jba::initialize_poses, "problem"_a, "defaults"_a.sig("PriorDefaults()") = jba::PriorDefaults{},
         "Starting poses from the priors alone, and the groups of images they connect.");
 
   // --- Tracks --------------------------------------------------------------
-  nb::class_<jba::TriangulationOptions>(m, "TriangulationOptions")
+  nb::class_<jba::TriangulationOptions>(m, "TriangulationOptions", "Robust triangulation of tracks from the current poses.")
       .def(nb::init<>())
       .def_rw("max_angle_error_deg", &jba::TriangulationOptions::max_angle_error_deg)
       .def_rw("min_tri_angle_deg", &jba::TriangulationOptions::min_tri_angle_deg)
@@ -613,7 +615,7 @@ NB_MODULE(_core, m) {
         }
         return std::make_pair(t, st);
       },
-      "keypoints"_a, "matches"_a, "options"_a = jba::TrackOptions{}, "cameras"_a = nb::none(),
+      "keypoints"_a, "matches"_a, "options"_a.sig("TrackOptions()") = jba::TrackOptions{}, "cameras"_a = nb::none(),
       "Tracks from pairwise matches (M, 4): image_a, keypoint_a, image_b, keypoint_b. With `cameras` (a Problem "
       "giving the model, intrinsics and poses) conflicted components are repaired geometrically. Returns "
       "(Tracks, TrackStats).");
@@ -639,7 +641,7 @@ NB_MODULE(_core, m) {
         nb::gil_scoped_release release;
         return jba::covariance(p, o, co);
       },
-      "problem"_a, "options"_a = jba::SolverOptions{}, "points"_a = nb::none(), "all_points"_a = false,
+      "problem"_a, "options"_a.sig("SolverOptions()") = jba::SolverOptions{}, "points"_a = nb::none(), "all_points"_a = false,
       "max_unknowns"_a = 20000,
       "Covariances of the poses (and of the given points) of a solved problem, relative to the gauge.");
 
@@ -672,29 +674,29 @@ NB_MODULE(_core, m) {
         if (!f.empty() && f.size() != 4) throw nb::value_error("frame must hold 4 values");
         return jba::assign_lines(p, o, f.empty() ? nullptr : f.data());
       },
-      "problem"_a, "options"_a = jba::ManhattanOptions{}, "frame"_a = nb::none(),
+      "problem"_a, "options"_a.sig("ManhattanOptions()") = jba::ManhattanOptions{}, "frame"_a = nb::none(),
       "Estimates the Manhattan frame from the segments and current poses, assigns segments to axes, and runs "
       "the support test. With `frame`, assigns to that frame's axes.");
   m.def("apply_assignment", &jba::apply_assignment, "problem"_a, "assignment"_a, "dof"_a = 1,
         "Stores an accepted assignment in the problem (line_axis, manhattan_frame); a refused one clears them.");
 
-  nb::class_<jba::RefineOptions>(m, "RefineOptions")
+  nb::class_<jba::RefineOptions>(m, "RefineOptions", "Options of refine(); the defaults suit tracker captures.")
       .def(nb::init<>())
-      .def_rw("solver", &jba::RefineOptions::solver)
-      .def_rw("tracks", &jba::RefineOptions::tracks)
-      .def_rw("rounds", &jba::RefineOptions::rounds)
-      .def_rw("prior_solve", &jba::RefineOptions::prior_solve)
-      .def_rw("max_reprojection_error", &jba::RefineOptions::max_reprojection_error)
-      .def_rw("min_tri_angle_deg", &jba::RefineOptions::min_tri_angle_deg)
-      .def_rw("downweight_threshold", &jba::RefineOptions::downweight_threshold)
-      .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only)
+      .def_rw("solver", &jba::RefineOptions::solver, "Solver options of every solve; reprojection uses a Cauchy loss of scale 2 by default.")
+      .def_rw("tracks", &jba::RefineOptions::tracks, "Track building (TrackOptions).")
+      .def_rw("rounds", &jba::RefineOptions::rounds, "Rounds of tracks, triangulation and solve.")
+      .def_rw("prior_solve", &jba::RefineOptions::prior_solve, "Solve the poses over the priors alone first.")
+      .def_rw("max_reprojection_error", &jba::RefineOptions::max_reprojection_error, "Observations beyond this many pixels are removed (COLMAP's default, 4).")
+      .def_rw("min_tri_angle_deg", &jba::RefineOptions::min_tri_angle_deg, "Points triangulated from a smaller angle are dropped, degrees.")
+      .def_rw("downweight_threshold", &jba::RefineOptions::downweight_threshold, "A prior whose loss weight falls below this is reported as down-weighted.")
+      .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only, "Solve only the largest group of connected images; otherwise each in its own frame.")
       .def_rw("use_manhattan", &jba::RefineOptions::use_manhattan,
               "Manhattan prior from scene's line segments; opt-in.")
-      .def_rw("manhattan", &jba::RefineOptions::manhattan)
-      .def_rw("manhattan_min_angle_deg", &jba::RefineOptions::manhattan_min_angle_deg)
+      .def_rw("manhattan", &jba::RefineOptions::manhattan, "Options of the Manhattan prior (ManhattanOptions).")
+      .def_rw("manhattan_min_angle_deg", &jba::RefineOptions::manhattan_min_angle_deg, "Smallest assignment angle of the segments, degrees (halved each round down to this).")
       .def_rw("min_observations", &jba::RefineOptions::min_observations,
               "Inlier observations an image needs to count as refined (default 30).");
-  nb::class_<jba::RefineResult>(m, "RefineResult")
+  nb::class_<jba::RefineResult>(m, "RefineResult", "Result of refine(): the solved problem and what happened to each image.")
       .def_ro("problem", &jba::RefineResult::problem, "The solved problem.")
       .def_prop_ro("obs_keypoint", [](const jba::RefineResult& r) { return to_numpy(r.obs_keypoint); },
                    "Keypoint (in its image) of each observation of `problem`.", nb::rv_policy::move)
@@ -790,7 +792,7 @@ NB_MODULE(_core, m) {
         return jba::refine(in, o);
       },
       "scene"_a, "keypoints"_a, "matches"_a = nb::none(), "tracks"_a = nb::none(), "keypoint_sigma"_a = nb::none(),
-      "options"_a = jba::RefineOptions{}, "keypoint_depth"_a = nb::none(), "keypoint_depth_sigma"_a = nb::none(),
+      "options"_a.sig("RefineOptions()") = jba::RefineOptions{}, "keypoint_depth"_a = nb::none(), "keypoint_depth_sigma"_a = nb::none(),
       "The main use case end to end: starting poses from the priors in `scene`, tracks from the matches, "
       "triangulation, solve, outlier removal, repeated (D71). keypoint_depth: a reading per keypoint (NaN for "
       "none), flat or one array per image; scene.depth_* say what they are.");

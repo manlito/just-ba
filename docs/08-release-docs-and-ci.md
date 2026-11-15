@@ -61,7 +61,10 @@ Open points:
 
 ## Documentation
 
-Built automatically and published on every release, with a preview on pull requests.
+Built by `docs-site/` (Sphinx, D119) and the `docs` workflow, started by hand like CI
+(D110): it builds the site with warnings as errors, runs the docstring examples, and
+with `deploy=true` publishes to Cloudflare Pages (D112). No previews on pull requests
+while CI is manual.
 
 | Part | Content | Source |
 |---|---|---|
@@ -70,8 +73,8 @@ Built automatically and published on every release, with a preview on pull reque
 | Residual reference | Each residual: formula, parameters, Jacobian conventions | Generated from the same symbolic definitions as the kernels, so it cannot drift |
 | Camera models | Formulas and parameter order | Same source |
 | Benchmarks | Current accuracy and speed tables against the references | Generated from stored benchmark results |
-| Core API reference | For contributors | Generated from source comments |
-| Design notes | This `docs/` folder | As is |
+| Core API reference | For contributors | Deferred (D119): the headers' comments are plain `//`, which Doxygen does not read |
+| Design notes | This `docs/` folder | Not on the site for now (D119); the problem file format (document 11) is |
 
 Tooling follows the language choice: Sphinx or MkDocs for the Python side, with
 Doxygen (C++) or rustdoc (Rust) for the core. Hosted on Cloudflare Pages (D112),
