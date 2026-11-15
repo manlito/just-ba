@@ -1,6 +1,6 @@
 # Test-only reference solver. Build it with third_party/ceres/build.cmake and pass
-# -DCMAKE_PREFIX_PATH=<its install dir>.
-find_package(Ceres 2.2.0 EXACT REQUIRED CONFIG)
+# -DCMAKE_PREFIX_PATH=<its install dir>. Ceres is looked up in the top-level
+# CMakeLists.txt (JBA_CERES_VERSION).
 
 add_library(jba_ceres_reference STATIC ceres_reference.cpp)
 target_link_libraries(jba_ceres_reference PUBLIC jba jba_internal Ceres::ceres)

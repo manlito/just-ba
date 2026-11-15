@@ -8,7 +8,7 @@ target_link_libraries(jba_cuda PUBLIC jba_core jba_cpu jba_gpu PRIVATE CUDA::cud
 # Strategy B (sparse_schur) with cuDSS, optional (D98): a runtime dependency only when
 # enabled. Point CMake at it with -Dcudss_DIR=<cuDSS>/lib/cmake/cudss.
 if(JBA_WITH_CUDSS)
-  find_package(cudss REQUIRED CONFIG)
+  # cudss is looked up in the top-level CMakeLists.txt.
   target_link_libraries(jba_cuda PRIVATE cudss)
   target_compile_definitions(jba_cuda PRIVATE JBA_HAVE_CUDSS=1)
 endif()

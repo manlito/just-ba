@@ -36,6 +36,19 @@ if(JBA_WITH_CUDA)
   set(CMAKE_CUDA_EXTENSIONS OFF)
 endif()
 
+# Packages looked up here, in one directory: cuDSS's package configuration promotes its
+# targets to global scope each time it is read, which CMake allows only in the
+# directory that made them, and a Ceres built with cuDSS (master) reads it again.
+if(JBA_WITH_CUDA AND JBA_WITH_CUDSS)
+  find_package(cudss REQUIRED CONFIG)
+endif()
+if(JBA_WITH_CERES)
+  # The accuracy reference is 2.2.0 (document 05); another version, such as master
+  # (2.3.0) for the GPU speed column, is named here.
+  set(JBA_CERES_VERSION 2.2.0 CACHE STRING "Ceres version the reference harness is built against")
+  find_package(Ceres ${JBA_CERES_VERSION} EXACT REQUIRED CONFIG)
+endif()
+
 add_library(jba_warnings INTERFACE)
 if(MSVC)
   target_compile_options(jba_warnings INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/W4 /permissive- /utf-8>)

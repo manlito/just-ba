@@ -26,6 +26,10 @@ target_sources(test_manhattan PRIVATE scene.cpp)
 add_executable(jba_make_problem make_problem.cpp)
 target_link_libraries(jba_make_problem PRIVATE jba jba_internal)
 
+# A problem and its COLMAP text model, for the comparison with Caspar (milestone 5).
+add_executable(jba_to_colmap to_colmap.cpp)
+target_link_libraries(jba_to_colmap PRIVATE jba jba_internal jba_warnings)
+
 if(JBA_WITH_METAL)
   jba_test(test_metal_reprojection jba_metal)
   set_tests_properties(test_metal_reprojection PROPERTIES LABELS gpu)
