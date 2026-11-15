@@ -213,8 +213,8 @@ Ceres, DeepLM and MegBA on six BAL problems.
   one command that runs the suite and writes the results. They are not CI jobs:
   CI uses free hosted runners only, with nothing scheduled.
 - Results are stored as JSON per commit so trends can be plotted.
-- Not built yet. The first baseline is taken before milestone 2 adds residuals
-  (document 12), so the rule below can be applied from the first new residual.
+- Built for the CPU (D81): `bench/run.py` and a baseline for the owner's Mac in
+  `bench/baseline/`, taken at the end of milestone 2. It runs by hand, not in CI.
 - Every new residual type must add: Level 1 checks, a synthetic Level 2 problem, and
   a line in the speed benchmark showing existing problems did not slow down.
 

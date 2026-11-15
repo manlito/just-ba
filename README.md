@@ -99,6 +99,16 @@ Run `build/cli/just-ba` without arguments for every option.
 With the reference solver enabled, `build/tests/ceres/jba_parity <problem>` solves
 the same problem with both solvers and checks the agreement (document 05).
 
+## Benchmark
+
+`bench/run.py` solves the BAL problems and a few synthetic ones and compares
+iteration counts, final costs and time per iteration with a stored baseline of the
+same machine (`bench/README.md`, D81):
+
+```bash
+python3 bench/run.py --build build --compare bench/baseline/apple-m5pro.json
+```
+
 ## Real captures
 
 `tests/real` runs `refine` from Python on every capture file it finds in `tests/data`

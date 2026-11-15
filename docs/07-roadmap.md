@@ -104,15 +104,15 @@ Before the features, from the review of milestones 0 and 1 (document 12). The
 review and the first features were done in parallel and merged on 2026-11-14; the
 status of each item after the merge:
 
-- Not done: a stored baseline of times and iteration counts, so the regression rule
-  of document 05 can be applied to every residual added here.
+- Done (D81): a stored baseline of times and iteration counts (`bench/`), so the
+  regression rule of document 05 can be applied to every residual added from here.
 - Done (D75): the CPU backend extended for several residual types. Iteration
   histories of the four fast BAL problems are bit-identical to the review's code.
-- Half done: one loss per residual type in the options (D67 sets their defaults);
-  the `loss.*` file sections are not built.
+- Done (D67, D80): one loss per residual type in the options, and the `loss.*` file
+  sections.
 - Done (D66): the automatic gauge made aware of priors.
-- Done (D74): the Python boundary copies arrays and normalises quaternions on the
-  way in. Not done: public headers separated from internal ones.
+- Done (D74, D79): the Python boundary copies arrays and normalises quaternions on
+  the way in; public headers are separated from internal ones.
 - Done (D62, document 12): the two small differences from Ceres in the trust-region
   loop, and the small input and output fixes.
 - Done: Ceres harness cost functors for both prior types and the two new camera
@@ -201,8 +201,10 @@ Results so far (2026-11-14, M5 Pro):
   about to lose tracking; those priors are the ones down-weighted. Six of its images
   have too few observations to count as refined (D76). The captures also set the
   default relative prior weights (D77).
-- Exit met on 2026-11-14. Still to do from the review: the stored baseline, the
-  `loss.*` sections, and public headers separated from internal ones.
+- Exit met and milestone finished on 2026-11-14, with every item from the review
+  done. Baseline (`bench/baseline/apple-m5pro.json`): ladybug-49 31 iterations at
+  13 ms each, venice-52 50 at 142 ms, final-93 15 at 112 ms; repeat runs on the
+  same machine vary by up to 5% per iteration.
 
 ## Milestone 3: Manhattan prior and depth
 
