@@ -47,15 +47,23 @@ struct RefineOptions {
   double min_tri_angle_deg = 1.5;
   double downweight_threshold = 0.1;   // for the report's down-weighted priors
   bool largest_group_only = false;     // otherwise every group is solved, each in its own frame
+  // An image counts as refined when at least this many inlier observations constrain
+  // its pose (COLMAP registers an image from 30 inliers). Images below it are still
+  // solved, but their poses come from the priors alone or nearly so (D76).
+  int min_observations = 30;
 };
 
 struct RefineResult {
   // Solved problem: poses, points, inlier observations, priors, set transforms.
   Problem problem;
   std::vector<std::int32_t> obs_keypoint;  // keypoint (in its image) of each observation
-  std::vector<std::int32_t> group;         // per image, from initialize_poses; -1 not refined
+  std::vector<std::int32_t> group;         // per image, from initialize_poses; -1 left out (no prior places it)
   int num_groups = 0;
-  std::vector<char> refined;               // per image: 1 if its pose was solved
+  // Per image: 1 if it was solved and has at least min_observations inlier
+  // observations in `problem`. Images in a group but below that are solved with the
+  // rest; their poses follow the priors.
+  std::vector<char> refined;
+  std::vector<std::int32_t> num_observations;  // per image, inlier observations in `problem`
   ResidualReport report;
   std::vector<SolverSummary> summaries;    // every solve, in order
   TrackStats track_stats;                  // of the last round

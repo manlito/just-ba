@@ -145,6 +145,39 @@ int main() {
     }
   }
 
+  // Images that no match reaches, or too few: still solved (through their priors)
+  // but not reported as refined, with their observation counts.
+  {
+    SceneOptions so;
+    so.drift_heading_per_m = 0.02;
+    auto scene = jba_test::make_scene(so);
+    constexpr int kBlind = 10, kSparse = 20;
+    std::vector<std::int32_t> kept;
+    int sparse_kept = 0;
+    const auto& m = scene.input.matches;
+    for (std::size_t k = 0; k + 3 < m.size(); k += 4) {
+      const bool blind = m[k] == kBlind || m[k + 2] == kBlind;
+      const bool sparse = m[k] == kSparse || m[k + 2] == kSparse;
+      if (blind || (sparse && sparse_kept++ >= 10)) continue;
+      kept.insert(kept.end(), m.begin() + static_cast<std::ptrdiff_t>(k), m.begin() + static_cast<std::ptrdiff_t>(k) + 4);
+    }
+    scene.input.matches = kept;
+    const auto r = jba::refine(scene.input);
+    std::printf("%-28s observations: image %d %d, image %d %d\n", "room, blind images", kBlind,
+                r.num_observations[kBlind], kSparse, r.num_observations[kSparse]);
+    EXPECT(r.num_observations.size() == r.problem.num_images());
+    EXPECT(r.num_observations[kBlind] == 0 && !r.refined[kBlind] && r.group[kBlind] == 0);
+    EXPECT(r.num_observations[kSparse] < 30 && !r.refined[kSparse]);
+    std::size_t refined = 0;
+    for (char x : r.refined) refined += x != 0;
+    EXPECT(refined == r.problem.num_images() - 2);
+    // With no minimum, every solved image counts again, the blind one included.
+    jba::RefineOptions ro;
+    ro.min_observations = 0;
+    const auto r0 = jba::refine(scene.input, ro);
+    EXPECT(r0.refined[kBlind] && r0.refined[kSparse]);
+  }
+
   // Global priors from a drift-free source with arbitrary frame and scale,
   // combined with metric relative priors: the similarity recovers the true scale.
   {

@@ -491,7 +491,9 @@ NB_MODULE(_core, m) {
       .def_rw("max_reprojection_error", &jba::RefineOptions::max_reprojection_error)
       .def_rw("min_tri_angle_deg", &jba::RefineOptions::min_tri_angle_deg)
       .def_rw("downweight_threshold", &jba::RefineOptions::downweight_threshold)
-      .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only);
+      .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only)
+      .def_rw("min_observations", &jba::RefineOptions::min_observations,
+              "Inlier observations an image needs to count as refined (default 30).");
   nb::class_<jba::RefineResult>(m, "RefineResult")
       .def_ro("problem", &jba::RefineResult::problem, "The solved problem.")
       .def_prop_ro("obs_keypoint", [](const jba::RefineResult& r) { return to_numpy(r.obs_keypoint); },
@@ -501,7 +503,10 @@ NB_MODULE(_core, m) {
       .def_prop_ro("refined", [](const jba::RefineResult& r) {
         std::vector<std::uint8_t> v(r.refined.begin(), r.refined.end());
         return to_numpy(v);
-      }, nb::rv_policy::move)
+      }, "Per image: solved and constrained by at least `min_observations` inlier observations.",
+         nb::rv_policy::move)
+      .def_prop_ro("num_observations", [](const jba::RefineResult& r) { return to_numpy(r.num_observations); },
+                   "Inlier observations of each image in `problem`.", nb::rv_policy::move)
       .def_ro("report", &jba::RefineResult::report)
       .def_ro("summaries", &jba::RefineResult::summaries)
       .def_ro("track_stats", &jba::RefineResult::track_stats)

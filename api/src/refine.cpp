@@ -230,8 +230,11 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     base.set_transform = problem.set_transform;
   }
 
+  out.num_observations.assign(n_img, 0);
+  for (const auto i : problem.obs_image) ++out.num_observations[static_cast<std::size_t>(i)];
   out.refined.assign(n_img, 0);
-  for (std::size_t i = 0; i < n_img; ++i) out.refined[i] = active[i];
+  for (std::size_t i = 0; i < n_img; ++i)
+    out.refined[i] = active[i] && out.num_observations[i] >= std::max(0, o.min_observations);
   out.report = evaluate(problem, o.solver, o.downweight_threshold);
   // Report prior indices in the caller's numbering.
   for (auto& k : out.report.downweighted_relative) k = rel_index[static_cast<std::size_t>(k)];

@@ -203,6 +203,8 @@ def test_refine_end_to_end():
     assert after[0] < 0.5 * before[0] and after[1] < 0.5 * before[1]
     assert r.problem.num_points > 1000
     assert r.obs_keypoint.shape == (r.problem.num_observations,)
+    np.testing.assert_array_equal(r.num_observations, np.bincount(r.problem.obs_image, minlength=n))
+    assert jba.RefineOptions().min_observations == 30 and (r.num_observations >= 30).all()
     # Observations point at the keypoints they came from.
     for k in range(0, r.problem.num_observations, 97):
         i = r.problem.obs_image[k]
