@@ -558,8 +558,14 @@ JBA_KERNEL(block_gather) {
   }
 }
 
-// Strategy B: E = J_f^T J_x (n x 3) of an observation for one camera-side role, as
-// schur_tiles needs it; the same sums in the same order as forming it there.
+// Strategy B: where an observation's E and G for one role are, by its place p in the
+// role's list (Args::Eo).
+JBA_FUNC uint schur_e_offset(JBA_ARGS_REF a, int role, uint p) {
+  return role == 0 ? 18 * p : (role == 2 ? a.eo_dep + 6 * p : a.eo_intr + 3 * a.np * p);
+}
+
+// E = J_f^T J_x (n x 3) of observation k for one camera-side role, as schur_tiles
+// needs it.
 JBA_FUNC void store_schur_e(JBA_ARGS_REF a, int kind, uint k, int n, JBA_DEVICE float* out) {
   const Rows o = rows_of(a, kind, k, false);
   const int r0 = kind == kDepth ? 2 : 0;
@@ -571,35 +577,50 @@ JBA_FUNC void store_schur_e(JBA_ARGS_REF a, int kind, uint k, int n, JBA_DEVICE 
   for (int c = 0; c < 3 * n; ++c) out[c] = E[c];
 }
 
-// Per observation of an eliminated point, its E for every role it has (pose,
-// intrinsics, depth); once per linearization, since E does not depend on the damping.
+// Every observation's E, by place in img_list (pose, depth; threads 0 to nobs) and in
+// ib_list (intrinsics; threads nobs to 2 nobs); once per linearization, since E does
+// not depend on the damping.
 JBA_KERNEL(obs_schur_e) {
-  const uint k = gid;
-  if (k >= a.nobs || a.point_off[a.o_pt[k]] < 0) return;
-  JBA_DEVICE float* out = a.Eo + a.eo_stride * k;
-  if (a.o_pose[k] >= 0) store_schur_e(a, kPose, k, 6, out);
-  if (a.has_intr && a.o_intr[k] >= 0) store_schur_e(a, kIntrinsics, k, int(a.np), out + a.eo_intr);
-  if (a.has_depth && a.o_dw[k] != 0 && a.o_dep[k] >= 0) store_schur_e(a, kDepth, k, 2, out + a.eo_dep);
+  const bool intr = gid >= a.nobs;
+  const uint p = intr ? gid - a.nobs : gid;
+  if (p >= a.nobs || (intr && !a.has_intr)) return;
+  const uint k = intr ? a.ib_list[p] : a.img_list[p];
+  if (a.point_off[a.o_pt[k]] < 0) return;
+  if (intr) {
+    if (a.o_intr[k] >= 0) store_schur_e(a, kIntrinsics, k, int(a.np), a.Eo + schur_e_offset(a, 1, p));
+    return;
+  }
+  if (a.o_pose[k] >= 0) store_schur_e(a, kPose, k, 6, a.Eo + schur_e_offset(a, 0, p));
+  if (a.has_depth && a.o_dw[k] != 0 && a.o_dep[k] >= 0) store_schur_e(a, kDepth, k, 2, a.Eo + schur_e_offset(a, 2, p));
 }
 
-// Per observation of an eliminated point, G = E C^-1 for every role it has; per step,
-// after point_blocks. The same products as forming G in schur_tiles.
+// G = E C^-1 for every role an observation has, by the same places; per step, after
+// point_blocks. The same products as forming G in schur_tiles.
 JBA_FUNC void store_schur_g(JBA_DEVICE const float* E, JBA_DEVICE const float* Ci, int n, JBA_DEVICE float* out) {
   for (int x = 0; x < n; ++x)
     for (int c = 0; c < 3; ++c) out[3 * x + c] = E[3 * x] * Ci[c] + E[3 * x + 1] * Ci[3 + c] + E[3 * x + 2] * Ci[6 + c];
 }
 
 JBA_KERNEL(obs_schur_g) {
-  const uint k = gid;
-  if (k >= a.nobs) return;
+  const bool intr = gid >= a.nobs;
+  const uint p = intr ? gid - a.nobs : gid;
+  if (p >= a.nobs || (intr && !a.has_intr)) return;
+  const uint k = intr ? a.ib_list[p] : a.img_list[p];
   const int j = a.o_pt[k];
   if (a.point_off[j] < 0) return;
-  JBA_DEVICE const float* E = a.Eo + a.eo_stride * k;
-  JBA_DEVICE float* out = a.Go + a.eo_stride * k;
   JBA_DEVICE const float* Ci = a.Cinv + 9 * j;
-  if (a.o_pose[k] >= 0) store_schur_g(E, Ci, 6, out);
-  if (a.has_intr && a.o_intr[k] >= 0) store_schur_g(E + a.eo_intr, Ci, int(a.np), out + a.eo_intr);
-  if (a.has_depth && a.o_dw[k] != 0 && a.o_dep[k] >= 0) store_schur_g(E + a.eo_dep, Ci, 2, out + a.eo_dep);
+  if (intr) {
+    if (a.o_intr[k] >= 0) {
+      const uint o = schur_e_offset(a, 1, p);
+      store_schur_g(a.Eo + o, Ci, int(a.np), a.Go + o);
+    }
+    return;
+  }
+  if (a.o_pose[k] >= 0) store_schur_g(a.Eo + schur_e_offset(a, 0, p), Ci, 6, a.Go + schur_e_offset(a, 0, p));
+  if (a.has_depth && a.o_dw[k] != 0 && a.o_dep[k] >= 0) {
+    const uint o = schur_e_offset(a, 2, p);
+    store_schur_g(a.Eo + o, Ci, 2, a.Go + o);
+  }
 }
 
 // The reduced camera system: S_ab = sum of J_a^T J_b over observations and factors
@@ -630,19 +651,18 @@ JBA_FUNC void tile_sums(JBA_ARGS_REF a, TileChunk TC, uint i, int na_rt, int nb_
     }
     const int kinds[3] = {kPose, kIntrinsics, kDepth};
     const int a0 = ra == 2 ? 2 : 0, b0 = rb == 2 ? 2 : 0;
-    if (E.ka == E.kb) {
-      const Rows oa = rows_of(a, kinds[ra], E.ka, false);
-      const Rows ob = rows_of(a, kinds[rb], E.kb, false);
+    if ((E.info >> 5) & 1) {  // one observation in both roles
+      const uint k = ra == 1 ? a.ib_list[E.ka] : a.img_list[E.ka];
+      const Rows oa = rows_of(a, kinds[ra], k, false);
+      const Rows ob = rows_of(a, kinds[rb], k, false);
       for (int row = max(a0, b0); row < min(oa.n, ob.n); ++row)
         for (int x = 0; x < na; ++x)
           for (int y = 0; y < nb; ++y) acc[x * nb + y] += oa.J[row][x] * ob.J[row][y];
     }
-    const int j = a.o_pt[E.ka];
-    if (a.point_off[j] < 0) continue;
+    if (!((E.info >> 6) & 1)) continue;  // the point is not eliminated
     // G_a = E_a C^-1 (na x 3, obs_schur_g), E_b (nb x 3, obs_schur_e); acc -= G_a E_b^T.
-    const uint offs[3] = {0, a.eo_intr, a.eo_dep};
-    JBA_DEVICE const float* G = a.Go + a.eo_stride * E.ka + offs[ra];
-    JBA_DEVICE const float* Eb = a.Eo + a.eo_stride * E.kb + offs[rb];
+    JBA_DEVICE const float* G = a.Go + schur_e_offset(a, ra, E.ka);
+    JBA_DEVICE const float* Eb = a.Eo + schur_e_offset(a, rb, E.kb);
     for (int x = 0; x < na; ++x)
       for (int y = 0; y < nb; ++y)
         acc[x * nb + y] -= G[3 * x] * Eb[3 * y] + G[3 * x + 1] * Eb[3 * y + 1] + G[3 * x + 2] * Eb[3 * y + 2];

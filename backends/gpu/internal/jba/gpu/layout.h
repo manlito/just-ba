@@ -87,11 +87,12 @@ struct TileChunk {
   uint tile, e0, e1;
 };
 
-// kind 0: observations ka, kb of one point, in the roles (pose 0, intrinsics 1,
-// depth 2) that touch blocks a and b; kind 1: factor ka, slots role_a, role_b.
+// kind 0: observations of one point, in the roles (pose 0, intrinsics 1, depth 2)
+// that touch blocks a and b, given by their places in the role's list (img_list for
+// pose and depth, ib_list for intrinsics); kind 1: factor ka, slots role_a, role_b.
 struct TileEntry {
   uint ka, kb;
-  uint info;  // bits 0-1 role_a, 2-3 role_b, 4 kind
+  uint info;  // bits 0-1 role_a, 2-3 role_b, 4 kind, 5 one observation, 6 point eliminated
 };
 
 struct Args {
@@ -168,14 +169,15 @@ struct Args {
   JBA_DEVICE const TileEntry* entries;
   JBA_DEVICE float* tile_partial;  // kChunkFloats per tile chunk
   JBA_DEVICE float* tile_vals;
-  // Strategy B: per observation of an eliminated point, E = J_f^T J_x (n x 3) for each
-  // camera-side role it has, eo_stride floats apart: pose at 0, intrinsics at eo_intr,
-  // depth at eo_dep; and G = E C^-1 in the same layout, per step.
+  // Strategy B: per observation of an eliminated point and camera-side role it has,
+  // E = J_f^T J_x (n x 3), and G = E C^-1 in the same layout, per step; by the
+  // observation's place in the role's list, so a tile's entries read them nearly in
+  // order. Pose (18 floats) from 0, depth (6) from eo_dep, intrinsics (3 np) from eo_intr.
   JBA_DEVICE float* Eo;
   JBA_DEVICE float* Go;
   // Sizes and options.
   uint nobs, npts, nf, ne, nfb, nchunks, nfac, np, ntiles, ntile_chunks;
-  uint eo_stride, eo_intr, eo_dep;
+  uint eo_dep, eo_intr;
   int has_depth, has_intr, loss_type;
   float loss_scale, pivot_floor;
 };

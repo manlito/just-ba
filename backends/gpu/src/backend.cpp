@@ -344,6 +344,14 @@ struct GpuBackend::Impl {
                       ? block_at[static_cast<std::size_t>(sys.o_dep[k])]
                       : -1;
     };
+    // Each observation's place in the per-image list (pose and depth roles) and in the
+    // per-intrinsics-block list: the entries name observations by these.
+    std::vector<std::uint32_t> pos_img(sys.nobs), pos_ib(sys.nobs);
+    for (std::size_t q = 0; q < sys.nobs; ++q) {
+      pos_img[sys.img_list[q]] = static_cast<std::uint32_t>(q);
+      pos_ib[sys.ib_list[q]] = static_cast<std::uint32_t>(q);
+    }
+    auto place = [&](std::uint32_t role, std::size_t k) { return role == 1 ? pos_ib[k] : pos_img[k]; };
     std::map<std::pair<int, int>, std::vector<TileEntry>> lists;
     auto add = [&](int A, int B, TileEntry e) {
       if (A > B) return;
@@ -361,7 +369,9 @@ struct GpuBackend::Impl {
           for (std::uint32_t ra = 0; ra < 3; ++ra)
             for (std::uint32_t rb = 0; rb < 3; ++rb) {
               if (ba[ra] < 0 || bb[rb] < 0) continue;
-              add(ba[ra], bb[rb], {static_cast<std::uint32_t>(ka), static_cast<std::uint32_t>(kb), ra | (rb << 2)});
+              add(ba[ra], bb[rb],
+                  {place(ra, ka), place(rb, kb),
+                   ra | (rb << 2) | (ka == kb ? 32u : 0u) | (eliminated ? 64u : 0u)});
             }
         }
       }
@@ -412,13 +422,15 @@ struct GpuBackend::Impl {
     buffer<TileEntry>(entries.size(), args.entries, entries.data());
     buffer<float>(kChunkFloats * tchunks.size(), args.tile_partial);
     tile_vals = mirrored<float>(nvals, args.tile_vals);
-    // Each observation's E per role (obs_schur_e), for the observations' pairs.
+    // Each observation's E and G per role (obs_schur_e, obs_schur_g), by list place.
     const std::size_t np = static_cast<std::size_t>(sys.np);
-    args.eo_intr = 18;
-    args.eo_dep = static_cast<std::uint32_t>(18 + (any_intr ? 3 * np : 0));
-    args.eo_stride = args.eo_dep + (sys.has_depth ? 6 : 0);
-    buffer<float>(args.eo_stride * sys.nobs, args.Eo);
-    buffer<float>(args.eo_stride * sys.nobs, args.Go);
+    const std::size_t n_dep = sys.has_depth ? 6 * sys.nobs : 0, n_intr = any_intr ? 3 * np * sys.nobs : 0;
+    if (18 * sys.nobs + n_dep + n_intr > 0xffffffffu)
+      throw std::runtime_error(dev->name() + ": too many observations for sparse_schur");
+    args.eo_dep = static_cast<std::uint32_t>(18 * sys.nobs);
+    args.eo_intr = static_cast<std::uint32_t>(18 * sys.nobs + n_dep);
+    buffer<float>(18 * sys.nobs + n_dep + n_intr, args.Eo);
+    buffer<float>(18 * sys.nobs + n_dep + n_intr, args.Go);
 
     // Lower triangle, compressed columns: column c of block A holds rows r >= c of
     // every tile (A, B), B >= A, in increasing B.
@@ -498,7 +510,7 @@ struct GpuBackend::Impl {
 
   // One group per chunk of a tile's entries, then each tile's values.
   void tiles() {
-    run(Kernel::ObsSchurG, sys.nobs);
+    run(Kernel::ObsSchurG, any_intr ? 2 * sys.nobs : sys.nobs);
     if (ntiles == 0) return;
     if (ntile_chunks > 0) dev->dispatch_groups(Kernel::SchurTiles, ntile_chunks, kTileThreads, Op{});
     run(Kernel::TileFinish, kChunkFloats * ntiles);
@@ -662,7 +674,7 @@ struct GpuBackend::Impl {
       run(Kernel::ScaleFactors, nfac);
     }
     encode_colnorm();
-    if (direct) run(Kernel::ObsSchurE, sys.nobs);
+    if (direct) run(Kernel::ObsSchurE, any_intr ? 2 * sys.nobs : sys.nobs);
     dev->finish();
     dev->to_host(g_f);
     dev->to_host(g_e);
