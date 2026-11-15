@@ -1,12 +1,16 @@
 # Builds the test-only reference solver: Eigen 3.4.0 and a minimal Ceres 2.2.0.
 #
-#   cmake -DPREFIX=<install dir> [-DWORK=<scratch dir>] [-DJOBS=<n>] -P third_party/ceres/build.cmake
+#   cmake -DPREFIX=<install dir> [-DWORK=<scratch dir>] [-DJOBS=<n>] [-DACCELERATE=ON] -P third_party/ceres/build.cmake
 #
 # Then configure just-ba with -DJBA_WITH_CERES=ON -DCMAKE_PREFIX_PATH=<install dir>.
 #
 # Minimal means Eigen only: no SuiteSparse, LAPACK, gflags, glog, CUDA or Accelerate
 # (document 05). Ceres uses its bundled mini logging. Runs the same on Linux, macOS
 # and Windows. Nothing here is linked into the shipped library.
+#
+# -DACCELERATE=ON (macOS only) builds the speed reference of milestone 4 instead:
+# the same Ceres with Apple's Accelerate for sparse Cholesky (ACCELERATESPARSE) and
+# LAPACK. Install it to a prefix of its own; it is used by hand, not in CI.
 
 cmake_minimum_required(VERSION 3.24)
 
@@ -36,6 +40,13 @@ set(CERES_OPTIONS
   -DACCELERATESPARSE=OFF -DUSE_CUDA=OFF -DEIGENSPARSE=ON -DSCHUR_SPECIALIZATIONS=ON
   -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_DOCUMENTATION=OFF
   -DBUILD_SHARED_LIBS=OFF -DPROVIDE_UNINSTALL_TARGET=OFF)
+if(ACCELERATE)
+  if(NOT APPLE)
+    message(FATAL_ERROR "ACCELERATE needs macOS")
+  endif()
+  list(TRANSFORM CERES_OPTIONS REPLACE "^-DACCELERATESPARSE=OFF$" "-DACCELERATESPARSE=ON")
+  list(TRANSFORM CERES_OPTIONS REPLACE "^-DLAPACK=OFF$" "-DLAPACK=ON")
+endif()
 
 # The stamp records what was built; any change to versions or options rebuilds.
 set(STAMP_FILE "${PREFIX}/.jba-ceres-stamp")

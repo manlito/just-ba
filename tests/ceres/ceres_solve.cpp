@@ -2,9 +2,13 @@
 //
 //   jba_ceres_solve <problem.jba | bal.txt> [--linear-solver dense_schur|sparse_schur|iterative_schur]
 //                   [--max-iterations N] [--output solved.jba] [--threads N]
+//                   [--sparse-library eigen|accelerate] [--gauge none|auto]
+//
+// --gauge auto holds the freedoms just-ba's automatic gauge holds (choose_gauge), so
+// the two solve the same problem; the default, none, holds nothing.
 //
 // Prints a JSON summary. Exits non-zero if Ceres's initial cost disagrees with
-// just-ba's CPU evaluation, or the solve fails. jba_parity compares the two solvers.
+// just-ba's CPU evaluation (reprojection-only problems), or the solve fails. jba_parity compares the two solvers.
 
 #include <algorithm>
 #include <cmath>
@@ -16,6 +20,7 @@
 #include "ceres_reference.h"
 #include "jba/cpu/cost.h"
 #include "jba/problem_io.h"
+#include "jba/solver.h"
 
 namespace {
 
@@ -37,13 +42,20 @@ int main(int argc, char** argv) {
     o.linear_solver = jba_ceres::LinearSolver::SparseSchur;
     o.num_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
     std::string linear = "sparse_schur", output;
+    bool auto_gauge = false;
     for (int a = 2; a + 1 < argc; a += 2) {
       const std::string key = argv[a], val = argv[a + 1];
       if (key == "--max-iterations") o.max_iterations = std::stoi(val);
       else if (key == "--function-tolerance") o.function_tolerance = std::stod(val);
       else if (key == "--output") output = val;
       else if (key == "--threads") o.num_threads = std::stoi(val);
-      else if (key == "--linear-solver") {
+      else if (key == "--gauge") {
+        if (val != "auto" && val != "none") throw std::invalid_argument("unknown gauge " + val);
+        auto_gauge = val == "auto";
+      } else if (key == "--sparse-library") {
+        if (val != "eigen" && val != "accelerate") throw std::invalid_argument("unknown sparse library " + val);
+        o.accelerate_sparse = val == "accelerate";
+      } else if (key == "--linear-solver") {
         linear = val;
         if (val == "dense_schur") o.linear_solver = jba_ceres::LinearSolver::DenseSchur;
         else if (val == "sparse_schur") o.linear_solver = jba_ceres::LinearSolver::SparseSchur;
@@ -55,6 +67,14 @@ int main(int argc, char** argv) {
     }
 
     jba::Problem p = ends_with(input, ".txt") ? jba::read_bal(input) : jba::read_problem(input);
+    if (auto_gauge) o.gauge = jba::choose_gauge(p);
+    // The losses and default prior weights the CLI solves with: the library's
+    // defaults, or the file's loss.* sections (D80).
+    {
+      const jba::SolverOptions jo = jba::with_problem_losses({}, p);
+      for (std::size_t t = 0; t < jba::kNumLossTypes; ++t) o.losses[t] = *jba::loss_of(jo, t);
+      o.prior_defaults = jo.prior_defaults;
+    }
     const double jba_initial = jba::cpu::reprojection_cost(p);
     const jba_ceres::Result r = jba_ceres::solve(p, o);
     if (!output.empty()) jba::write_problem(output, p);
@@ -73,7 +93,11 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < r.history_cost.size(); ++i) std::printf("%s%.17g", i ? ", " : "", r.history_cost[i]);
     std::printf("]\n}\n");
 
-    if (rel > 1e-9) {
+    // The check covers reprojection-only problems: jba_initial has no other terms.
+    const bool reprojection_only = p.num_relative_priors() == 0 && p.num_global_priors() == 0 &&
+                                   p.num_gravity_priors() == 0 && !p.has_manhattan() &&
+                                   p.num_depth_observations() == 0;
+    if (reprojection_only && rel > 1e-9) {
       std::fprintf(stderr, "initial cost mismatch between Ceres and just-ba: %.3g\n", rel);
       return 1;
     }

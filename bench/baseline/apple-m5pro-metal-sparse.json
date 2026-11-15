@@ -1,0 +1,236 @@
+{
+ "commit": "7d0db8d-dirty",
+ "machine": {
+  "system": "Darwin",
+  "release": "25.6.0",
+  "machine": "arm64",
+  "cpus": 18,
+  "cpu": "Apple M5 Pro"
+ },
+ "backend": "metal",
+ "linear_solver": "sparse_schur",
+ "threads": 0,
+ "repeats": 3,
+ "problems": {
+  "problem-49-7776-pre": {
+   "images": 49,
+   "points": 7776,
+   "observations": 31843,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 850912.4606808367,
+   "final_cost": 13344.569416314258,
+   "iterations": 36,
+   "accepted_steps": 36,
+   "linear_iterations": 76,
+   "termination": "convergence",
+   "time_seconds": 0.1295,
+   "time_per_iteration": 0.003597222222222222,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 30,
+    "final_cost": 13344.328061214335,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.363
+   }
+  },
+  "problem-21-11315-pre": {
+   "images": 21,
+   "points": 11315,
+   "observations": 36455,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 4413239.31443223,
+   "final_cost": 30378.655575607405,
+   "iterations": 9,
+   "accepted_steps": 9,
+   "linear_iterations": 10,
+   "termination": "convergence",
+   "time_seconds": 0.0348,
+   "time_per_iteration": 0.0038666666666666663,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 9,
+    "final_cost": 30378.654458568708,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.173
+   }
+  },
+  "problem-16-22106-pre": {
+   "images": 16,
+   "points": 22106,
+   "observations": 83718,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 4185659.5182496756,
+   "final_cost": 18033.9050433764,
+   "iterations": 12,
+   "accepted_steps": 12,
+   "linear_iterations": 13,
+   "termination": "convergence",
+   "time_seconds": 0.0481,
+   "time_per_iteration": 0.004008333333333333,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 12,
+    "final_cost": 18033.905020534472,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.5596
+   }
+  },
+  "problem-52-64053-pre": {
+   "images": 52,
+   "points": 64053,
+   "observations": 347173,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 11152062.772763025,
+   "final_cost": 236581.36772949112,
+   "iterations": 50,
+   "accepted_steps": 44,
+   "linear_iterations": 50,
+   "termination": "no_convergence",
+   "time_seconds": 1.0148,
+   "time_per_iteration": 0.020295999999999998,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 50,
+    "final_cost": 261805.8022076575,
+    "termination": "NO_CONVERGENCE",
+    "time_seconds": 6.2468
+   }
+  },
+  "problem-93-61203-pre": {
+   "images": 93,
+   "points": 61203,
+   "observations": 287451,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 5646900.249339232,
+   "final_cost": 145545.06915123048,
+   "iterations": 8,
+   "accepted_steps": 8,
+   "linear_iterations": 9,
+   "termination": "convergence",
+   "time_seconds": 0.185,
+   "time_per_iteration": 0.023125,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 8,
+    "final_cost": 145545.06812237378,
+    "termination": "CONVERGENCE",
+    "time_seconds": 1.1424
+   }
+  },
+  "synthetic-pinhole-50": {
+   "images": 50,
+   "points": 4000,
+   "observations": 200000,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 1443045.6951701597,
+   "final_cost": 48399.171608630226,
+   "iterations": 4,
+   "accepted_steps": 4,
+   "linear_iterations": 5,
+   "termination": "convergence",
+   "time_seconds": 0.0536,
+   "time_per_iteration": 0.0134,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 4,
+    "final_cost": 48399.17160863969,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.3585
+   }
+  },
+  "synthetic-radial-free-30": {
+   "images": 30,
+   "points": 3000,
+   "observations": 90000,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 1742174.1227471447,
+   "final_cost": 21289.754473832494,
+   "iterations": 14,
+   "accepted_steps": 14,
+   "linear_iterations": 15,
+   "termination": "convergence",
+   "time_seconds": 0.2251,
+   "time_per_iteration": 0.016078571428571428,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 14,
+    "final_cost": 21289.754445361243,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.7264
+   }
+  },
+  "synthetic-relative-priors-50": {
+   "images": 50,
+   "points": 4000,
+   "observations": 200000,
+   "relative_priors": 150,
+   "global_priors": 0,
+   "initial_cost": 1421976.221955151,
+   "final_cost": 48787.18540041636,
+   "iterations": 3,
+   "accepted_steps": 3,
+   "linear_iterations": 4,
+   "termination": "convergence",
+   "time_seconds": 0.0469,
+   "time_per_iteration": 0.015633333333333332,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 3,
+    "final_cost": 48787.185361254036,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.3218
+   }
+  },
+  "synthetic-global-similarity-50": {
+   "images": 50,
+   "points": 4000,
+   "observations": 200000,
+   "relative_priors": 100,
+   "global_priors": 50,
+   "initial_cost": 1424692.7548414855,
+   "final_cost": 48622.62269660132,
+   "iterations": 3,
+   "accepted_steps": 3,
+   "linear_iterations": 4,
+   "termination": "convergence",
+   "time_seconds": 0.0475,
+   "time_per_iteration": 0.015833333333333335,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 3,
+    "final_cost": 48622.62275613033,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.321
+   }
+  },
+  "synthetic-opencv-30": {
+   "images": 30,
+   "points": 3000,
+   "observations": 90000,
+   "relative_priors": 0,
+   "global_priors": 0,
+   "initial_cost": 656932.9373788262,
+   "final_cost": 21379.577025220762,
+   "iterations": 2,
+   "accepted_steps": 2,
+   "linear_iterations": 3,
+   "termination": "convergence",
+   "time_seconds": 0.0168,
+   "time_per_iteration": 0.0084,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 2,
+    "final_cost": 21379.577025300354,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.1085
+   }
+  }
+ }
+}

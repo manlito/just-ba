@@ -140,6 +140,9 @@ enum class LinearSolver { DenseSchur, SparseSchur, IterativeSchur };
 
 struct Options {
   LinearSolver linear_solver = LinearSolver::IterativeSchur;
+  // SPARSE_SCHUR's sparse Cholesky: Eigen's (the default, every platform) or Apple's
+  // Accelerate (a Ceres built with third_party/ceres/build.cmake -DACCELERATE=ON).
+  bool accelerate_sparse = false;
   int max_iterations = 50;
   double function_tolerance = 1e-6;
   double gradient_tolerance = 1e-10;

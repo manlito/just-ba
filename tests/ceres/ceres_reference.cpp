@@ -636,7 +636,7 @@ Result solve(jba::Problem& p, const Options& o) {
     case LinearSolver::DenseSchur: opts.linear_solver_type = ceres::DENSE_SCHUR; break;
     case LinearSolver::SparseSchur:
       opts.linear_solver_type = ceres::SPARSE_SCHUR;
-      opts.sparse_linear_algebra_library_type = ceres::EIGEN_SPARSE;
+      opts.sparse_linear_algebra_library_type = o.accelerate_sparse ? ceres::ACCELERATE_SPARSE : ceres::EIGEN_SPARSE;
       break;
     case LinearSolver::IterativeSchur:
       opts.linear_solver_type = ceres::ITERATIVE_SCHUR;

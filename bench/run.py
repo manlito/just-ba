@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Speed and iteration-count benchmark of the CPU solver (document 05, regression gate;
-document 12, item 2).
+"""Speed and iteration-count benchmark of the solver (document 05, regression gate;
+document 12, item 2), on the CPU or the Metal backend (--backend, --linear-solver).
 
 Solves a fixed set of problems with the CLI and writes one JSON file: per problem the
 iteration count, accepted steps, linear (conjugate gradient) iterations, termination,
@@ -18,6 +18,17 @@ one problem at a time; hosted CI runners are too noisy for them.
 
   python3 bench/run.py --build build/dev --out bench/results/run.json
   python3 bench/run.py --build build/dev --compare bench/baseline/apple-m5pro.json
+  python3 bench/run.py --build build/dev --backend metal --linear-solver sparse_schur \
+      --compare bench/baseline/apple-m5pro-metal-sparse.json
+
+A baseline records its backend and linear solver; --compare refuses a baseline of
+another configuration.
+
+--ceres <jba_ceres_solve> also solves every problem with Ceres (SPARSE_SCHUR, the same
+gauge, all threads; --ceres-sparse-library picks Eigen's or Accelerate's sparse
+Cholesky) and records its iterations, final cost and best time next to ours. Speed
+reference of milestone 4: a Ceres built with third_party/ceres/build.cmake
+-DACCELERATE=ON, and --ceres-sparse-library accelerate.
 
 Problems: the five BAL problems (python3 tests/data/fetch_bal.py) and synthetic ones
 written by jba_make_problem, which is built with the tests. Standard library only.
@@ -86,10 +97,19 @@ def machine():
     return info
 
 
-def solve(cli, path, threads):
-    out = subprocess.run([cli, "solve", path, "--threads", str(threads)], capture_output=True, text=True)
+def solve(cli, path, args):
+    out = subprocess.run([cli, "solve", path, "--threads", str(args.threads), "--backend", args.backend,
+                          "--linear-solver", args.linear_solver], capture_output=True, text=True)
     if out.returncode != 0:
         raise RuntimeError(f"{path}: {out.stderr.strip() or out.stdout.strip()}")
+    return json.loads(out.stdout)
+
+
+def ceres_solve(tool, path, args):
+    out = subprocess.run([tool, path, "--linear-solver", "sparse_schur", "--sparse-library",
+                          args.ceres_sparse_library, "--gauge", "auto"], capture_output=True, text=True)
+    if out.returncode != 0:
+        raise RuntimeError(f"ceres {path}: {out.stderr.strip() or out.stdout.strip()}")
     return json.loads(out.stdout)
 
 
@@ -111,10 +131,11 @@ def run(args):
     if args.only:
         problems = [(n, p) for n, p in problems if any(o in n for o in args.only.split(","))]
 
-    result = {"commit": git_commit(), "machine": machine(), "threads": args.threads, "repeats": args.repeats,
+    result = {"commit": git_commit(), "machine": machine(), "backend": args.backend,
+              "linear_solver": args.linear_solver, "threads": args.threads, "repeats": args.repeats,
               "problems": {}}
     for name, path in problems:
-        runs = [solve(cli, path, args.threads) for _ in range(args.repeats)]
+        runs = [solve(cli, path, args) for _ in range(args.repeats)]
         first = runs[0]
         for r in runs[1:]:
             if any(r[k] != first[k] for k in COUNTS) or r["final_cost"] != first["final_cost"]:
@@ -124,15 +145,26 @@ def run(args):
                                       "initial_cost", "final_cost", *COUNTS)}
         entry["time_seconds"] = best
         entry["time_per_iteration"] = best / max(1, first["iterations"])
+        line = (f"{name:34s} {first['iterations']:3d} it {first['linear_iterations']:5d} lin  "
+                f"{best:8.3f} s  {1000 * entry['time_per_iteration']:8.2f} ms/it  {first['termination']}")
+        if args.ceres:
+            cruns = [ceres_solve(args.ceres, path, args) for _ in range(args.repeats)]
+            entry["ceres"] = {"sparse_library": args.ceres_sparse_library, "iterations": cruns[0]["iterations"],
+                              "final_cost": cruns[0]["final_cost"], "termination": cruns[0]["termination"],
+                              "time_seconds": min(r["time_seconds"] for r in cruns)}
+            c = entry["ceres"]
+            line += (f"  | ceres {c['iterations']:3d} it {c['time_seconds']:8.3f} s  x{c['time_seconds'] / best:5.2f}"
+                     f"  cost diff {abs(first['final_cost'] - c['final_cost']) / c['final_cost']:.1e}")
         result["problems"][name] = entry
-        print(f"{name:34s} {first['iterations']:3d} it {first['linear_iterations']:5d} lin  "
-              f"{best:8.3f} s  {1000 * entry['time_per_iteration']:8.2f} ms/it  {first['termination']}",
-              file=sys.stderr)
+        print(line, file=sys.stderr)
     return result
 
 
 def compare(result, baseline, max_slowdown):
     problems = []
+    for key, default in (("backend", "cpu"), ("linear_solver", "iterative_schur")):
+        if baseline.get(key, default) != result[key]:
+            return [f"baseline is for {key} {baseline.get(key, default)}, this run is {result[key]}"]
     for name, b in baseline["problems"].items():
         r = result["problems"].get(name)
         if r is None:
@@ -161,6 +193,10 @@ def main():
     ap.add_argument("--max-slowdown", type=float, default=0.10, help="allowed growth of time per iteration")
     ap.add_argument("--repeats", type=int, default=3, help="runs per problem; the best time is kept")
     ap.add_argument("--threads", type=int, default=0, help="solver threads (0: all)")
+    ap.add_argument("--backend", default="cpu", choices=["cpu", "metal"])
+    ap.add_argument("--linear-solver", default="iterative_schur", choices=["iterative_schur", "sparse_schur"])
+    ap.add_argument("--ceres", help="jba_ceres_solve to run on every problem too (speed reference)")
+    ap.add_argument("--ceres-sparse-library", default="accelerate", choices=["eigen", "accelerate"])
     ap.add_argument("--only", help="comma-separated substrings of problem names")
     args = ap.parse_args()
     result = run(args)
