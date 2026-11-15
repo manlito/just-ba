@@ -104,7 +104,7 @@ jobs:
     name: CUDA backend compiled (not run)
     runs-on: ubuntu-24.04
     env:
-      # D52: C++23 in CUDA sources needs CUDA 13.3 or later; the laptop's is 13.4.
+      # The laptop's CUDA; the CUDA sources are C++20, so CUDA 12 builds too (D113).
       CUDA_VERSION: "13-4"
       CUDA_DIR: /usr/local/cuda-13.4
       CUDSS_ARCHIVE: libcudss-linux-x86_64-1.0.0.35_cuda13-archive

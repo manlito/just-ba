@@ -49,3 +49,24 @@ JBA_BUILD_PYTHON = "ON"
 JBA_BUILD_TESTS = "OFF"
 JBA_BUILD_CLI = "OFF"
 JBA_PACKAGE_VARIANT = "cpu"
+
+# Wheels (document 08, D114): built by .github/workflows/release.yml, started by hand
+# (D111). One abi3 wheel per platform, tested with the Python tests. The CUDA
+# packages add their settings in the workflow (CIBW_* variables).
+[tool.cibuildwheel]
+build = "cp312-*"
+skip = ["*-musllinux_*", "*-win32", "*_i686"]
+build-verbosity = 1
+test-requires = ["pytest"]
+test-command = "pytest -q {project}/bindings/python/tests"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]  # no Linux arm64 in the first release (D108)
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+# Metal 3.0, the language version the Metal backend compiles its kernels with.
+environment = { MACOSX_DEPLOYMENT_TARGET = "13.0" }
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]

@@ -22,7 +22,20 @@ working proof of concept. This document covers what that requires.
   token is stored. The workflow is started by hand and uses no GitHub environment
   (D111); the pending publisher on PyPI is registered for `release.yml`.
 - Versioning: semantic versions; the Python API is the public contract. Pre-1.0 while
-  the API settles.
+  the API settles. The version is `project(VERSION)` in CMakeLists.txt (D114).
+- Wheels and the sdist: `.github/workflows/release.yml`, started by hand (D111, D116).
+
+### Release checklist
+
+1. Quick CI run passes (`gh workflow run ci`).
+2. The GPU check by hand: `python bench/gpu_check.py` on the Mac (Metal) and on the
+   laptop under Linux and Windows (CUDA); see document 05.
+3. `gh workflow run release` (builds and tests every wheel, publishes nothing).
+4. Each package's wheel installed from that run's artifacts and checked on its
+   machine: `python bench/gpu_check.py --wheel <file>` (the Mac with `just-ba`, the
+   laptop with `just-ba-cu12` and `just-ba-cu13`, both systems).
+5. `gh workflow run release -f publish=true`.
+6. The documentation site deployed for the release (`gh workflow run docs -f deploy=true`).
 
 ### Wheels
 
