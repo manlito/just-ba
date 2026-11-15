@@ -125,7 +125,8 @@ bit (document 03, D91). They share one kernel source and one host side (D96). Th
 `sparse_schur` forms the reduced camera system and factorizes it, with Accelerate
 on Metal (its default, D92) and with NVIDIA cuDSS on CUDA when built with it (D98).
 `ctest -L gpu` compares each GPU backend built with the CPU backend on every parity
-problem.
+problem. `python3 bench/gpu_check.py` runs the whole GPU check by hand: build, GPU and
+Python tests, and the benchmark against this machine's baselines (`bench/README.md`).
 
 Metal is built by default on macOS. CUDA needs the CUDA toolkit, 12 or later (the
 CUDA sources are C++20, D113), and is built for the GPU of the build machine unless

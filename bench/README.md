@@ -93,3 +93,28 @@ python3 bench/run.py --build <build> --backend cuda --huge --ceres <ceres 2.2.0 
 Baselines recorded before D101 (times without the set-up) are refused by `--compare`.
 The CUDA baselines were recorded from the working tree of `6eb33fb` (marked dirty:
 the same code with a temporary debug print to stderr).
+
+## The GPU check (by hand)
+
+`gpu_check.py` is the one command run by hand before a release and after GPU changes
+(documents 05 and 08, D118). It builds `build/gpu-<backend>` for this machine's GPU,
+runs `ctest -L gpu` and the Python tests, then `run.py` for sparse_schur and
+iterative_schur against `baseline/<machine>-<backend>-<sparse|iterative>.json`, storing
+each run under `results/<machine>/`; it ends with one pass/fail summary. Run it on an
+otherwise idle machine: the time limit is 10%.
+
+```bash
+python3 bench/gpu_check.py
+```
+
+```bash
+python3 bench/gpu_check.py --machine rtx2070maxq --cudss-dir <cuDSS>/lib/cmake/cudss
+```
+
+On the Mac the machine name defaults to `apple-<chip>` (`apple-m5pro`). On the
+laptop's Windows, name it apart (`--machine rtx2070maxq-windows`): MSVC's arithmetic
+differs from GCC's, so it needs baselines of its own, which its first stored runs
+become. `--wheel <file>` checks a built wheel instead: a fresh environment, the Python
+tests against the installed package, and the GPU backend available (release
+checklist, document 08).
+
