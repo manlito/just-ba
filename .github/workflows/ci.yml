@@ -7,8 +7,9 @@
 #
 # Two modes (decision D61):
 #   quick (default): Linux and Windows build and test, Ceres parity without the
-#                    slow tests, the benchmark gate (D117). macOS is tested on the
-#                    owner's Mac instead.
+#                    slow tests, the benchmark gate (D117), the CUDA and WebGPU
+#                    backends compiled and the WebAssembly module built (D104,
+#                    D128). macOS is tested on the owner's Mac instead.
 #   full:            adds macOS and the slow tests (venice-52 parity).
 # GPU tests, Metal included, are never run here (D40, D110): bench/gpu_check.py.
 #
@@ -177,6 +178,70 @@ jobs:
         run: cmake --build build --parallel
       - name: Test (CUDA tests skip without a device)
         run: ctest --test-dir build --output-on-failure -j 4 -LE slow
+
+  # The WebGPU backend (D127, D128), natively against Dawn's prebuilt Linux release
+  # (D122), on a hosted runner without a GPU: built, and the tests run with the GPU
+  # ones skipping (no adapter), like the CUDA job. GPU runs are by hand (D40).
+  webgpu-native:
+    name: WebGPU backend compiled (not run)
+    runs-on: ubuntu-24.04
+    env:
+      DAWN_RELEASE: v20261113.214538
+      DAWN_ASSET: Dawn-7daf3b0bee2c73621001ab15b256b5a84fb0b45f-ubuntu-latest-Release.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Dawn
+        uses: actions/cache@v4
+        with:
+          path: third_party/webgpu/dawn
+          key: ${{ env.DAWN_ASSET }}
+      - name: Fetch Dawn
+        run: |
+          if ! ls -d third_party/webgpu/dawn/Dawn-* > /dev/null 2>&1; then
+            mkdir -p third_party/webgpu/dawn
+            curl -sSfL "https://github.com/google/dawn/releases/download/${DAWN_RELEASE}/${DAWN_ASSET}" \
+              | tar xz -C third_party/webgpu/dawn
+          fi
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_WEBGPU=ON
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test (WebGPU tests skip without an adapter)
+        run: ctest --test-dir build --output-on-failure -j 4 -LE slow
+
+  # The WebAssembly module for the browser (D124, D127): Emscripten 7.0.0 and
+  # emdawnwebgpu from the same Dawn release, built only (no browser here).
+  webgpu-wasm:
+    name: WebAssembly module built
+    runs-on: ubuntu-24.04
+    env:
+      EMSDK_VERSION: "7.0.0"
+      DAWN_RELEASE: v20261113.214538
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Emscripten
+        uses: actions/cache@v4
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ env.EMSDK_VERSION }}
+      - name: Install Emscripten and Ninja
+        run: |
+          [ -d ~/emsdk ] || git clone --depth 1 https://github.com/emscripten-core/emsdk.git ~/emsdk
+          ~/emsdk/emsdk install ${EMSDK_VERSION}
+          ~/emsdk/emsdk activate ${EMSDK_VERSION}
+          sudo apt-get install -y -q ninja-build
+      - name: Fetch emdawnwebgpu
+        run: |
+          mkdir -p third_party/webgpu/emdawnwebgpu
+          curl -sSfL -o emdawnwebgpu.zip \
+            "https://github.com/google/dawn/releases/download/${DAWN_RELEASE}/emdawnwebgpu_pkg-${DAWN_RELEASE}.zip"
+          unzip -q emdawnwebgpu.zip -d third_party/webgpu/emdawnwebgpu
+      - name: Configure and build
+        run: |
+          source ~/emsdk/emsdk_env.sh
+          emcmake cmake -S . -B build/wasm -G Ninja -DJBA_WITH_WEBGPU=ON -DJBA_BUILD_WASM=ON
+          cmake --build build/wasm
+          ls -l build/wasm/bindings/wasm
 
   generated-code:
     name: generated code is current

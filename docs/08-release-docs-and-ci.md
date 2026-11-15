@@ -114,6 +114,7 @@ by hand too (D111). The table below is the plan for the public repository.
 |---|---|---|---|
 | Build, unit tests, Level 1 and Level 2 checks on CPU (document 05) | Hosted Linux, Windows and macOS | Every pull request | Free |
 | CUDA kernels compiled (not run) | Hosted Linux with the CUDA toolkit installed | Every pull request | Free |
+| WebGPU backend compiled (not run), and the WebAssembly module built (D128) | Hosted Linux with Dawn's prebuilt release; Emscripten 7.0.0 with emdawnwebgpu | Every pull request | Free |
 | Kernel logic on CPU: the generated kernels built as host code and compared with the reference | Hosted Linux | Every pull request | Free |
 | Metal backend tests | By hand on the owner's Mac (D110) | Before releases and after GPU changes | Free |
 | CUDA backend tests and speed benchmark | Not a CI job. Run by hand on the owner's laptop, or on the development VM when it is up | Before releases and after GPU changes | None beyond development |
