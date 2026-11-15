@@ -24,8 +24,8 @@ Its findings are fixed (D101 to D104) and the comparison was repeated with times
 the whole call, warm and cold, and recorded. Milestone 6 (release to PyPI) is built
 (D114 to D119): packaging, the release, docs and benchmark-gate workflows, the GPU
 check, and the documentation site; its workflows pass on GitHub, every wheel
-included, but nothing is published yet and the CUDA wheels still need their run on
-a GPU (document 07). The fixes were reviewed in turn
+included, and the CUDA wheels pass on the laptop's GPU under Linux; nothing is
+published yet, and their Windows check is outstanding (document 07). The fixes were reviewed in turn
 ([15-review-milestone-5-fixes.md](15-review-milestone-5-fixes.md)): they hold and the
 recorded figures follow from the recorded files; the new CI job for CUDA will not
 build as written, and two statements about the comparison were corrected. Build
