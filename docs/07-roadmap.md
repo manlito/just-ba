@@ -362,17 +362,22 @@ means Apple Silicon here):
 - Also not done: strategy B on the CPU, and depth rows on the GPU (they are
   linearized on the host; no capture with depth exists yet to measure against).
 
-Status: exit met on the owner's M5 Pro: same answers as the CPU reference within
-single-precision tolerance, and faster than Ceres with Accelerate on every problem
-measured, 2.6 to 10.6 times. The Metal tests run where a Metal device is present
-(label `gpu`); CI's quick mode has no macOS job, and its full mode runs them on the
-hosted macOS runner as an informational step (document 08).
+Status: done. Exit met on the owner's M5 Pro: same answers as the CPU reference
+within single-precision tolerance, and faster than Ceres with Accelerate on every
+problem measured, 2.6 to 10.6 times. No M1 was available, so "M1-class" is shown on
+newer Apple Silicon only. macOS wheels moved to milestone 6 with the other wheels.
+The Metal tests run by hand where a Metal device is present (label `gpu`). The
+shared host side, the trust-region changes and the rest pass a quick CI run (D61)
+on 2026-11-15 on Ubuntu 24.04 and Windows Server 2025, Ceres parity included; that
+mode has no macOS job, and the full mode runs the Metal tests on the hosted macOS
+runner as an informational step (document 08).
 Reviewed in document 13: the figures above reproduce (2.5 to 10.8 times when
 re-measured). Fixed after the review: sparse_schur stopped the process when no
 camera-side block was free, and its conjugate-gradients fallback, which the real
-captures need, had no test outside them; both now have Metal cases. "Same answers" is shown on the parity problems; through
-`refine` on the captures the backends agree to about 1e-3 of the scene scale, and
-no test compares them there.
+captures need, had no test outside them; both now have Metal cases. "Same answers"
+is shown on the parity problems; through `refine` on the captures the backends
+agree to about 1e-3 of the scene scale, and no test compares them there (open,
+document 00).
 
 ## Milestone 5: CUDA backend
 

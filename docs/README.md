@@ -5,15 +5,15 @@ adjustment library with Python bindings and a sample command-line binary. Its ma
 job is refining reconstructions that come with noisy camera poses from ARKit, ARCore
 or another tracker.
 
-Status: milestones 1 (CPU solver, parity with Ceres) and 2 (the main use case on the
-CPU) and 3 (gravity, the Manhattan prior, depth, covariances, export) done; CI passes
-on Linux and Windows. Milestone 4 (the Metal backend) met its exit on the owner's
-M5 Pro: the CPU's answers within single-precision tolerance, 2.6 to 10.6 times
-faster than Ceres with Accelerate; macOS wheels are left to milestone 6's packaging. Results in [07-roadmap.md](07-roadmap.md). Milestones 0
-and 1 were reviewed before milestone 2; the findings are in
-[12-review-milestones-0-1.md](12-review-milestones-0-1.md). Milestones 3 and 4 were
-reviewed after milestone 4: the results hold, and three defects are to be fixed
-before milestone 5 ([13-review-milestones-3-4.md](13-review-milestones-3-4.md)). Build instructions:
+Status: milestones 1 (CPU solver, parity with Ceres), 2 (the main use case on the
+CPU), 3 (gravity, the Manhattan prior, depth, covariances, export) and 4 (the Metal
+backend: the CPU's answers within single-precision tolerance, 2.6 to 10.6 times
+faster than Ceres with Accelerate on the owner's M5 Pro) done; CI passes on Linux
+and Windows. macOS wheels are left to milestone 6's packaging. Results in
+[07-roadmap.md](07-roadmap.md). Milestones 0 and 1 were reviewed before milestone 2;
+the findings are in [12-review-milestones-0-1.md](12-review-milestones-0-1.md).
+Milestones 3 and 4 were reviewed after milestone 4: the results hold, and the three
+defects it found are fixed ([13-review-milestones-3-4.md](13-review-milestones-3-4.md)). Build instructions:
 [../README.md](../README.md).
 
 ## Documents

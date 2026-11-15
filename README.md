@@ -2,7 +2,7 @@
 
 A minimal, high-performance bundle adjustment library in C++ with Python bindings,
 for refining reconstructions that come with noisy camera poses from ARKit, ARCore
-or another tracker. Early development: milestone 4, the main use case (`jba::refine`)
+or another tracker. Early development: milestones 0 to 4 done, the main use case (`jba::refine`)
 with gravity, the Manhattan prior from line segments, depth at keypoints, covariances
 and export to COLMAP, checked against Ceres and synthetic ground truth, on the CPU and
 on Apple GPUs (Metal).
