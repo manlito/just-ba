@@ -512,6 +512,16 @@ class WebGpuDevice final : public gpu::Device {
 
   void dispatch(Kernel k, std::size_t groups, const gpu::Op& op) {
     if (groups == 0) return;
+    if (nops_ == kOpSlots) {  // the Op ring is full: submit what is encoded, go on
+      wgpuComputePassEncoderEnd(pass_);
+      wgpuComputePassEncoderRelease(pass_);
+      flush_ops();
+      WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc_, nullptr);
+      wgpuQueueSubmit(c_.queue, 1, &cb);
+      wgpuCommandBufferRelease(cb);
+      wgpuCommandEncoderRelease(enc_);
+      begin();
+    }
     WgslOp o{};
     o.x = word(reinterpret_cast<std::uintptr_t>(op.x));
     o.y = word(reinterpret_cast<std::uintptr_t>(op.y));

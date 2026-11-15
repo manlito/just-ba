@@ -1,6 +1,8 @@
 // WGSL port of the GPU backends' kernels (backends/gpu/kernels/solver.inc, D96), for
-// the WebGPU backend (exploration). Same arithmetic, same order of additions, same
-// structures; what differs is how memory is reached.
+// the WebGPU backend (exploration). Same arithmetic and the same order of additions in
+// the source, same structures; what differs is how memory is reached. Dawn compiles the
+// MSL in Metal's relaxed math mode, which allows contraction and reassociation, so the
+// results agree with Metal's within rounding, not bit for bit.
 //
 // WGSL has no pointers. Every buffer of the shared host logic is a range of one
 // storage buffer, the heap H (32-bit words); the device hands out byte offsets into

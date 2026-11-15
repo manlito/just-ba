@@ -21,11 +21,13 @@ app could use WebGPU alone, or at least good enough for a browser-only demo?
   where fixed costs dominate). The browser has no direct factorization yet (below), so
   it runs the iterative solver, which on BAL takes 1.6 to 9 times as long as Metal's
   default.
-- **One defect is open and matters:** on BAL problems with one free intrinsics block
+- **One defect is open:** on BAL problems with one free intrinsics block
   per image (ladybug-49, venice-52, final-93), repeated WebGPU solves differ. The
   answers are correct to the usual tolerances, but the library's rule that the same
   input gives the same result bit for bit (D59, D93) does not hold on WebGPU yet.
-  The cause is narrowed down below, not found.
+  It is not a defect of this code: it reproduces in a small Metal program
+  without Dawn or the library, which points to Apple's shader compiler or GPU
+  (below).
 - **For the desktop app:** WebGPU is good enough on Apple GPUs to be the only GPU
   path on a Mac if the determinism defect is fixed, at a cost of up to 40 percent
   with the iterative solver and 20 to 120 percent with sparse_schur (40 at
@@ -90,43 +92,57 @@ the larger walks the counts differ, because WebAssembly does not fuse multiply-a
 on the host and the host's double arithmetic rounds differently (the reason D81
 keeps baselines per platform).
 
-### Open: repeated solves differ on some BAL problems
+### Open: repeated solves differ on some BAL problems (not a defect of this code)
 
 Repeated WebGPU solves of ladybug-49, venice-52 and final-93 give different
 iteration counts and final costs (for example 47 iterations and a final cost of
 13344.703 in one run, 49 and 13344.687 in another). Dubrovnik-16, trafalgar-21 and
 every synthetic problem, including the 2,000-image walk, repeat bit for bit. Metal,
-running the same algorithm, repeats on all of them. The answers are not wrong, but
-the library's determinism (D59, D93) does not hold. `webgpu_bal_shape` failed its
-in-process repeat check once in four `ctest -j4` runs, never when run alone.
+running the same algorithm, repeats on all of them. So the library's determinism
+(D59, D93) does not hold on WebGPU. `webgpu_bal_shape` failed its in-process repeat
+check once in four `ctest -j4` runs, never when run alone.
 
-Narrowed down:
+What goes wrong: in `block_gather` (the camera-side gather of the Schur product,
+mode 1), a thread's private sum for a per-image intrinsics block now and then comes
+out as the correct sum minus exactly one product, `j1 * r1` of the thread's first
+observation, in the first pass of the loop over the block's columns (checked against
+a host recomputation for ten failing threads). The affected steps are therefore
+slightly wrong, not only reordered; every step is still checked against the cost in
+double on the host, which is why the answers stay within tolerance.
 
-1. Waiting on the host after every single dispatch (`JBA_WEBGPU_SYNC=1`) does not
-   remove it, so it is not a missing barrier between dispatches.
-2. Hashing every buffer of the heap after every dispatch shows the first difference
-   in `block_gather` (the camera-side gather of the Schur product, mode 1), with
-   every input identical: one value of `q` differs, always the first (focal length)
-   component of a per-image intrinsics block, by about one thread's share of the
-   sum.
-3. Running that dispatch 20 times on unchanged memory sometimes gives a different
-   result. Each thread's own partial sum, computed from the heap before any group
-   memory is touched, is what differs.
-4. It is not the barriers of the tree (unrolled, and with a serial sum, it stays),
-   nor Dawn's robustness clamps (`disable_robustness`). Turning off Dawn's
-   zero-initialization of group memory (`disable_workgroup_init`) makes it much
-   rarer, as does halving the group memory, but neither removes it. Adding two
-   stores of debug output to the kernel made it disappear.
-5. Metal reports the expected 256 threads for these pipelines.
+Why it is not this code (a review on a second model, then checked by hand):
 
-Code that a small, unrelated change cures, and that depends on how much group
-memory is touched, points to code generation (Tint's MSL, or Apple's compiler on
-that MSL) rather than to the kernel's logic, but this is not established. Next
-steps: reproduce with Tint's MSL in a small Metal program on fixed data; try a later
-Dawn release; run the same build on Vulkan and Direct3D 12 on the laptop to see
-whether it is Apple-specific; then report it upstream with the reproduction. Until
-then the WebGPU backend cannot pass the benchmark's determinism check, which
-`bench/run.py --allow-nondeterministic` relaxes for this exploration.
+1. With every buffer hashed after every dispatch, the first difference is in
+   `block_gather`, with every input identical. Waiting on the host after every
+   dispatch (`JBA_WEBGPU_SYNC=1`) does not remove it.
+2. Re-running that dispatch on unchanged memory differs in 26 of 4,300 dispatches on
+   ladybug-49 and 113 of 680 on final-93; on dubrovnik-16 and trafalgar-21, none.
+3. Dawn's compiled MSL, run by a small Metal program (no Dawn, none of our host
+   code) on a snapshot of final-93's buffers, still fails, in every Metal math mode.
+4. Reduced to a kernel in which each thread only reads memory nothing writes, adds
+   in registers and stores one word of its own, with the group memory and barriers
+   compiled out (16 bytes of group memory), it still gives different sums in 130 of
+   20,000 dispatches. Removing Tint's bounds clamps and loop guards by hand does not
+   help.
+5. Reversing the column loop moves the fault from column 0 to column 4: it follows
+   the loop's first pass, not a memory location.
+
+A kernel with no shared state between threads, run on constant inputs, that returns
+different values from run to run is a fault of Apple's shader compiler or GPU on
+this code shape, not of `solver.wgsl`, `backend.cpp`, Dawn's runtime or Tint's
+additions. The WGSL was also reviewed kernel by kernel against `solver.inc`
+(indexing, structure layouts, State offsets, barriers, early returns): no race.
+
+Avoiding it: iterating the intrinsics columns of `block_gather` from 1 (`c = (cc + 1)
+% np`, the same arithmetic per column) removes it in the repeat test (0 of 4,300 and
+0 of 680), and all six BAL solves that differed then repeat five times out of five.
+Not applied: it sidesteps the trigger without explaining it, and `jf_times`,
+`rows_of` and `scale_observations` have loops of the same shape that were not tested
+on their own. The reproduction (the Metal program, the kernels, the snapshot and the
+reordered kernel) was saved under `build/metal-repro` in the exploration's worktree,
+for a report to Apple. Still to try: a later Dawn release, and the same build on
+Vulkan and Direct3D 12 on the laptop. Until then `bench/run.py
+--allow-nondeterministic` relaxes the benchmark's determinism check.
 
 ## Speed
 
@@ -240,8 +256,10 @@ with Dawn's release unpacked under `third_party/webgpu/dawn` and emdawnwebgpu un
 
 ## What it would take to merge
 
-1. Find and fix the determinism defect (above). Without it the backend breaks
-   D59's promise and the benchmark's regression rule.
+1. Deal with the Metal fault behind the non-repeatable solves (above): the loop
+   reordering that avoids it, checked on every kernel with the same loop shape, and
+   a report to Apple with the saved reproduction. Without that the backend breaks
+   D59's promise and the benchmark's regression rule on Apple GPUs.
 2. Measure on the laptop: Dawn on Direct3D 12 and Vulkan against CUDA, on Windows
    and Linux. This decides whether the desktop app can use WebGPU alone on Windows,
    and covers the Intel and AMD machines document 09 worries about.
