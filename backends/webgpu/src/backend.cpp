@@ -186,11 +186,17 @@ void create_context() {
   if (c.adapter == nullptr) fail("no adapter" + (amsg.empty() ? "" : ": " + amsg));
 
   WGPUAdapterInfo info = WGPU_ADAPTER_INFO_INIT;
+  bool not_a_gpu = false;
   if (wgpuAdapterGetInfo(c.adapter, &info) == WGPUStatus_Success) {
     c.name = str(info.device);
     if (const std::string d = str(info.description); !d.empty() && d != c.name) c.name += " (" + d + ")";
+    // Dawn's null backend runs no shaders, and a CPU adapter (a software renderer)
+    // is slower than the CPU backend: neither is a GPU. On a machine without a GPU
+    // driver Dawn offers one of them, where the solves came out wrong (CI, D128).
+    not_a_gpu = info.backendType == WGPUBackendType_Null || info.adapterType == WGPUAdapterType_CPU;
     wgpuAdapterInfoFreeMembers(info);
   }
+  if (not_a_gpu) fail("no GPU adapter (only " + (c.name.empty() ? std::string("a software one") : c.name) + ")");
   WGPULimits have = WGPU_LIMITS_INIT;
   if (wgpuAdapterGetLimits(c.adapter, &have) != WGPUStatus_Success) fail("adapter limits unavailable");
 
