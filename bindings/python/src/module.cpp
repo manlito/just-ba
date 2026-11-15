@@ -168,6 +168,12 @@ struct Callback {
   }
 };
 
+nb::dict cost_dict(const std::array<double, jba::kNumLossTypes>& c) {
+  nb::dict d;
+  for (std::size_t t = 0; t < jba::kNumLossTypes; ++t) d[std::string(jba::residual_type_name(t)).c_str()] = c[t];
+  return d;
+}
+
 }  // namespace
 
 NB_MODULE(_core, m) {
@@ -413,6 +419,10 @@ NB_MODULE(_core, m) {
       .def_ro("message", &jba::SolverSummary::message)
       .def_ro("initial_cost", &jba::SolverSummary::initial_cost)
       .def_ro("final_cost", &jba::SolverSummary::final_cost)
+      .def_prop_ro("initial_cost_by_type", [](const jba::SolverSummary& s) { return cost_dict(s.initial_cost_by_type); },
+                   "Initial cost by residual type, a dict.")
+      .def_prop_ro("final_cost_by_type", [](const jba::SolverSummary& s) { return cost_dict(s.final_cost_by_type); },
+                   "Final cost by residual type, a dict.")
       .def_ro("iterations", &jba::SolverSummary::iterations)
       .def_ro("accepted_steps", &jba::SolverSummary::accepted_steps)
       .def_ro("linear_iterations", &jba::SolverSummary::linear_iterations)

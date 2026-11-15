@@ -18,6 +18,7 @@ class CpuBackend final : public Backend {
   ~CpuBackend() override;
 
   double cost() override;
+  void cost_by_type(double* out) override;
   void linearize(bool compute_scaling) override;
   double gradient_max_norm() const override;
   double parameter_norm() const override;

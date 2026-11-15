@@ -20,6 +20,10 @@ class Backend {
   // Robustified cost 0.5 * sum rho(s) at the current parameters.
   virtual double cost() = 0;
 
+  // The same by residual type (kLossReprojection, ...; out has kNumLossTypes
+  // entries). Their sum equals cost() up to rounding.
+  virtual void cost_by_type(double* out) = 0;
+
   // Residuals, Jacobians and gradient at the current parameters. The Jacobian
   // column scaling is computed when `compute_scaling` is set (first call only, as
   // in Ceres) and reused afterwards.

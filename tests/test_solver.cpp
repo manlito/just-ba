@@ -9,6 +9,7 @@
 
 #include "check.h"
 #include "jba/geometry.h"
+#include "jba/report.h"
 #include "jba/solver.h"
 #include "synthetic.h"
 
@@ -257,6 +258,41 @@ int main() {
     plain.grav_image.clear();
     plain.grav_dir.clear();
     EXPECT(jba::choose_gauge(plain).heading_images.empty());
+  }
+
+  // Cost by residual type (document 01): sums to the total and agrees with the
+  // report, type by type, at the start and at the end.
+  {
+    auto p = jba_test::random_problem(CameraModel::Pinhole, 8, 150, 44);
+    std::vector<std::int32_t> pairs;
+    for (int i = 0; i < 8; ++i) pairs.insert(pairs.end(), {i, (i + 1) % 8});
+    jba::add_relative_priors_from_poses(p, p.poses, pairs);
+    p.glob_image = {2};
+    p.glob_pose.assign(p.poses.begin() + 14, p.poses.begin() + 21);
+    double g[3];
+    jba::quat_rotate(&p.poses[0], std::vector<double>{0, -1, 0}.data(), g);
+    p.grav_image = {0};
+    p.grav_dir.assign(g, g + 3);
+    p.obs_depth.assign(p.num_observations(), std::nan(""));
+    for (std::size_t k = 0; k < p.num_observations(); k += 3) p.obs_depth[k] = 5.0;
+    p.depth_correction_free.assign(p.num_images(), jba::kDepthScale);
+    perturb(p, 45);
+    jba::SolverOptions o;
+    o.loss = {jba::LossType::Cauchy, 2.0};
+    const auto start = p;
+    const auto s = jba::solve(p, o);
+    for (int when = 0; when < 2; ++when) {
+      const auto& by = when == 0 ? s.initial_cost_by_type : s.final_cost_by_type;
+      const double total = when == 0 ? s.initial_cost : s.final_cost;
+      const auto rep = jba::evaluate(when == 0 ? start : p, o);
+      double sum = 0;
+      for (double v : by) sum += v;
+      EXPECT_NEAR(sum, total, 1e-12 * total);
+      const double expect[jba::kNumLossTypes] = {rep.reprojection_cost, rep.relative_prior_cost, rep.global_prior_cost,
+                                                 rep.gravity_cost, rep.line_cost, rep.depth_cost};
+      for (std::size_t t = 0; t < jba::kNumLossTypes; ++t) EXPECT_NEAR(by[t], expect[t], 1e-9 * (1 + expect[t]));
+    }
+    EXPECT(s.final_cost_by_type[jba::kLossDepth] > 0 && s.final_cost_by_type[jba::kLossGravity] >= 0);
   }
 
   // With priors, results are still bit-identical for any thread count, and the

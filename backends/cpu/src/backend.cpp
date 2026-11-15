@@ -748,6 +748,30 @@ struct CpuBackend::Impl {
     });
   }
 
+  void cost_by_type(double* out) {
+    for (std::size_t ty = 0; ty < kNumLossTypes; ++ty) out[ty] = 0;
+    out[kLossReprojection] = reprojection_cost(cur.poses, cur.points, cur.intr);
+    if (has_depth) out[kLossDepth] += depth_cost(cur);
+    for (const FactorSet& fs : fsets) {
+      for (std::size_t f = 0; f < fs.count; ++f) {
+        double rw[kMaxFactorRows];
+        eval_factor(fs, f, cur, rw, nullptr);
+        double sq = 0;
+        for (int a = 0; a < fs.rows; ++a) sq += rw[a] * rw[a];
+        double rho[3];
+        evaluate_loss(fs.loss[f], sq, rho);
+        std::size_t ty = kLossDepth;
+        switch (fs.kind) {
+          case FactorKind::PosePrior: ty = pose_priors[f].relative ? kLossRelativePrior : kLossGlobalPrior; break;
+          case FactorKind::Gravity: ty = kLossGravity; break;
+          case FactorKind::Line: ty = kLossLine; break;
+          case FactorKind::DepthPrior: ty = kLossDepth; break;
+        }
+        out[ty] += 0.5 * rho[0];
+      }
+    }
+  }
+
   static constexpr int kMaxFactorRows = 6;
 
   double factor_cost(const FactorSet& fs, const Params& P) {
@@ -1574,6 +1598,8 @@ CpuBackend::CpuBackend(const Problem& problem, const SolverOptions& options, con
 CpuBackend::~CpuBackend() = default;
 
 double CpuBackend::cost() { return impl_->cost_of(impl_->cur); }
+
+void CpuBackend::cost_by_type(double* out) { impl_->cost_by_type(out); }
 
 void CpuBackend::linearize(bool compute_scaling) { impl_->linearize(compute_scaling); }
 

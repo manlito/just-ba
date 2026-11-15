@@ -18,7 +18,9 @@ SolverSummary solve(Problem& problem, const SolverOptions& options, const Iterat
   cpu::CpuBackend backend(problem, options, gauge);
   SolverSummary summary;
   summary.gauge = gauge;
+  backend.cost_by_type(summary.initial_cost_by_type.data());
   run_trust_region(backend, options, callback, summary);
+  backend.cost_by_type(summary.final_cost_by_type.data());
   backend.write_back(problem);
   return summary;
 }

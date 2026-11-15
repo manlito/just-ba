@@ -164,17 +164,27 @@ int solve(int argc, char** argv) {
   jba::store_losses(p, o);  // the output records the losses it was solved with
   if (!output.empty()) jba::write_problem(output, p);
   if (!history.empty()) write_history(history, s);
+  std::string by_type = "{";
+  for (std::size_t t = 0; t < jba::kNumLossTypes; ++t) {
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "%s\"%s\": [%.17g, %.17g]", t ? ", " : "",
+                  std::string(jba::residual_type_name(t)).c_str(), s.initial_cost_by_type[t], s.final_cost_by_type[t]);
+    by_type += buf;
+  }
+  by_type += "}";
   std::printf(
       "{\"input\": %s, \"model\": \"%s\", \"images\": %zu, \"points\": %zu, \"observations\": %zu, "
       "\"relative_priors\": %zu, \"global_priors\": %zu, \"gravity_priors\": %zu, \"loss\": \"%s\", "
       "\"loss_scale\": %g, \"gauge\": %s, "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
-      "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f}\n",
+      "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f, "
+      "\"cost_by_type\": %s}\n",
       json_string(input).c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
       p.num_observations(), p.num_relative_priors(), p.num_global_priors(), p.num_gravity_priors(),
       std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, gauge_json(s.gauge).c_str(), s.initial_cost,
       s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
-      std::string(jba::termination_name(s.termination)).c_str(), json_string(s.message).c_str(), s.time_seconds);
+      std::string(jba::termination_name(s.termination)).c_str(), json_string(s.message).c_str(), s.time_seconds,
+      by_type.c_str());
   return s.termination == jba::Termination::Failure ? 1 : 0;
 }
 
