@@ -28,4 +28,8 @@ endforeach()
 if(JBA_BUILD_TESTS)
   add_test(NAME python_tests COMMAND ${Python_EXECUTABLE} -m pytest -q ${CMAKE_CURRENT_SOURCE_DIR}/tests)
   set_tests_properties(python_tests PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}" LABELS python)
+  # Real sessions, when the private capture files are present (tests/real); skipped otherwise.
+  add_test(NAME real_captures COMMAND ${Python_EXECUTABLE} -m pytest -q -s ${PROJECT_SOURCE_DIR}/tests/real)
+  set_tests_properties(real_captures PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}"
+                       LABELS "python;real")
 endif()

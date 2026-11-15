@@ -234,5 +234,5 @@ The sample command-line binary is also the benchmark driver:
 - Tolerances for single precision on GPU. Caspar's authors list float32 summation
   error as a limitation, so realistic thresholds need measurement.
 - Which public phone-capture datasets to adopt (ARKitScenes is the obvious first
-  candidate), and whether the owner's existing system can export sessions for a
-  private test set.
+  candidate). The private test set exists (D78): ARCore captures exported by the
+  owner's matching tool, run by tests/real when present.

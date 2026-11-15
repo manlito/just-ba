@@ -11,14 +11,15 @@ namespace jba {
 // motion between the two frames (the LaMAR heuristic, document 02): frames far
 // apart are tied more loosely than neighbours.
 //
-// Provisional values: D21 stays open until real captures set them.
+// Relative values measured on ARCore captures (D77); global values are still
+// provisional (D21).
 struct PriorDefaults {
   // Relative priors: sigma = base + per_unit * motion.
-  double relative_rotation_sigma = 0.002;             // rad
-  double relative_rotation_per_radian = 0.02;         // rad per rad of rotation
+  double relative_rotation_sigma = 0.001;             // rad
+  double relative_rotation_per_radian = 0.012;        // rad per rad of rotation
   double relative_translation_sigma = 0.005;          // m
   double relative_translation_per_metre = 0.02;       // m per m travelled
-  // Global priors.
+  // Global priors (provisional).
   double global_rotation_sigma = 0.02;                // rad
   double global_position_sigma = 0.05;                // the set's own units
 };

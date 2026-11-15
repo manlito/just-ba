@@ -162,18 +162,22 @@ Results so far (2026-11-14, M5 Pro):
 
   | Scene | Start | Refined |
   |---|---|---|
-  | Room, tracker drift | 4.6 cm, 0.71 deg | 5.1 mm, 0.090 deg |
-  | Room, accurate priors (must not get worse) | 5.4 mm, 0.071 deg | 1.3 mm, 0.023 deg |
-  | Room, 10% wrong matches | 2.4 cm, 0.31 deg | 2.5 mm, 0.041 deg |
-  | Room, 5% wrong relative priors left in | 1.6 cm, 0.39 deg | 4.1 mm, 0.042 deg; all 8 reported, none wrongly |
-  | Room, tracking break, priors across it removed | | two groups, 5.2 and 4.6 mm |
-  | Room, relative priors plus network priors in a similarity frame, 5% outliers | 2.6 cm, 0.71 deg | 3.5 mm, 0.053 deg; scale within 2.1%; all 4 outliers reported |
+  | Room, tracker drift | 4.6 cm, 0.73 deg | 7.6 mm, 0.12 deg |
+  | Room, accurate priors (must not get worse) | 5.3 mm, 0.068 deg | 1.2 mm, 0.022 deg |
+  | Room, 10% wrong matches | 2.0 cm, 0.30 deg | 2.8 mm, 0.056 deg |
+  | Room, 5% wrong relative priors left in | 1.8 cm, 0.35 deg | 3.8 mm, 0.063 deg; all 8 reported, none wrongly |
+  | Room, tracking break, priors across it removed | | two groups, 5.6 and 5.8 mm |
+  | Room, relative priors plus network priors in a similarity frame, 5% outliers | 2.6 cm, 0.73 deg | 5.5 mm, 0.11 deg; scale within 2.1%; all 4 outliers reported |
   | Room, network priors only | 4.8 cm, 0.87 deg | 2.2 mm, 0.029 deg |
-  | Room, frames shuffled | 2.5 cm, 1.1 deg | 4.5 mm, 0.063 deg |
-  | Two rooms joined by a doorway | 2.7 cm, 0.41 deg | 5.8 mm, 0.25 deg |
-  | Building walked around outside, loop not closed | 16 cm, 1.0 deg | 3.1 mm, 0.010 deg |
-  | Room, OPENCV / OPENCV_FISHEYE | 2.3 / 1.5 cm | 3.1 / 1.3 mm |
+  | Room, frames shuffled | 2.3 cm, 1.1 deg | 6.0 mm, 0.096 deg |
+  | Two rooms joined by a doorway | 3.4 cm, 0.36 deg | 6.1 mm, 0.23 deg |
+  | Building walked around outside, loop not closed | 16 cm, 1.0 deg | 3.3 mm, 0.010 deg |
+  | Room, OPENCV / OPENCV_FISHEYE | 2.4 / 1.5 cm | 4.4 / 0.4 mm |
 
+  With the default relative prior weights measured on ARCore (D77). The synthetic
+  trackers drift more in heading than those captures, so the tighter rotation weight
+  costs a little on the drifting scenes: room with drift 5.1 mm and 0.090 deg before
+  D77.
   Keypoint noise is 0.5 px. With noise-free keypoints the images alone recover the
   truth exactly, so these figures are the scenes' own information limit, not a
   bias. The whole set runs in about 7 seconds.
@@ -183,8 +187,22 @@ Results so far (2026-11-14, M5 Pro):
   `refine`, a drifting tracker's 7.9 mm and 0.32 deg become 1.2 mm and 0.039 deg.
   The problem files match document 11's reference reader. Built and tested on the
   owner's Mac; added to the CI build on Linux and Windows, not yet run there.
-- Not done yet: the real-session part of the exit, which needs an exported ARKit or
-  ARCore session (open question 6 below).
+- Real sessions (D78): three ARCore captures from a Pixel 9a, 37 to 58 keyframes,
+  keypoints and matches from the owner's matching tool, the tracker's poses and
+  relative priors, through `refine` from Python. Results without ground truth:
+
+  | Capture | Refined images | Points | Reprojection, median / p90 | Priors down-weighted | Consecutive poses moved (median) |
+  |---|---|---|---|---|---|
+  | 20261114-154702 | 37 of 37 | 24,635 | 0.89 / 2.48 px | 0 of 144 | 0.22 deg, 5.9 mm |
+  | 20261114-155058 | 51 of 51 | 27,470 | 1.02 / 2.82 px | 2 of 291 | 0.28 deg, 9.6 mm |
+  | 20261114-163628, tracking lost three times | 52 of 58, 4 groups | 17,783 | 0.89 / 2.60 px | 21 of 152 | 0.53 deg, 16 mm |
+
+  On the third capture ARCore is up to 13 degrees off within a segment where it was
+  about to lose tracking; those priors are the ones down-weighted. Six of its images
+  have too few observations to count as refined (D76). The captures also set the
+  default relative prior weights (D77).
+- Exit met on 2026-11-14. Still to do from the review: the stored baseline, the
+  `loss.*` sections, and public headers separated from internal ones.
 
 ## Milestone 3: Manhattan prior and depth
 
@@ -289,7 +307,7 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 | 3 | Depth formulation | Decided: per-point depth residual with per-image scale and offset first; photometric refinement optional and later | 02 |
 | 4 | Order of GPU backends | Decided: CPU, then Metal, then CUDA | 03 |
 | 5 | Is the incremental pipeline needed before the GPU backends | No | this document |
-| 6 | Can the existing system export real sessions for a private test set | Still open. Needed before milestone 2 can finish: its exit condition is a real session | 05 |
+| 6 | Can the existing system export real sessions for a private test set | Decided: yes, through the owner's matching tool; the files stay outside the repository (D78) | 05 |
 | 7 | Open source licence | Decided: Apache-2.0 | 08 |
 | 8 | GPU test hardware | Decided: the owner's Mac for Metal; laptop (Linux and Windows) for CUDA development; a Google Cloud L4 VM for development sessions. All GPU testing is by hand; CI stays free, with no nightly jobs | 08 |
 

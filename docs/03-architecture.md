@@ -314,7 +314,7 @@ bindings/
 api/             public entry points (solve, evaluate, refine), later the C-level API
 cli/             sample binary and benchmark driver
 bench/         * benchmark definitions, stored baselines
-tests/           unit tests; tests/ceres holds the reference harness
+tests/           unit tests; tests/ceres holds the reference harness, tests/real runs private captures when present
 third_party/     reference solver build (Ceres), test-only
 ```
 

@@ -99,6 +99,16 @@ Run `build/cli/just-ba` without arguments for every option.
 With the reference solver enabled, `build/tests/ceres/jba_parity <problem>` solves
 the same problem with both solvers and checks the agreement (document 05).
 
+## Real captures
+
+`tests/real` runs `refine` from Python on every capture file it finds in `tests/data`
+or `tests/data/real` (both git-ignored), or in `JBA_REAL_CAPTURES`, and skips when
+there are none (D78). With the Python bindings built:
+
+```bash
+ctest --test-dir build -L real -V
+```
+
 ## Licence
 
 Apache-2.0 (the licence file is added before the repository goes public).

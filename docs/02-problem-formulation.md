@@ -204,7 +204,9 @@ says where one sits relative to another.
 Relative priors may arrive without weights, since trackers report no uncertainty.
 
 - The default covariance grows with the motion between the two frames (the LaMAR
-  heuristic), so frames far apart get a looser tie than frames close together.
+  heuristic), so frames far apart get a looser tie than frames close together. The
+  values were measured on ARCore captures (D77): 0.001 rad + 1.2% of the rotation,
+  5 mm + 2% of the distance.
 - Callers who have better information pass a weight per prior and override it.
 - An option to estimate the overall prior weight from the data (how well priors and
   images agree after a first solve) is worth testing, since a fixed default cannot
