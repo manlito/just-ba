@@ -14,6 +14,9 @@
 #ifdef JBA_HAVE_CUDA
 #include "jba/cuda/backend.h"
 #endif
+#ifdef JBA_HAVE_WEBGPU
+#include "jba/webgpu/backend.h"
+#endif
 
 namespace jba {
 
@@ -22,12 +25,13 @@ std::string_view backend_name(BackendKind kind) {
     case BackendKind::Cpu: return "cpu";
     case BackendKind::Metal: return "metal";
     case BackendKind::Cuda: return "cuda";
+    case BackendKind::WebGpu: return "webgpu";
   }
   return "cpu";
 }
 
 std::optional<BackendKind> backend_from_name(std::string_view name) {
-  for (BackendKind k : {BackendKind::Cpu, BackendKind::Metal, BackendKind::Cuda})
+  for (BackendKind k : {BackendKind::Cpu, BackendKind::Metal, BackendKind::Cuda, BackendKind::WebGpu})
     if (backend_name(k) == name) return k;
   return std::nullopt;
 }
@@ -44,6 +48,12 @@ bool backend_available(BackendKind kind) {
     case BackendKind::Cuda:
 #ifdef JBA_HAVE_CUDA
       return cuda::available();
+#else
+      return false;
+#endif
+    case BackendKind::WebGpu:
+#ifdef JBA_HAVE_WEBGPU
+      return webgpu::available();
 #else
       return false;
 #endif
@@ -69,6 +79,9 @@ std::optional<LinearSolverType> linear_solver_from_name(std::string_view name) {
 LinearSolverType resolve_linear_solver(LinearSolverType type, BackendKind backend) {
   if (type != LinearSolverType::Auto) return type;
   if (backend == BackendKind::Metal) return LinearSolverType::SparseSchur;
+#ifdef JBA_HAVE_WEBGPU
+  if (backend == BackendKind::WebGpu && webgpu::has_direct_solver()) return LinearSolverType::SparseSchur;
+#endif
 #ifdef JBA_HAVE_CUDSS
   if (backend == BackendKind::Cuda) return LinearSolverType::SparseSchur;
 #endif
@@ -80,6 +93,9 @@ namespace {
 // Backends with a direct solver for the reduced camera system (strategy B).
 bool has_sparse_schur(BackendKind backend) {
   if (backend == BackendKind::Metal) return true;
+#ifdef JBA_HAVE_WEBGPU
+  if (backend == BackendKind::WebGpu) return webgpu::has_direct_solver();
+#endif
 #ifdef JBA_HAVE_CUDSS
   if (backend == BackendKind::Cuda) return true;
 #endif
@@ -134,6 +150,12 @@ SolverSummary solve(Problem& problem, const SolverOptions& requested, const Iter
 #ifdef JBA_HAVE_CUDA
   if (options.backend == BackendKind::Cuda) {
     cuda::CudaBackend backend(problem, options, gauge);
+    return run(backend, problem, options, callback, gauge, start);
+  }
+#endif
+#ifdef JBA_HAVE_WEBGPU
+  if (options.backend == BackendKind::WebGpu) {
+    webgpu::WebGpuBackend backend(problem, options, gauge);
     return run(backend, problem, options, callback, gauge, start);
   }
 #endif

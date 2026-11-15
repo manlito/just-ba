@@ -197,7 +197,11 @@ def run_problems(args, cli, problems, tmp):
         result["linear_solver"] = first["linear_solver"]
         for r in runs[1:] + [cold]:
             if any(r[k] != first[k] for k in COUNTS) or r["final_cost"] != first["final_cost"]:
-                raise RuntimeError(f"{name}: repeated runs differ; the solver should be deterministic (D59)")
+                if not args.allow_nondeterministic:
+                    raise RuntimeError(f"{name}: repeated runs differ; the solver should be deterministic (D59)")
+                result.setdefault("nondeterministic", []).append(name)
+                print(f"warning: {name}: repeated runs differ", file=sys.stderr)
+                break
         best = min(runs, key=lambda r: r["time_seconds"])
         entry = {k: first[k] for k in ("images", "points", "observations", "relative_priors", "global_priors",
                                       "initial_cost", "final_cost", "linear_solver", *COUNTS)}
@@ -270,7 +274,7 @@ def main():
     ap.add_argument("--max-slowdown", type=float, default=0.10, help="allowed growth of time per iteration")
     ap.add_argument("--repeats", type=int, default=3, help="runs per problem; the best time is kept")
     ap.add_argument("--threads", type=int, default=0, help="solver threads (0: all)")
-    ap.add_argument("--backend", default="cpu", choices=["cpu", "metal", "cuda"])
+    ap.add_argument("--backend", default="cpu", choices=["cpu", "metal", "cuda", "webgpu"])
     ap.add_argument("--linear-solver", default="auto", choices=["auto", "iterative_schur", "sparse_schur"],
                     help="auto: the library's rule for the backend, as this build resolves it")
     ap.add_argument("--large", action="store_true", help="add the main-size-range problems (LARGE)")
@@ -279,6 +283,8 @@ def main():
     ap.add_argument("--ceres-sparse-library", default="accelerate",
                     choices=["eigen", "accelerate", "suite_sparse", "cuda"])
     ap.add_argument("--ceres-gpu", help="a second jba_ceres_solve, built with cuDSS (column ceres_gpu)")
+    ap.add_argument("--allow-nondeterministic", action="store_true",
+                    help="record problems whose repeated runs differ instead of stopping (WebGPU exploration)")
     ap.add_argument("--only", help="comma-separated substrings of problem names")
     args = ap.parse_args()
     result = run(args)

@@ -215,7 +215,8 @@ NB_MODULE(_core, m) {
                               "(NVIDIA GPUs).")
       .value("CPU", jba::BackendKind::Cpu)
       .value("METAL", jba::BackendKind::Metal)
-      .value("CUDA", jba::BackendKind::Cuda);
+      .value("CUDA", jba::BackendKind::Cuda)
+      .value("WEBGPU", jba::BackendKind::WebGpu);
   nb::enum_<jba::LinearSolverType>(m, "LinearSolver",
                                    "Inner solve: AUTO (the backend's fastest), ITERATIVE_SCHUR (every backend) "
                                    "or SPARSE_SCHUR (Metal; CUDA with cuDSS).")

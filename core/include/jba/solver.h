@@ -70,9 +70,10 @@ enum class BackendKind {
   Cpu,
   Metal,
   Cuda,
+  WebGpu,  // exploration: WGSL kernels on WebGPU (Dawn natively, or the browser)
 };
 
-std::string_view backend_name(BackendKind kind);  // "cpu", "metal", "cuda"
+std::string_view backend_name(BackendKind kind);  // "cpu", "metal", "cuda", "webgpu"
 std::optional<BackendKind> backend_from_name(std::string_view name);
 // Whether this build has the backend and the machine can run it.
 bool backend_available(BackendKind kind);

@@ -114,5 +114,103 @@ class CudaGenerator(_PointerCppBase):
     inline_keyword = "__device__ inline"
 
 
+class WgslGenerator(cg.CppGenerator):
+    """WGSL (WebGPU, exploration): single precision only, no templates or pointers
+    into arrays. Inputs are arrays passed by value, outputs pointers to
+    function-scope arrays. Arrays named in `padded` are declared with that size
+    whatever the model needs (intrinsics 8, their Jacobian 16), so every camera model
+    has the same signature and one kernel body calls any of them. There is no null
+    pointer in WGSL: optional outputs are always computed."""
+
+    padded = {"intrinsics": 8, "J_intrinsics": 16}
+
+    def _size(self, arg) -> int:
+        return self.padded.get(arg.name, _flat_size(arg))
+
+    def _param(self, arg) -> str:
+        if arg.is_input:
+            if isinstance(arg.type, type_info.MatrixType):
+                return f"{arg.name}: array<f32, {self._size(arg)}>"
+            return f"{arg.name}: f32"
+        return f"{arg.name}: ptr<function, array<f32, {self._size(arg)}>>"
+
+    def format_function_signature(self, sig: ast.FunctionSignature) -> str:
+        params = ", ".join(self._param(a) for a in sig.arguments)
+        return f"fn {sig.name}({params})"
+
+    def format_function_definition(self, element: ast.FunctionDefinition) -> str:
+        body = self._format_statements(element.body, indent=1)
+        return f"{self.format(element.signature)} {{\n{body}\n}}\n"
+
+    def _format_statements(self, statements, indent: int) -> str:
+        pad = "  " * indent
+        lines = []
+        for s in statements:
+            text = self.format(s)
+            lines.extend(pad + line if line else line for line in text.split("\n"))
+        return "\n".join(lines)
+
+    def _type(self, t) -> str:
+        if isinstance(t, type_info.ScalarType):
+            name = str(t.numeric_type).split(".")[-1].lower()
+            return {"float": "f32", "integer": "i32", "bool": "bool"}[name]
+        raise NotImplementedError(f"WGSL type for {t}")
+
+    def format_declaration(self, element: ast.Declaration) -> str:
+        if element.value is None:
+            return f"var {element.name}: {self._type(element.type)};"
+        return f"let {element.name}: {self._type(element.type)} = {self.format(element.value)};"
+
+    def format_assign_temporary(self, element: ast.AssignTemporary) -> str:
+        return f"{element.left} = {self.format(element.right)};"
+
+    def format_get_argument(self, element: ast.GetArgument) -> str:
+        return element.argument.name
+
+    def format_get_matrix_element(self, element: ast.GetMatrixElement) -> str:
+        arg = element.arg.argument
+        return f"{arg.name}[{_flat_index(arg, element.row, element.col)}]"
+
+    def format_assign_output_matrix(self, element: ast.AssignOutputMatrix) -> str:
+        arg = element.arg
+        values = element.value.args
+        assert len(values) == _flat_size(arg)
+        return "\n".join(f"(*{arg.name})[{i}] = {self.format(v)};" for i, v in enumerate(values))
+
+    def format_optional_output_branch(self, element: ast.OptionalOutputBranch) -> str:
+        return "\n".join(self.format(s) for s in element.statements)
+
+    def format_branch(self, element: ast.Branch) -> str:
+        body = self._format_statements(element.if_branch, indent=1)
+        text = f"if ({self.format(element.condition)}) {{\n{body}\n}}"
+        if element.else_branch:
+            text += f" else {{\n{self._format_statements(element.else_branch, indent=1)}\n}}"
+        return text
+
+    def format_cast(self, element: ast.Cast) -> str:
+        if isinstance(element.arg, (ast.IntegerLiteral, ast.FloatLiteral)):
+            return self.format(element.arg)  # literals are already f32
+        return f"{self._type(type_info.ScalarType(element.destination_type))}({self.format(element.arg)})"
+
+    def format_float_literal(self, element: ast.FloatLiteral) -> str:
+        return f"{float(element.value)!r}f"
+
+    def format_integer_literal(self, element: ast.IntegerLiteral) -> str:
+        return f"{int(element.value)}f"
+
+    def format_ternary(self, element: ast.Ternary) -> str:
+        return f"select({self.format(element.right)}, {self.format(element.left)}, {self.format(element.condition)})"
+
+    _NAMES = {"Cos": "cos", "Sin": "sin", "Tan": "tan", "Acos": "acos", "Asin": "asin", "Atan": "atan",
+              "Log": "log", "Exp": "exp", "Sqrt": "sqrt", "Abs": "abs", "Floor": "floor", "Atan2": "atan2",
+              "Signum": "sign"}
+
+    def format_call_std_function(self, element: ast.CallStdFunction) -> str:
+        name = element.function.name
+        if name not in self._NAMES:  # pow is exp2(y log2 x) in WGSL: wrong for x < 0
+            raise NotImplementedError(f"WGSL has no exact {name}")
+        return f"{self._NAMES[name]}({', '.join(self.format(a) for a in element.args)})"
+
+
 def generate(func, generator, name=None) -> str:
     return cg.generate_function(func, generator=generator, name=name)
