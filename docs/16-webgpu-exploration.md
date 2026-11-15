@@ -134,7 +134,7 @@ this code shape, not of `solver.wgsl`, `backend.cpp`, Dawn's runtime or Tint's
 additions. The WGSL was also reviewed kernel by kernel against `solver.inc`
 (indexing, structure layouts, State offsets, barriers, early returns): no race.
 
-The workaround (D119): `block_gather` takes the intrinsics columns in the order 1,
+The workaround (D126): `block_gather` takes the intrinsics columns in the order 1,
 2, ..., np - 1, 0 (`c = (cc + 1) % np`), the same sums per column. The repeat test
 then fails in 0 of 4,300 and 0 of 680 dispatches. Five solves of each of the five BAL
 problems, with each linear solver, repeat bit for bit, and the WebGPU tests pass

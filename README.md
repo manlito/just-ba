@@ -45,6 +45,16 @@ The package is assembled in `build/bindings/python/just_ba` and tested by `ctest
 PYTHONPATH=build/bindings/python bindings/python/.venv/bin/python -c "import just_ba; print(just_ba.CameraModel.OPENCV)"
 ```
 
+Or install it like a released package, built through `pyproject.toml`
+(scikit-build-core; CPU, and Metal on macOS):
+
+```bash
+uv pip install --python bindings/python/.venv/bin/python .
+```
+
+`uv build --wheel` writes the wheel to `dist/`; set `MACOSX_DEPLOYMENT_TARGET=13.0`
+on macOS for a wheel that runs on macOS 13 and later.
+
 The main entry point is `just_ba.refine(scene, keypoints, matches=...)`: a `Problem`
 holding the camera and the pose priors, one `(n, 2)` keypoint array per image, and
 pairwise matches `(m, 4)`. `just_ba.poses_from_camera_to_world(T, "arkit")` converts
@@ -52,8 +62,7 @@ ARKit or ARCore camera-to-world matrices to the library's poses. Optional inputs
 gravity priors (`grav_image`, `grav_dir`), line segments for the Manhattan prior
 (`line_image`, `line_xy`, with `RefineOptions.use_manhattan`), and a depth reading per
 keypoint (`refine(..., keypoint_depth=...)`). `just_ba.covariance(problem)` gives pose
-and point covariances; `export_colmap` and `write_result` write the result. Packaging
-for PyPI is milestone 6.
+and point covariances; `export_colmap` and `write_result` write the result.
 
 ## Reference solver (test-only)
 
@@ -115,11 +124,15 @@ host; their answers agree with the CPU's to single-precision tolerance, not bit 
 bit (document 03, D91). They share one kernel source and one host side (D96). Their
 `sparse_schur` forms the reduced camera system and factorizes it, with Accelerate
 on Metal (its default, D92) and with NVIDIA cuDSS on CUDA when built with it (D98).
-`ctest -L gpu` compares each GPU backend built with the CPU backend on every parity
-problem.
+The documentation site is built from `docs-site/` (`docs-site/README.md`).
 
-Metal is built by default on macOS. CUDA needs the CUDA toolkit, 13.3 or later, and
-is built for the GPU of the build machine unless `CMAKE_CUDA_ARCHITECTURES` is set:
+`ctest -L gpu` compares each GPU backend built with the CPU backend on every parity
+problem. `python3 bench/gpu_check.py` runs the whole GPU check by hand: build, GPU and
+Python tests, and the benchmark against this machine's baselines (`bench/README.md`).
+
+Metal is built by default on macOS. CUDA needs the CUDA toolkit, 12 or later (the
+CUDA sources are C++20, D113), and is built for the GPU of the build machine unless
+`CMAKE_CUDA_ARCHITECTURES` is set:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CUDA=ON

@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(just_ba VERSION 0.0.1 DESCRIPTION "Minimal, fast bundle adjustment" LANGUAGES CXX)
+project(just_ba VERSION 0.1.0 DESCRIPTION "Minimal, fast bundle adjustment" LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)  # decision D52: the newest standard nvcc supports (CUDA 13.3+)
+set(CMAKE_CXX_STANDARD 23)  # decision D52; the CUDA sources are C++20 (D113)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -31,7 +31,7 @@ if(APPLE)
 else()
   set(JBA_WITH_METAL OFF)
 endif()
-option(JBA_WITH_CUDA "Build the CUDA backend (needs the CUDA toolkit, 13.3 or later)" OFF)
+option(JBA_WITH_CUDA "Build the CUDA backend (needs the CUDA toolkit, 12 or later)" OFF)
 option(JBA_WITH_WEBGPU "Build the WebGPU backend (exploration; needs Dawn natively, emdawnwebgpu under Emscripten)" OFF)
 option(JBA_WITH_CUDSS "CUDA backend: sparse_schur with NVIDIA cuDSS (needs cuDSS 1.0 or later)" OFF)
 if(JBA_WITH_CUDA)
@@ -40,7 +40,10 @@ if(JBA_WITH_CUDA)
     set(CMAKE_CUDA_ARCHITECTURES native)
   endif()
   enable_language(CUDA)
-  set(CMAKE_CUDA_STANDARD 23)
+  # C++20, not the host's C++23: nvcc accepts C++23 only from CUDA 13.3, and the
+  # CUDA 12 wheels keep the GPU generations CUDA 13 dropped (D113). The headers the
+  # CUDA sources include keep to C++20.
+  set(CMAKE_CUDA_STANDARD 20)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   set(CMAKE_CUDA_EXTENSIONS OFF)
 endif()

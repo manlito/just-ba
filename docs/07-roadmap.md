@@ -490,6 +490,40 @@ Details in document 08.
 Exit: `pip install` works on the three platforms, the documentation site is live, and
 CI blocks regressions.
 
+Built (2026-11-15, D114 to D119):
+
+- Packaging: `pyproject.toml` (scikit-build-core), version 0.1.0, three packages
+  (`just-ba`, `just-ba-cu12`, `just-ba-cu13`) providing `just_ba`, type stubs, and
+  NVIDIA's libraries loaded from NVIDIA's pip packages. Checked on the Mac: the
+  macOS wheel (0.4 MB) installs in a fresh environment, passes the Python tests and
+  has Metal.
+- `release.yml` (by hand): every wheel and the sdist, tested, published with
+  `publish=true`; CUDA 12.9.1 and 13.4.3 with cuDSS 1.0.0.35 from NVIDIA's archives.
+- CI's benchmark gate on the hosted Linux runner (loose tolerances), runs stored
+  per commit with `run.py --store`; the Metal step removed.
+- `bench/gpu_check.py`, the GPU check by hand. First run on the Mac: everything but
+  the iterative_schur timing passes, which a busy machine explains (D118).
+- The documentation site in `docs-site/` and `docs.yml` (by hand): clean with
+  warnings as errors, 10 docstring examples pass.
+
+Run on GitHub (2026-11-15): CI passes with the benchmark gate (baseline from the
+runner, times compared on its CPU model only, D117); the release workflow builds and
+tests all seven wheels and the sdist (0.4 to 2.0 MB, D114); the docs workflow builds
+the site and its examples pass.
+
+The CUDA wheels on the laptop's Linux (2026-11-15, RTX 2070 Max-Q, driver 620.70,
+Python 3.14, wheels from the release run): `bench/gpu_check.py --wheel` passes for
+`just-ba-cu12` and `just-ba-cu13` (fresh environment, 12 Python tests with the CUDA
+one, CUDA available). A `refine` on CUDA with `just-ba-cu13` converged with
+sparse_schur, and the process mapped cuDSS, cuBLAS, cuBLASLt and NVRTC from NVIDIA's
+pip packages only, not from the laptop's own CUDA 13 in /opt/cuda (D115). The laptop
+has no CUDA 12, so `just-ba-cu12` can only have loaded them from the packages.
+
+Not done yet, so the exit is not met: nothing is on PyPI or Cloudflare Pages, and the
+CUDA wheels are not yet checked on the laptop's Windows. The owner's set-up for
+publishing: pending publishers on PyPI for `just-ba-cu12` and `just-ba-cu13`, and
+the Cloudflare project, token and account ID as repository secrets.
+
 ## Milestone 7: incremental pipeline and COLMAP parity
 
 - Minimal incremental reconstruction (document 04, part C).

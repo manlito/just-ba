@@ -6,3 +6,5 @@ __pycache__/
 # Real captures (for example exported by just-ba-match) stay local.
 /tests/data/*.jba
 /tests/data/real/
+dist/
+wheelhouse/

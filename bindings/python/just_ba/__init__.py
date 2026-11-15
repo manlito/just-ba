@@ -13,6 +13,17 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._build_info import CUDA_VERSION, VARIANT, __version__
+
+if VARIANT.startswith("cu"):
+    from . import _nvidia
+
+    _nvidia.preload()
+    try:
+        from . import _core
+    except ImportError as e:
+        raise ImportError(f"{e}; {_nvidia.import_error_hint(VARIANT)}") from e
+
 from ._core import *  # noqa: F401,F403
 from ._core import Problem, num_params
 
@@ -37,7 +48,11 @@ def _flip(convention: str) -> np.ndarray:
 
 
 def quat_from_matrix(R) -> np.ndarray:
-    """Unit quaternions (w, x, y, z), w >= 0, of rotation matrices (..., 3, 3)."""
+    """Unit quaternions (w, x, y, z), w >= 0, of rotation matrices (..., 3, 3).
+
+    >>> jba.quat_from_matrix(np.eye(3))
+    array([1., 0., 0., 0.])
+    """
     R = np.asarray(R, dtype=np.float64)
     flat = R.reshape(-1, 3, 3)
     q = np.empty((flat.shape[0], 4))
@@ -61,7 +76,13 @@ def quat_from_matrix(R) -> np.ndarray:
 
 
 def matrix_from_quat(q) -> np.ndarray:
-    """Rotation matrices (..., 3, 3) of unit quaternions (..., 4), (w, x, y, z)."""
+    """Rotation matrices (..., 3, 3) of unit quaternions (..., 4), (w, x, y, z).
+
+    >>> jba.matrix_from_quat([0.0, 1.0, 0.0, 0.0])  # half a turn about x
+    array([[ 1.,  0.,  0.],
+           [ 0., -1.,  0.],
+           [ 0.,  0., -1.]])
+    """
     q = np.asarray(q, dtype=np.float64)
     w, x, y, z = np.moveaxis(q, -1, 0)
     R = np.stack(
@@ -85,6 +106,13 @@ def poses_from_camera_to_world(T, convention: str = "opencv") -> np.ndarray:
     ARKit's ``ARCamera.transform`` and ARCore's ``Camera.getPose()`` follow the
     OpenGL camera axes according to their documentation; check this on a real
     session before relying on it (document 02).
+
+    An ARKit camera at (1, 2, 3) with the world's axes: in the library's axes it
+    looks down the world's -z, so its rotation is half a turn about x.
+
+    >>> T = np.eye(4); T[:3, 3] = [1.0, 2.0, 3.0]
+    >>> jba.poses_from_camera_to_world(T, "arkit")
+    array([ 0.,  1.,  0.,  0., -1.,  2.,  3.])
     """
     T = np.asarray(T, dtype=np.float64)
     single = T.ndim == 2
@@ -99,7 +127,14 @@ def poses_from_camera_to_world(T, convention: str = "opencv") -> np.ndarray:
 
 def camera_to_world_from_poses(poses, convention: str = "opencv") -> np.ndarray:
     """Camera-to-world matrices (N, 4, 4) from library poses (N, 7); inverse of
-    poses_from_camera_to_world."""
+    poses_from_camera_to_world.
+
+    >>> jba.camera_to_world_from_poses([0.0, 1.0, 0.0, 0.0, -1.0, 2.0, 3.0], "arkit")
+    array([[1., 0., 0., 1.],
+           [0., 1., 0., 2.],
+           [0., 0., 1., 3.],
+           [0., 0., 0., 1.]])
+    """
     poses = np.asarray(poses, dtype=np.float64)
     single = poses.ndim == 1
     poses = poses.reshape(-1, 7)
@@ -114,7 +149,11 @@ def camera_to_world_from_poses(poses, convention: str = "opencv") -> np.ndarray:
 
 
 def camera_centres(poses) -> np.ndarray:
-    """Camera centres (N, 3) of library poses (N, 7): C = -R^T t."""
+    """Camera centres (N, 3) of library poses (N, 7): C = -R^T t.
+
+    >>> jba.camera_centres([0.0, 1.0, 0.0, 0.0, -1.0, 2.0, 3.0])
+    array([[1., 2., 3.]])
+    """
     poses = np.asarray(poses, dtype=np.float64).reshape(-1, 7)
     R = matrix_from_quat(poses[:, :4])
     return -np.einsum("nji,nj->ni", R, poses[:, 4:])
@@ -123,7 +162,13 @@ def camera_centres(poses) -> np.ndarray:
 def make_problem(model, intrinsics, **fields) -> Problem:
     """A Problem from keyword arguments: ``model`` (name or CameraModel),
     ``intrinsics``, then any Problem attribute (poses, points, obs_image, ...,
-    rel_images, rel_pose, glob_image, glob_pose, set_relation, set_transform)."""
+    rel_images, rel_pose, glob_image, glob_pose, set_relation, set_transform).
+
+    >>> s = jba.make_problem("PINHOLE", [500.0, 500.0, 320.0, 240.0],
+    ...                      poses=np.tile([1.0, 0, 0, 0, 0, 0, 0], (2, 1)))
+    >>> s.num_images, s.num_points
+    (2, 0)
+    """
     p = Problem()
     p.model = model
     p.intrinsics = np.asarray(intrinsics, dtype=np.float64)

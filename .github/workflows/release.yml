@@ -1,0 +1,142 @@
+# Release to PyPI (document 08, D111). Started by hand only, like CI (D49, D110):
+#
+#   gh workflow run release                  # build and test every wheel, publish nothing
+#   gh workflow run release -f publish=true  # the same, then publish to PyPI
+#
+# Free hosted runners only (D39). Three packages (D114): just-ba (CPU, and Metal on
+# macOS) for Linux x86_64, macOS arm64 and Windows x86_64, with the sdist;
+# just-ba-cu12 and just-ba-cu13 for Linux x86_64 and Windows x86_64, built against
+# CUDA and cuDSS from NVIDIA's redistributable archives (packaging/fetch_cuda.py)
+# and depending on NVIDIA's pip packages at run time (D115). Publishing uses PyPI
+# trusted publishing for this file, with no GitHub environment and no token.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI after building and testing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CUDSS_VERSION: "1.0.0.35"
+
+jobs:
+  sdist:
+    name: sdist
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build && python -m build --sdist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+
+  wheels:
+    name: ${{ matrix.variant }} wheel (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, variant: cpu }
+          - { os: macos-15, variant: cpu }
+          - { os: windows-2025, variant: cpu }
+          # CUDA 12 keeps the GPU generations CUDA 13 dropped (D113); 13.4 is the
+          # laptop's and the CI job's.
+          - { os: ubuntu-24.04, variant: cu12, cuda: "12.9.1" }
+          - { os: ubuntu-24.04, variant: cu13, cuda: "13.4.3" }
+          # CUDA 12.9's nvcc accepts Visual Studio 2017 to 2022 only; the runner has
+          # Visual Studio 2026 with the 2022 compiler (MSVC 14.44) as a component.
+          - { os: windows-2025, variant: cu12, cuda: "12.9.1", msvc: "14.44" }
+          - { os: windows-2025, variant: cu13, cuda: "13.4.3" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Linux CUDA: the toolkit and cuDSS are fetched inside the manylinux container.
+      - name: CUDA package settings (Linux)
+        if: matrix.variant != 'cpu' && runner.os == 'Linux'
+        run: |
+          python packaging/variant.py ${{ matrix.variant }} --root /opt/jba-cuda --platform linux
+          {
+            echo "CIBW_BEFORE_ALL_LINUX=/opt/python/cp312-cp312/bin/python {package}/packaging/fetch_cuda.py --cuda ${{ matrix.cuda }} --cudss ${CUDSS_VERSION} --dest /opt/jba-cuda"
+            # The stub generation imports the module, which loads cuDSS and cuBLAS.
+            echo "CIBW_ENVIRONMENT_LINUX=LD_LIBRARY_PATH=/opt/jba-cuda/cudss/lib:/opt/jba-cuda/cuda/lib"
+            # NVIDIA's libraries stay out of the wheel; they come from NVIDIA's pip packages.
+            echo "CIBW_REPAIR_WHEEL_COMMAND_LINUX=auditwheel repair -w {dest_dir} --exclude 'libcudss.so*' --exclude 'libcublas*.so*' --exclude 'libnvrtc*.so*' {wheel}"
+          } >> "$GITHUB_ENV"
+
+      # Windows CUDA: fetched on the runner; nvcc needs MSVC's environment and Ninja
+      # (no CUDA integration in Visual Studio without NVIDIA's installer).
+      - name: CUDA package settings (Windows)
+        if: matrix.variant != 'cpu' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python packaging/variant.py ${{ matrix.variant }} --root C:/jba-cuda --platform windows
+          python packaging/fetch_cuda.py --cuda ${{ matrix.cuda }} --cudss $env:CUDSS_VERSION --dest C:/jba-cuda
+          $dirs = (Get-ChildItem C:/jba-cuda -Recurse -Filter *.dll | ForEach-Object DirectoryName | Sort-Object -Unique) -join ';'
+          "JUST_BA_DLL_PATH=$dirs" >> $env:GITHUB_ENV
+          "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
+          "CIBW_BEFORE_BUILD_WINDOWS=pip install delvewheel" >> $env:GITHUB_ENV
+          "CIBW_REPAIR_WHEEL_COMMAND_WINDOWS=python {package}/packaging/repair_windows.py {wheel} {dest_dir} C:/jba-cuda" >> $env:GITHUB_ENV
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+        if: matrix.variant != 'cpu' && runner.os == 'Windows'
+        with:
+          arch: x64
+          toolset: ${{ matrix.msvc }}
+
+      - uses: pypa/cibuildwheel@v4.3.5
+        with:
+          output-dir: wheelhouse
+      - name: Wheel size
+        shell: bash
+        run: ls -l wheelhouse
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-${{ matrix.variant }}-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  publish:
+    name: publish to PyPI
+    if: inputs.publish
+    needs: [sdist, wheels]
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+      - name: One folder per package
+        run: |
+          mkdir -p pkg/just-ba pkg/just-ba-cu12 pkg/just-ba-cu13
+          mv dist/just_ba_cu12-* pkg/just-ba-cu12/
+          mv dist/just_ba_cu13-* pkg/just-ba-cu13/
+          mv dist/just_ba-* pkg/just-ba/
+          ls -lR pkg
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
+        with:
+          packages-dir: pkg/just-ba/
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
+        with:
+          packages-dir: pkg/just-ba-cu12/
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
+        with:
+          packages-dir: pkg/just-ba-cu13/

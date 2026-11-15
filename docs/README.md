@@ -21,7 +21,11 @@ Milestone 5 was reviewed on both machines
 ([14-review-milestone-5.md](14-review-milestone-5.md)): the CUDA backend's answers,
 repeatability and baseline held, but the speed figures left out the backend's set-up.
 Its findings are fixed (D101 to D104) and the comparison was repeated with times of
-the whole call, warm and cold, and recorded. The fixes were reviewed in turn
+the whole call, warm and cold, and recorded. Milestone 6 (release to PyPI) is built
+(D114 to D119): packaging, the release, docs and benchmark-gate workflows, the GPU
+check, and the documentation site; its workflows pass on GitHub, every wheel
+included, and the CUDA wheels pass on the laptop's GPU under Linux; nothing is
+published yet, and their Windows check is outstanding (document 07). The fixes were reviewed in turn
 ([15-review-milestone-5-fixes.md](15-review-milestone-5-fixes.md)): they hold and the
 recorded figures follow from the recorded files; the new CI job for CUDA will not
 build as written, and two statements about the comparison were corrected. Build
@@ -54,7 +58,7 @@ instructions:
 
 Decided so far:
 
-- Language: C++, standard C++23 (D52).
+- Language: C++, standard C++23 (D52); the CUDA sources are C++20 (D113).
 - Correctness means agreeing with Ceres Solver.
 - The speed claim is made for 50 to 2,000 images; up to 10,000 is supported.
 - Depth starts as a term at keypoints; photometric refinement (as in PyPose `bae`)
@@ -83,10 +87,10 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
    D109 (venice-52 not studied before milestone 6).
 4. **From the review of the fixes** (document 15): its two questions are answered by
    D105 (`Auto` keeps one rule) and D106 (Caspar compared on its own scale).
-5. **Before milestone 6:** which CUDA versions the wheels support. CUDA 12 and 13
-   were asked for; D52's C++23 needs CUDA 13.3. Decided so far: no Linux arm64
-   wheels (D108), CI and releases started by hand (D110, D111), docs on Cloudflare
-   Pages (D112).
+5. **Before milestone 6:** all answered. No Linux arm64 wheels (D108), venice-52
+   not studied (D109), CI and releases started by hand (D110, D111), docs on
+   Cloudflare Pages (D112), CUDA 12 and 13 wheels with the CUDA sources in C++20
+   (D113).
 
 ## Reference material
 

@@ -229,7 +229,12 @@ the two final costs. Kornia-rs and GTSAM were not run.
   CI uses free hosted runners only, with nothing scheduled.
 - Results are stored as JSON per commit so trends can be plotted.
 - Built for the CPU (D81): `bench/run.py` and a baseline for the owner's Mac in
-  `bench/baseline/`, taken at the end of milestone 2. It runs by hand, not in CI.
+  `bench/baseline/`, taken at the end of milestone 2. Since milestone 6 CI runs it
+  too (D117): the job "benchmark gate (CPU)" on the hosted Linux runner, venice-52
+  left out, against `bench/baseline/github-ubuntu-24.04.json` with loose tolerances
+  (final cost 1e-6 relative, counts within 10%, time per iteration +50%), since the
+  runner's CPU varies; CI is still started by hand (D110). By-hand runs are stored
+  per commit with `run.py --store <machine>` under `bench/results/`.
 - Every new residual type must add: Level 1 checks, a synthetic Level 2 problem, and
   a line in the speed benchmark showing existing problems did not slow down.
 

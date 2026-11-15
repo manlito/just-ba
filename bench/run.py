@@ -27,7 +27,20 @@ one problem at a time; hosted CI runners are too noisy for them.
       --compare bench/baseline/apple-m5pro-metal-sparse.json
 
 A baseline records its backend and linear solver; --compare refuses a baseline of
-another configuration, and with --only compares only the problems run.
+another configuration, and with --only compares only the problems run. --skip leaves
+problems out (CI leaves out venice-52, as its quick mode does).
+
+Tolerances: the defaults above suit a baseline recorded on the same machine. A
+baseline from another machine of the same class, such as a hosted CI runner whose CPU
+varies between runs, takes looser ones: --cost-rtol (final cost, relative),
+--count-slack (iteration, accepted-step and linear-iteration counts, relative) and
+--max-slowdown. CI uses 1e-6 (document 05's Level 2 tolerance), 0.1 and 0.5, with
+--time-same-cpu: times are compared only on a runner with the baseline's CPU model,
+since hosted runners of one label differ in speed by up to 2x (D117).
+
+Stored results (document 05: per commit, so trends can be plotted): --store <machine>
+also writes the run to bench/results/<machine>/<date>-<commit>-<backend>-<solver>.json,
+with the full commit, the date, and the build's compiler and build type. Commit them.
 
 --ceres <jba_ceres_solve> also solves every problem with Ceres (SPARSE_SCHUR, the same
 gauge, all threads; --ceres-sparse-library picks the sparse Cholesky: Eigen's,
@@ -45,9 +58,12 @@ walked captures of 500 to 10,000 images. Standard library only.
 """
 
 import argparse
+import datetime
+import glob
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -99,10 +115,10 @@ def exe(build, *parts):
     sys.exit(f"{os.path.join(build, *parts)} not found; build the CLI and the tests first")
 
 
-def git_commit():
+def git_commit(short=True):
     try:
-        sha = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
-                             check=True).stdout.strip()
+        cmd = ["git", "-C", ROOT, "rev-parse"] + (["--short"] if short else []) + ["HEAD"]
+        sha = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
         dirty = subprocess.run(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"],
                                capture_output=True, text=True).stdout.strip()
         return sha + ("-dirty" if dirty else "")
@@ -110,9 +126,40 @@ def git_commit():
         return "unknown"
 
 
+def build_info(build):
+    """Compiler and build type of the build directory, from CMake's own files."""
+    info = {}
+    try:
+        with open(os.path.join(build, "CMakeCache.txt")) as f:
+            for line in f:
+                m = re.match(r"CMAKE_BUILD_TYPE:\w+=(.*)", line)
+                if m:
+                    info["build_type"] = m.group(1).strip()
+    except OSError:
+        pass
+    for path in glob.glob(os.path.join(build, "CMakeFiles", "*", "CMakeCXXCompiler.cmake")):
+        with open(path) as f:
+            text = f.read()
+        cid = re.search(r'set\(CMAKE_CXX_COMPILER_ID "([^"]*)"\)', text)
+        ver = re.search(r'set\(CMAKE_CXX_COMPILER_VERSION "([^"]*)"\)', text)
+        if cid and ver:
+            info["compiler"] = f"{cid.group(1)} {ver.group(1)}"
+    return info
+
+
 def machine():
     info = {"system": platform.system(), "release": platform.release(), "machine": platform.machine(),
             "cpus": os.cpu_count()}
+    if platform.system() == "Linux":
+        try:
+            with open("/proc/cpuinfo") as f:
+                names = [l.split(":", 1)[1].strip() for l in f if l.startswith("model name")]
+            if names:
+                info["cpu"] = names[0]
+        except OSError:
+            pass
+    elif platform.system() == "Windows":
+        info["cpu"] = platform.processor()
     if platform.system() == "Darwin":
         try:
             info["cpu"] = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
@@ -170,6 +217,10 @@ def run(args):
         keep = lambda n: any(o in n for o in args.only.split(","))
         problems = [(n, p) for n, p in problems if keep(n)]
         synthetic = [(n, o) for n, o in synthetic if keep(n)]
+    if args.skip:
+        drop = lambda n: any(o in n for o in args.skip.split(","))
+        problems = [(n, p) for n, p in problems if not drop(n)]
+        synthetic = [(n, o) for n, o in synthetic if not drop(n)]
     with tempfile.TemporaryDirectory(prefix="jba_bench_") as tmp:
         for name, opts in synthetic:
             p = os.path.join(tmp, name + ".jba")
@@ -179,7 +230,9 @@ def run(args):
 
 
 def run_problems(args, cli, problems, tmp):
-    result = {"commit": git_commit(), "machine": machine(), "backend": args.backend,
+    result = {"commit": git_commit(), "commit_full": git_commit(short=False),
+              "date": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+              "build": build_info(args.build), "machine": machine(), "backend": args.backend,
               "linear_solver": args.linear_solver, "threads": args.threads, "repeats": args.repeats,
               "timing": "whole call, set-up included; warm (best of repeats) and cold (a fresh process)",
               "problems": {}}
@@ -238,8 +291,14 @@ def run_problems(args, cli, problems, tmp):
     return result
 
 
-def compare(result, baseline, max_slowdown, only=None):
+def compare(result, baseline, max_slowdown, only=None, cost_rtol=1e-9, count_slack=0.0, time_same_cpu=False):
     problems = []
+    check_time = True
+    if time_same_cpu:
+        b_cpu, r_cpu = baseline.get("machine", {}).get("cpu"), result["machine"].get("cpu")
+        check_time = b_cpu is not None and b_cpu == r_cpu
+        if not check_time:
+            print(f"times not compared: this CPU ({r_cpu}) is not the baseline's ({b_cpu})", file=sys.stderr)
     if "timing" not in baseline:
         return ["baseline was recorded before times included the set-up (D101); record it again"]
     for key, default in (("backend", "cpu"), ("linear_solver", "iterative_schur")):
@@ -252,13 +311,16 @@ def compare(result, baseline, max_slowdown, only=None):
                 problems.append(f"{name}: not run")
             continue
         for k in COUNTS:
-            if r[k] != b[k]:
+            if isinstance(b[k], (int, float)) and count_slack > 0:
+                if abs(r[k] - b[k]) > count_slack * max(abs(b[k]), 1):
+                    problems.append(f"{name}: {k} {b[k]} -> {r[k]} (limit {100 * count_slack:.0f}%)")
+            elif r[k] != b[k]:
                 problems.append(f"{name}: {k} {b[k]} -> {r[k]}")
         rel = abs(r["final_cost"] - b["final_cost"]) / max(abs(b["final_cost"]), 1e-300)
-        if rel > 1e-9:
+        if rel > cost_rtol:
             problems.append(f"{name}: final cost {b['final_cost']:.17g} -> {r['final_cost']:.17g} ({rel:.1e} relative)")
         ratio = r["time_per_iteration"] / b["time_per_iteration"]
-        mark = "  SLOWER" if ratio > 1 + max_slowdown else ""
+        mark = "  SLOWER" if check_time and ratio > 1 + max_slowdown else ""
         print(f"{name:34s} time per iteration {1000 * b['time_per_iteration']:8.2f} -> "
               f"{1000 * r['time_per_iteration']:8.2f} ms ({100 * (ratio - 1):+5.1f}%){mark}", file=sys.stderr)
         if mark:
@@ -286,17 +348,31 @@ def main():
     ap.add_argument("--allow-nondeterministic", action="store_true",
                     help="record problems whose repeated runs differ instead of stopping (WebGPU exploration)")
     ap.add_argument("--only", help="comma-separated substrings of problem names")
+    ap.add_argument("--skip", help="comma-separated substrings of problem names to leave out")
+    ap.add_argument("--cost-rtol", type=float, default=1e-9, help="allowed relative change of the final cost")
+    ap.add_argument("--count-slack", type=float, default=0.0,
+                    help="allowed relative change of the counts (0: identical); termination must match")
+    ap.add_argument("--store", metavar="MACHINE", help="also write the run under bench/results/MACHINE/")
+    ap.add_argument("--time-same-cpu", action="store_true",
+                    help="compare times only when the CPU model is the baseline's (hosted runners vary)")
     args = ap.parse_args()
     result = run(args)
-    if args.out:
-        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-        with open(args.out, "w") as f:
+    outs = [args.out] if args.out else []
+    if args.store:
+        stamp = result["date"][:10]
+        outs.append(os.path.join(ROOT, "bench", "results", args.store,
+                                 f"{stamp}-{result['commit']}-{args.backend}-{result['linear_solver']}.json"))
+    for out in outs:
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        with open(out, "w") as f:
             json.dump(result, f, indent=1)
             f.write("\n")
+        print(f"wrote {out}", file=sys.stderr)
     if args.compare:
         with open(args.compare) as f:
             baseline = json.load(f)
-        problems = compare(result, baseline, args.max_slowdown, args.only)
+        problems = compare(result, baseline, args.max_slowdown, args.only or args.skip, args.cost_rtol,
+                           args.count_slack, args.time_same_cpu)
         for p in problems:
             print("REGRESSION " + p, file=sys.stderr)
         sys.exit(1 if problems else 0)

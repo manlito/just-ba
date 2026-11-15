@@ -22,7 +22,20 @@ working proof of concept. This document covers what that requires.
   token is stored. The workflow is started by hand and uses no GitHub environment
   (D111); the pending publisher on PyPI is registered for `release.yml`.
 - Versioning: semantic versions; the Python API is the public contract. Pre-1.0 while
-  the API settles.
+  the API settles. The version is `project(VERSION)` in CMakeLists.txt (D114).
+- Wheels and the sdist: `.github/workflows/release.yml`, started by hand (D111, D116).
+
+### Release checklist
+
+1. Quick CI run passes (`gh workflow run ci`).
+2. The GPU check by hand: `python bench/gpu_check.py` on the Mac (Metal) and on the
+   laptop under Linux and Windows (CUDA); see document 05.
+3. `gh workflow run release` (builds and tests every wheel, publishes nothing).
+4. Each package's wheel installed from that run's artifacts and checked on its
+   machine: `python bench/gpu_check.py --wheel <file>` (the Mac with `just-ba`, the
+   laptop with `just-ba-cu12` and `just-ba-cu13`, both systems).
+5. `gh workflow run release -f publish=true`.
+6. The documentation site deployed for the release (`gh workflow run docs -f deploy=true`).
 
 ### Wheels
 
@@ -34,11 +47,11 @@ working proof of concept. This document covers what that requires.
 
 Open points:
 
-- One package that loads CUDA at run time when present, or a separate CUDA package
-  (the common `-cu12` and `-cu13` naming). Run-time loading gives users one name to
-  install; separate packages keep the default wheel small. Decide in milestone 6.
-  Which CUDA versions are supported (12, 13 or both) is open in document 00: D52
-  needs CUDA 13.3.
+- Decided (D114): separate CUDA packages, `just-ba-cu12` and `just-ba-cu13`, beside
+  `just-ba`; all three provide the module `just_ba`. They load NVIDIA's libraries
+  from NVIDIA's pip packages (D115).
+  Both CUDA 12 and CUDA 13 are supported, with the CUDA sources built as C++20
+  (D113).
 - Windows is a target (required by the desktop app, document 09): CPU and CUDA
   wheels for Windows x86_64, built and tested on hosted Windows runners, with GPU
   tests on the owner's Windows laptop.
@@ -48,7 +61,10 @@ Open points:
 
 ## Documentation
 
-Built automatically and published on every release, with a preview on pull requests.
+Built by `docs-site/` (Sphinx, D119) and the `docs` workflow, started by hand like CI
+(D110): it builds the site with warnings as errors, runs the docstring examples, and
+with `deploy=true` publishes to Cloudflare Pages (D112). No previews on pull requests
+while CI is manual.
 
 | Part | Content | Source |
 |---|---|---|
@@ -57,8 +73,8 @@ Built automatically and published on every release, with a preview on pull reque
 | Residual reference | Each residual: formula, parameters, Jacobian conventions | Generated from the same symbolic definitions as the kernels, so it cannot drift |
 | Camera models | Formulas and parameter order | Same source |
 | Benchmarks | Current accuracy and speed tables against the references | Generated from stored benchmark results |
-| Core API reference | For contributors | Generated from source comments |
-| Design notes | This `docs/` folder | As is |
+| Core API reference | For contributors | Deferred (D119): the headers' comments are plain `//`, which Doxygen does not read |
+| Design notes | This `docs/` folder | Not on the site for now (D119); the problem file format (document 11) is |
 
 Tooling follows the language choice: Sphinx or MkDocs for the Python side, with
 Doxygen (C++) or rustdoc (Rust) for the core. Hosted on Cloudflare Pages (D112),
@@ -129,6 +145,6 @@ Points to note:
 | Decision | Recommendation |
 |---|---|
 | Licence | Decided: Apache-2.0 |
-| One wheel with run-time CUDA loading, or separate CUDA wheels | Decide in milestone 6 after measuring wheel sizes |
+| One wheel with run-time CUDA loading, or separate CUDA wheels | Decided: separate packages (D114) |
 | GPU testing | Decided: by hand, never in CI. The owner's Mac for Metal; the owner's laptop (Linux and Windows) or the development VM for CUDA. |
 | Documentation host | Decided: Cloudflare Pages (D112) |
