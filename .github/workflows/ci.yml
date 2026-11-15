@@ -7,8 +7,10 @@
 #
 # Two modes (decision D61):
 #   quick (default): Linux and Windows build and test, Ceres parity without the
-#                    slow tests. macOS is tested on the owner's Mac instead.
+#                    slow tests, the benchmark gate (D117). macOS is tested on the
+#                    owner's Mac instead.
 #   full:            adds macOS and the slow tests (venice-52 parity).
+# GPU tests, Metal included, are never run here (D40, D110): bench/gpu_check.py.
 #
 #   gh workflow run ci                      # quick
 #   gh workflow run ci -f full=true         # full
@@ -54,12 +56,7 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure -LE "gpu|slow"
-      # Whether Metal compute is reliable on hosted Apple Silicon runners is not yet
-      # established (document 08). Informational; skips without a device.
-      - name: Metal tests (informational)
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        run: ctest --test-dir build -C Release --output-on-failure -L gpu
+      # GPU tests are run by hand (D40), Metal included (D110): bench/gpu_check.py.
 
   ceres:
     name: Ceres reference (${{ matrix.os }})
@@ -94,6 +91,45 @@ jobs:
         run: cmake --build build --config Release --parallel
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure -j 4 -LE "${{ inputs.full && 'gpu' || 'gpu|slow' }}"
+
+  # The regression gate of document 05 on the CPU (D117): run.py on the BAL problems
+  # (venice-52 left out, as in quick mode) and the synthetic ones, compared with this
+  # runner's baseline. Hosted runners differ in CPU from run to run, so the gate is
+  # loose: final costs to 1e-6 relative (Level 2's tolerance), counts within 10%,
+  # time per iteration up to 50% slower. The result is kept as an artifact.
+  bench:
+    name: benchmark gate (CPU)
+    runs-on: ubuntu-24.04
+    env:
+      BASELINE: bench/baseline/github-ubuntu-24.04.json
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache BAL data
+        uses: actions/cache@v4
+        with:
+          path: tests/data/bal
+          key: bal-${{ hashFiles('tests/data/fetch_bal.py') }}
+      - name: Fetch BAL problems
+        run: python3 tests/data/fetch_bal.py
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel --target just-ba jba_make_problem
+      - name: Benchmark and compare
+        run: |
+          args="--build build --threads 4 --skip problem-52 --out bench-result.json"
+          if [ -f "$BASELINE" ]; then
+            python3 bench/run.py $args --compare "$BASELINE" --cost-rtol 1e-6 --count-slack 0.1 --max-slowdown 0.5
+          else
+            python3 bench/run.py $args
+            echo "::warning::no $BASELINE yet: this run's bench-result.json (artifact) becomes it once committed"
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-${{ github.sha }}
+          path: bench-result.json
+          retention-days: 90
 
   # Document 08's "CUDA kernels compiled (not run)": the CUDA backend and cuDSS's
   # solver built with nvcc on a hosted runner without a GPU (review of milestone 5,

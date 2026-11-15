@@ -31,6 +31,18 @@ The first command checks the current build against the baseline; the second repl
 the baseline. Do that only when a change is meant to alter results or speed, and say
 why in the commit.
 
+Tolerances (D117): the defaults suit a baseline of the same machine. `--cost-rtol`,
+`--count-slack` and `--max-slowdown` loosen them for a baseline of another machine of
+the same class; CI uses 1e-6, 0.1 and 0.5 against `baseline/github-ubuntu-24.04.json`
+(hosted runners change CPU between runs). `--skip` leaves problems out; CI leaves out
+venice-52.
+
+Stored results (document 05): `--store <machine>` also writes the run, with the full
+commit, the date, the compiler and the build type, to
+`results/<machine>/<date>-<commit>-<backend>-<solver>.json`. Commit them, so trends
+can be plotted; `gpu_check.py` (below) stores every run it makes. CI keeps its runs as
+artifacts (`bench-<commit>`, 90 days).
+
 Baselines are per machine class, under `baseline/`. Counts differ between platforms
 (fused multiply-add on Apple and ARM, not on x86-64 without it), and times differ
 everywhere, so a run is compared only with the baseline of its own machine. Times
@@ -43,6 +55,7 @@ are taken by hand on an otherwise idle machine; CI does not run this.
 | `apple-m5pro-metal-iterative.json` | The same Mac; Metal backend, iterative_schur, with Ceres with Accelerate alongside |
 | `rtx2070maxq-cuda-sparse.json` | The owner's laptop (i7-9750H, RTX 2070 Max-Q, Linux); CUDA backend, auto (sparse_schur with cuDSS), `--huge`; Ceres 2.2.0 with SuiteSparse (`ceres`) and Ceres master with cuDSS (`ceres_gpu`) alongside |
 | `rtx2070maxq-cuda-iterative.json` | The same laptop; CUDA backend, iterative_schur, `--large` |
+| `github-ubuntu-24.04.json` | CI's hosted Linux runner (4 threads), CPU backend, venice-52 left out; taken from the first run of the CI job "benchmark gate (CPU)" (not recorded yet) |
 
 The milestone 5 comparison with Caspar and bae, which `run.py` does not drive, is in
 `competitors/`.
