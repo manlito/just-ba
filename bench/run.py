@@ -34,7 +34,9 @@ Tolerances: the defaults above suit a baseline recorded on the same machine. A
 baseline from another machine of the same class, such as a hosted CI runner whose CPU
 varies between runs, takes looser ones: --cost-rtol (final cost, relative),
 --count-slack (iteration, accepted-step and linear-iteration counts, relative) and
---max-slowdown. CI uses 1e-6 (document 05's Level 2 tolerance), 0.1 and 0.5 (D117).
+--max-slowdown. CI uses 1e-6 (document 05's Level 2 tolerance), 0.1 and 0.5, with
+--time-same-cpu: times are compared only on a runner with the baseline's CPU model,
+since hosted runners of one label differ in speed by up to 2x (D117).
 
 Stored results (document 05: per commit, so trends can be plotted): --store <machine>
 also writes the run to bench/results/<machine>/<date>-<commit>-<backend>-<solver>.json,
@@ -148,6 +150,16 @@ def build_info(build):
 def machine():
     info = {"system": platform.system(), "release": platform.release(), "machine": platform.machine(),
             "cpus": os.cpu_count()}
+    if platform.system() == "Linux":
+        try:
+            with open("/proc/cpuinfo") as f:
+                names = [l.split(":", 1)[1].strip() for l in f if l.startswith("model name")]
+            if names:
+                info["cpu"] = names[0]
+        except OSError:
+            pass
+    elif platform.system() == "Windows":
+        info["cpu"] = platform.processor()
     if platform.system() == "Darwin":
         try:
             info["cpu"] = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True,
@@ -275,8 +287,14 @@ def run_problems(args, cli, problems, tmp):
     return result
 
 
-def compare(result, baseline, max_slowdown, only=None, cost_rtol=1e-9, count_slack=0.0):
+def compare(result, baseline, max_slowdown, only=None, cost_rtol=1e-9, count_slack=0.0, time_same_cpu=False):
     problems = []
+    check_time = True
+    if time_same_cpu:
+        b_cpu, r_cpu = baseline.get("machine", {}).get("cpu"), result["machine"].get("cpu")
+        check_time = b_cpu is not None and b_cpu == r_cpu
+        if not check_time:
+            print(f"times not compared: this CPU ({r_cpu}) is not the baseline's ({b_cpu})", file=sys.stderr)
     if "timing" not in baseline:
         return ["baseline was recorded before times included the set-up (D101); record it again"]
     for key, default in (("backend", "cpu"), ("linear_solver", "iterative_schur")):
@@ -298,7 +316,7 @@ def compare(result, baseline, max_slowdown, only=None, cost_rtol=1e-9, count_sla
         if rel > cost_rtol:
             problems.append(f"{name}: final cost {b['final_cost']:.17g} -> {r['final_cost']:.17g} ({rel:.1e} relative)")
         ratio = r["time_per_iteration"] / b["time_per_iteration"]
-        mark = "  SLOWER" if ratio > 1 + max_slowdown else ""
+        mark = "  SLOWER" if check_time and ratio > 1 + max_slowdown else ""
         print(f"{name:34s} time per iteration {1000 * b['time_per_iteration']:8.2f} -> "
               f"{1000 * r['time_per_iteration']:8.2f} ms ({100 * (ratio - 1):+5.1f}%){mark}", file=sys.stderr)
         if mark:
@@ -329,6 +347,8 @@ def main():
     ap.add_argument("--count-slack", type=float, default=0.0,
                     help="allowed relative change of the counts (0: identical); termination must match")
     ap.add_argument("--store", metavar="MACHINE", help="also write the run under bench/results/MACHINE/")
+    ap.add_argument("--time-same-cpu", action="store_true",
+                    help="compare times only when the CPU model is the baseline's (hosted runners vary)")
     args = ap.parse_args()
     result = run(args)
     outs = [args.out] if args.out else []
@@ -346,7 +366,7 @@ def main():
         with open(args.compare) as f:
             baseline = json.load(f)
         problems = compare(result, baseline, args.max_slowdown, args.only or args.skip, args.cost_rtol,
-                           args.count_slack)
+                           args.count_slack, args.time_same_cpu)
         for p in problems:
             print("REGRESSION " + p, file=sys.stderr)
         sys.exit(1 if problems else 0)

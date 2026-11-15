@@ -96,7 +96,9 @@ jobs:
   # (venice-52 left out, as in quick mode) and the synthetic ones, compared with this
   # runner's baseline. Hosted runners differ in CPU from run to run, so the gate is
   # loose: final costs to 1e-6 relative (Level 2's tolerance), counts within 10%,
-  # time per iteration up to 50% slower. The result is kept as an artifact.
+  # and time per iteration up to 50% slower, checked only when the runner has the
+  # baseline's CPU model (the same label ran 1.5 to 2x slower on another run of the
+  # same code). The result is kept as an artifact.
   bench:
     name: benchmark gate (CPU)
     runs-on: ubuntu-24.04
@@ -119,7 +121,7 @@ jobs:
         run: |
           args="--build build --threads 4 --skip problem-52 --out bench-result.json"
           if [ -f "$BASELINE" ]; then
-            python3 bench/run.py $args --compare "$BASELINE" --cost-rtol 1e-6 --count-slack 0.1 --max-slowdown 0.5
+            python3 bench/run.py $args --compare "$BASELINE" --cost-rtol 1e-6 --count-slack 0.1 --max-slowdown 0.5 --time-same-cpu
           else
             python3 bench/run.py $args
             echo "::warning::no $BASELINE yet: this run's bench-result.json (artifact) becomes it once committed"
