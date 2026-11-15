@@ -224,6 +224,16 @@ NB_MODULE(_core, m) {
       .value("SPARSE_SCHUR", jba::LinearSolverType::SparseSchur);
   m.def("backend_available", &jba::backend_available, "kind"_a,
         "Whether this build has the backend and the machine can run it.");
+  m.def(
+      "compiled_backends",
+      [] {
+        std::vector<jba::BackendKind> out;
+        for (jba::BackendKind k : {jba::BackendKind::Cpu, jba::BackendKind::Metal, jba::BackendKind::Cuda})
+          if (jba::backend_compiled(k)) out.push_back(k);
+        return out;
+      },
+      "The backends this build has, whether or not the machine can run them: CPU always, Metal in the "
+      "macOS package, CUDA in just-ba-cu12 and just-ba-cu13.");
   m.def("resolve_linear_solver", &jba::resolve_linear_solver, "type"_a, "backend"_a,
         "The solver AUTO stands for on a backend before the problem is seen; other types as they are.");
   nb::enum_<jba::Termination>(m, "Termination")

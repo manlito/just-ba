@@ -13,6 +13,17 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._build_info import CUDA_VERSION, VARIANT, __version__
+
+if VARIANT.startswith("cu"):
+    from . import _nvidia
+
+    _nvidia.preload()
+    try:
+        from . import _core
+    except ImportError as e:
+        raise ImportError(f"{e}; {_nvidia.import_error_hint(VARIANT)}") from e
+
 from ._core import *  # noqa: F401,F403
 from ._core import Problem, num_params
 

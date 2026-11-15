@@ -34,9 +34,9 @@ working proof of concept. This document covers what that requires.
 
 Open points:
 
-- One package that loads CUDA at run time when present, or a separate CUDA package
-  (the common `-cu12` and `-cu13` naming). Run-time loading gives users one name to
-  install; separate packages keep the default wheel small. Decide in milestone 6.
+- Decided (D114): separate CUDA packages, `just-ba-cu12` and `just-ba-cu13`, beside
+  `just-ba`; all three provide the module `just_ba`. They load NVIDIA's libraries
+  from NVIDIA's pip packages (D115).
   Both CUDA 12 and CUDA 13 are supported, with the CUDA sources built as C++20
   (D113).
 - Windows is a target (required by the desktop app, document 09): CPU and CUDA
@@ -129,6 +129,6 @@ Points to note:
 | Decision | Recommendation |
 |---|---|
 | Licence | Decided: Apache-2.0 |
-| One wheel with run-time CUDA loading, or separate CUDA wheels | Decide in milestone 6 after measuring wheel sizes |
+| One wheel with run-time CUDA loading, or separate CUDA wheels | Decided: separate packages (D114) |
 | GPU testing | Decided: by hand, never in CI. The owner's Mac for Metal; the owner's laptop (Linux and Windows) or the development VM for CUDA. |
 | Documentation host | Decided: Cloudflare Pages (D112) |

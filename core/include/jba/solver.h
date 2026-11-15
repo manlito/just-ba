@@ -76,6 +76,8 @@ std::string_view backend_name(BackendKind kind);  // "cpu", "metal", "cuda"
 std::optional<BackendKind> backend_from_name(std::string_view name);
 // Whether this build has the backend and the machine can run it.
 bool backend_available(BackendKind kind);
+// Whether this build has the backend, whatever the machine.
+bool backend_compiled(BackendKind kind);
 
 // The linear solver of each step (document 03, strategies A and B). Both eliminate
 // the points by the Schur complement.

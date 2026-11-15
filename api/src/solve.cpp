@@ -51,6 +51,25 @@ bool backend_available(BackendKind kind) {
   return false;
 }
 
+bool backend_compiled(BackendKind kind) {
+  switch (kind) {
+    case BackendKind::Cpu: return true;
+    case BackendKind::Metal:
+#ifdef JBA_HAVE_METAL
+      return true;
+#else
+      return false;
+#endif
+    case BackendKind::Cuda:
+#ifdef JBA_HAVE_CUDA
+      return true;
+#else
+      return false;
+#endif
+  }
+  return false;
+}
+
 std::string_view linear_solver_name(LinearSolverType type) {
   switch (type) {
     case LinearSolverType::Auto: return "auto";

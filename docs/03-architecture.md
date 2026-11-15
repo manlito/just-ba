@@ -294,8 +294,10 @@ Notes:
   reasonable because that system is small.
 - The CUDA backend with option A needs only the CUDA runtime library, the same
   footprint as Caspar.
-- CUDA libraries are not bundled into the Python wheel. The wheel depends on NVIDIA's
-  own pip packages and loads them at run time. This is the same in either language.
+- CUDA libraries are not bundled into the Python wheel. The CUDA packages
+  (just-ba-cu12, just-ba-cu13, D114) link the CUDA runtime statically and depend on
+  NVIDIA's own pip packages for cuDSS, cuBLAS and NVRTC, which `just_ba` loads from
+  those packages before the compiled module (D115).
 - WGSL could also serve as the Apple kernel source through a WebGPU implementation,
   giving two kernel sets instead of three. That adds a dependency between the library
   and Metal, which conflicts with the "no intermediary" requirement, so it is not the
