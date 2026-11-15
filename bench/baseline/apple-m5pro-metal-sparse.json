@@ -1,5 +1,5 @@
 {
- "commit": "c7be0cc",
+ "commit": "8fdc0c5",
  "machine": {
   "system": "Darwin",
   "release": "25.6.0",
@@ -24,14 +24,14 @@
    "accepted_steps": 44,
    "linear_iterations": 45,
    "termination": "convergence",
-   "time_seconds": 0.1284,
-   "time_per_iteration": 0.002918181818181818,
+   "time_seconds": 0.1272,
+   "time_per_iteration": 0.002890909090909091,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 30,
-    "final_cost": 13344.328061214392,
+    "final_cost": 13344.32806121444,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.3574
+    "time_seconds": 0.3618
    }
   },
   "problem-21-11315-pre": {
@@ -46,14 +46,14 @@
    "accepted_steps": 11,
    "linear_iterations": 12,
    "termination": "convergence",
-   "time_seconds": 0.0349,
-   "time_per_iteration": 0.003172727272727273,
+   "time_seconds": 0.0342,
+   "time_per_iteration": 0.003109090909090909,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 9,
-    "final_cost": 30378.654458568762,
+    "final_cost": 30378.654458568803,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.1715
+    "time_seconds": 0.1713
    }
   },
   "problem-16-22106-pre": {
@@ -68,14 +68,14 @@
    "accepted_steps": 12,
    "linear_iterations": 13,
    "termination": "convergence",
-   "time_seconds": 0.0438,
-   "time_per_iteration": 0.00365,
+   "time_seconds": 0.0459,
+   "time_per_iteration": 0.0038250000000000003,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 12,
-    "final_cost": 18033.905020534567,
+    "final_cost": 18033.905020534516,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.558
+    "time_seconds": 0.5693
    }
   },
   "problem-52-64053-pre": {
@@ -90,14 +90,14 @@
    "accepted_steps": 44,
    "linear_iterations": 50,
    "termination": "no_convergence",
-   "time_seconds": 0.6412,
-   "time_per_iteration": 0.012824,
+   "time_seconds": 0.5185,
+   "time_per_iteration": 0.010369999999999999,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 50,
-    "final_cost": 261817.26085778023,
+    "final_cost": 261806.12663317885,
     "termination": "NO_CONVERGENCE",
-    "time_seconds": 6.2262
+    "time_seconds": 6.3392
    }
   },
   "problem-93-61203-pre": {
@@ -112,14 +112,14 @@
    "accepted_steps": 10,
    "linear_iterations": 11,
    "termination": "convergence",
-   "time_seconds": 0.1529,
-   "time_per_iteration": 0.015290000000000002,
+   "time_seconds": 0.1472,
+   "time_per_iteration": 0.01472,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 8,
-    "final_cost": 145545.0681223744,
+    "final_cost": 145545.068122374,
     "termination": "CONVERGENCE",
-    "time_seconds": 1.1573
+    "time_seconds": 1.1225
    }
   },
   "synthetic-pinhole-50": {
@@ -134,14 +134,14 @@
    "accepted_steps": 4,
    "linear_iterations": 5,
    "termination": "convergence",
-   "time_seconds": 0.0285,
-   "time_per_iteration": 0.007125,
+   "time_seconds": 0.0291,
+   "time_per_iteration": 0.007275,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 4,
-    "final_cost": 48399.171608639655,
+    "final_cost": 48399.17160863964,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.3718
+    "time_seconds": 0.3568
    }
   },
   "synthetic-radial-free-30": {
@@ -156,14 +156,14 @@
    "accepted_steps": 14,
    "linear_iterations": 15,
    "termination": "convergence",
-   "time_seconds": 0.1693,
-   "time_per_iteration": 0.012092857142857143,
+   "time_seconds": 0.146,
+   "time_per_iteration": 0.010428571428571428,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 14,
-    "final_cost": 21289.754445361235,
+    "final_cost": 21289.754445361224,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.7249
+    "time_seconds": 0.7143
    }
   },
   "synthetic-relative-priors-50": {
@@ -178,14 +178,14 @@
    "accepted_steps": 3,
    "linear_iterations": 4,
    "termination": "convergence",
-   "time_seconds": 0.0265,
-   "time_per_iteration": 0.008833333333333334,
+   "time_seconds": 0.0279,
+   "time_per_iteration": 0.009300000000000001,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 3,
-    "final_cost": 48787.18536125405,
+    "final_cost": 48787.185361254065,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.3382
+    "time_seconds": 0.3219
    }
   },
   "synthetic-global-similarity-50": {
@@ -200,14 +200,14 @@
    "accepted_steps": 3,
    "linear_iterations": 4,
    "termination": "convergence",
-   "time_seconds": 0.0267,
-   "time_per_iteration": 0.0089,
+   "time_seconds": 0.024,
+   "time_per_iteration": 0.008,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 3,
     "final_cost": 48622.62275613033,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.3331
+    "time_seconds": 0.3266
    }
   },
   "synthetic-opencv-30": {
@@ -222,14 +222,14 @@
    "accepted_steps": 2,
    "linear_iterations": 3,
    "termination": "convergence",
-   "time_seconds": 0.0169,
-   "time_per_iteration": 0.00845,
+   "time_seconds": 0.0117,
+   "time_per_iteration": 0.00585,
    "ceres": {
     "sparse_library": "accelerate",
     "iterations": 2,
-    "final_cost": 21379.577025300354,
+    "final_cost": 21379.577025300343,
     "termination": "CONVERGENCE",
-    "time_seconds": 0.109
+    "time_seconds": 0.1071
    }
   }
  }
