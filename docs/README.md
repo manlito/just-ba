@@ -21,7 +21,10 @@ Milestone 5 was reviewed on both machines
 ([14-review-milestone-5.md](14-review-milestone-5.md)): the CUDA backend's answers,
 repeatability and baseline held, but the speed figures left out the backend's set-up.
 Its findings are fixed (D101 to D104) and the comparison was repeated with times of
-the whole call, warm and cold, and recorded. The fixes were reviewed in turn
+the whole call, warm and cold, and recorded. Milestone 6 (release to PyPI) is built
+(D114 to D119): packaging, the release, docs and benchmark-gate workflows, the GPU
+check, and the documentation site; its workflows have not run on GitHub yet, so
+nothing is published (document 07). The fixes were reviewed in turn
 ([15-review-milestone-5-fixes.md](15-review-milestone-5-fixes.md)): they hold and the
 recorded figures follow from the recorded files; the new CI job for CUDA will not
 build as written, and two statements about the comparison were corrected. Build

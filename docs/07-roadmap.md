@@ -490,6 +490,29 @@ Details in document 08.
 Exit: `pip install` works on the three platforms, the documentation site is live, and
 CI blocks regressions.
 
+Built (2026-11-15, D114 to D119):
+
+- Packaging: `pyproject.toml` (scikit-build-core), version 0.1.0, three packages
+  (`just-ba`, `just-ba-cu12`, `just-ba-cu13`) providing `just_ba`, type stubs, and
+  NVIDIA's libraries loaded from NVIDIA's pip packages. Checked on the Mac: the
+  macOS wheel (0.4 MB) installs in a fresh environment, passes the Python tests and
+  has Metal.
+- `release.yml` (by hand): every wheel and the sdist, tested, published with
+  `publish=true`; CUDA 12.9.1 and 13.4.3 with cuDSS 1.0.0.35 from NVIDIA's archives.
+- CI's benchmark gate on the hosted Linux runner (loose tolerances), runs stored
+  per commit with `run.py --store`; the Metal step removed.
+- `bench/gpu_check.py`, the GPU check by hand. First run on the Mac: everything but
+  the iterative_schur timing passes, which a busy machine explains (D118).
+- The documentation site in `docs-site/` and `docs.yml` (by hand): clean with
+  warnings as errors, 10 docstring examples pass.
+
+Not done yet, so the exit is not met: none of the three workflows has run on GitHub
+(the release, the benchmark gate, whose first run gives its baseline, and the docs);
+the CUDA wheels have not been built; nothing is on PyPI or Cloudflare Pages. The
+owner's set-up for that: pending publishers on PyPI for `just-ba-cu12` and
+`just-ba-cu13`, and the Cloudflare project, token and account ID as repository
+secrets.
+
 ## Milestone 7: incremental pipeline and COLMAP parity
 
 - Minimal incremental reconstruction (document 04, part C).
