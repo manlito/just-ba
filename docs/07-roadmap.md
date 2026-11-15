@@ -413,7 +413,8 @@ CUDA 13.4; the M5 Pro for Metal):
   Metal 4 to 50 percent faster per iteration, with Metal's results bit-identical.
 - Same answers: every GPU case (55 parity problems and the cases of their own) on
   CUDA with both solvers agrees with the CPU within the Metal tests' limits and
-  repeats bit for bit; all 310 tests pass on Linux, all 304 on the Mac.
+  repeats bit for bit; all 310 tests pass on Linux (without the slow one), all 312 on
+  the Mac (with it; measured in document 15).
 - Times are of the whole call to `solve()`, set-up included (D101; document 05).
   "Warm" is a call with the device already started, as in a process that solves more
   than once; "cold" is the first call of a fresh process, device start-up included,
@@ -430,7 +431,10 @@ CUDA 13.4; the M5 Pro for Metal):
   and 1.5 to 14.4 warm, with a lower final cost on every problem; at Caspar's final
   cost 1.8 to 23 times warm, and cold 2.8 to 6.3 on all but venice-52, where Caspar
   reaches its cost (368,625, against just-ba's 247,684) in 0.93 of just-ba's cold
-  time.
+  time. (Document 15, finding 3: that is when Caspar's own single-precision score
+  passes 368,625; its score reads below the cost of its model recomputed in double,
+  by 29 percent on venice-52, so the equal-cost figures against Caspar are lower
+  bounds and this exception is not shown.)
 - Against bae (BAL, its 20 steps, timed from its first step): end to end 6.2 to 18.8
   times faster cold and 7.1 to 52 warm; at the worse of the two final costs 2.7 to
   15 cold and 2.9 to 73 warm. On venice-52 bae ends lower (245,653 against 271,831).
@@ -465,6 +469,13 @@ shared layer, strategy B's set-up (counted, then filled in parallel: tracks of 1
 take 2.3 s on CUDA where the review measured 11.7 s), `Auto` against the device's
 memory, cuDSS failures falling back, and CI compiling the shared layer and the CUDA
 backend.
+
+The fixes were reviewed in document 15: they hold, Metal's results are unchanged bit
+for bit but for venice-52 with the iterative solver (D103), and the recorded figures
+above follow from the recorded files. Found: the CI job for CUDA installs CUDA 13.0,
+which cannot compile C++23 (D52), so it will fail when first run; on CUDA `Auto` is
+the slower choice on four of the five small dense synthetic problems, by 1.3 to 1.9
+times warm; and the equal-cost figures against Caspar, as above.
 
 ## Milestone 6: release to PyPI
 

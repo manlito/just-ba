@@ -21,7 +21,11 @@ Milestone 5 was reviewed on both machines
 ([14-review-milestone-5.md](14-review-milestone-5.md)): the CUDA backend's answers,
 repeatability and baseline held, but the speed figures left out the backend's set-up.
 Its findings are fixed (D101 to D104) and the comparison was repeated with times of
-the whole call, warm and cold, and recorded. Build instructions:
+the whole call, warm and cold, and recorded. The fixes were reviewed in turn
+([15-review-milestone-5-fixes.md](15-review-milestone-5-fixes.md)): they hold and the
+recorded figures follow from the recorded files; the new CI job for CUDA will not
+build as written, and two statements about the comparison were corrected. Build
+instructions:
 [../README.md](../README.md).
 
 ## Documents
@@ -43,6 +47,7 @@ the whole call, warm and cold, and recorded. Build instructions:
 | 12 | [Review of milestones 0 and 1](12-review-milestones-0-1.md) | What was checked, what was found, what changes before milestone 2 |
 | 13 | [Review of milestones 3 and 4](13-review-milestones-3-4.md) | What was checked and re-measured, what was found, what changes before milestone 5 |
 | 14 | [Review of milestone 5](14-review-milestone-5.md) | The CUDA backend and the shared GPU layer: what was checked on the Mac and the laptop, what was found, what changes before milestone 6 |
+| 15 | [Review of the fixes after the review of milestone 5](15-review-milestone-5-fixes.md) | D101 to D104 checked on both machines: what holds, what was found in the fixes, the recorded comparison recomputed |
 
 ## Decisions waiting on the owner
 
@@ -77,6 +82,10 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
    invalid steps (a camera block of the reduced system losing definiteness in single
    precision) is studied before milestone 6. Its other two questions are answered
    by D101 and D102.
+4. **From the review of the fixes** (document 15): whether `Auto` on CUDA should take
+   the iterative solver for small dense problems, where it is the faster end to end;
+   and whether the equal-cost comparison with Caspar is redone with its costs
+   recomputed in double or quoted as a lower bound.
 
 ## Reference material
 

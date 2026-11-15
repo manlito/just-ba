@@ -39,7 +39,8 @@ already started (`--warm-up`). Both are reported.
   cameras, so BAL is reduced to SIMPLE_RADIAL (`--simple-radial`, BAL's k2 dropped),
   and the walks (500 and 2,000 images) are generated without pose priors. COLMAP's
   `bundle_adjuster` runs `--BundleAdjustment.backend CASPAR` with the same intrinsics
-  freed as in the problem file. Caspar always runs 200 iterations
+  freed as in the problem file. Caspar runs 200 iterations (77 in the recorded run of
+  the 2,000-image walk)
   (`BundleAdjustmentCaspar.solver_iter_max`), three times per problem; the fastest
   run is used. Its time is taken from glog's timestamps, from "Creating Caspar bundle
   adjuster" to its termination line ("Caspar: MAX_ITERATIONS" or another status),
@@ -64,3 +65,8 @@ Caspar's per-iteration `score_best` and `dt_tot` (its own iteration clock, which
 starts after its set-up, so Caspar is credited as if it had stopped as soon as it
 reached its final cost, and against just-ba's cold call, whose clock includes the
 device's start-up, the comparison leans towards Caspar), and bae's per-step costs.
+Caspar's `score_best` is its own single-precision score, and on BAL it reads below
+the cost of the same model recomputed in double (by 0.05 to 1.4 percent, and 29
+percent on venice-52), which is the target: Caspar is credited from the iteration
+where its score passes the target, earlier than its model was that good, so the
+equal-cost ratios against Caspar are lower bounds (document 15, finding 3).
