@@ -1,7 +1,7 @@
 # 16. WebGPU and WebAssembly: an exploration
 
-Status: exploration on the branch `wt/webgpu-backend-exploration-ed6ed8`, 2026-11-15.
-Not merged. The question from the owner: can just-ba run on WebGPU, natively and as
+Status: proposed for main as an opt-in backend (`JBA_WITH_WEBGPU`, off by default;
+D127), 2026-11-15. Publishing it (wheels, a hosted demo) is separate. The question from the owner: can just-ba run on WebGPU, natively and as
 WebAssembly in a browser, at a speed close enough to Metal and CUDA that a desktop
 app could use WebGPU alone, or at least good enough for a browser-only demo?
 
@@ -262,7 +262,13 @@ with Dawn's release unpacked under `third_party/webgpu/dawn` and emdawnwebgpu un
 `third_party/webgpu/emdawnwebgpu` (both ignored by git; `JBA_DAWN_DIR` and
 `JBA_EMDAWNWEBGPU_DIR` point elsewhere).
 
-## What it would take to merge
+## Before merging, and after
+
+Done before proposing it for main (D127): the merge with milestone 6, the fixes of
+the review (the Op ring's flush; the read-back buffer unmapped before an error is
+raised; objects of a batch left open by an exception released; a WebGPU solve
+started from another solve's iteration callback no longer waits on itself), and the
+whole test suite with and without WebGPU. Left for later:
 
 1. The Metal fault behind the non-repeatable solves (above) is worked around in
    the one kernel where it showed. Check the other kernels with the same loop shape,
@@ -270,9 +276,9 @@ with Dawn's release unpacked under `third_party/webgpu/dawn` and emdawnwebgpu un
 2. Measure on the laptop: Dawn on Direct3D 12 and Vulkan against CUDA, on Windows
    and Linux. This decides whether the desktop app can use WebGPU alone on Windows,
    and covers the Intel and AMD machines document 09 worries about.
-3. Decide how Dawn is obtained: a pinned prebuilt release per platform (as here),
-   built from source, or not shipped in the wheels at all (WebGPU only for the app
-   and the browser).
+3. Publishing (separate work): how Dawn is obtained for wheels or the app (a pinned
+   prebuilt release per platform, as here, or built from source), and hosting the
+   browser demo.
 4. A host-side factorization for the browser (strategy B), if the demo should match
    Metal's default.
 5. CI: a compile check of the WGSL (Tint's command-line tool from the same release)

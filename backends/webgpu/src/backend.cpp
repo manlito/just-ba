@@ -119,7 +119,10 @@ struct Context {
   std::string error;       // why there is no device
   std::string device_error;  // an uncaptured error since the last check
   double compile_seconds = 0;
-  std::mutex mutex;  // one solve at a time on the shared device
+  // One solve at a time on the shared device (Dawn's device is not thread-safe by
+  // default). Recursive: a solve started from another solve's iteration callback, on
+  // the same thread, runs between that solve's batches and must not deadlock.
+  std::recursive_mutex mutex;
 };
 
 Context& ctx() {
@@ -358,6 +361,9 @@ class WebGpuDevice final : public gpu::Device {
   WebGpuDevice() : c_(context()), lock_(c_.mutex) {}
 
   ~WebGpuDevice() override {
+    // A batch left open by an exception between begin() and finish().
+    if (pass_) wgpuComputePassEncoderRelease(pass_);
+    if (enc_) wgpuCommandEncoderRelease(enc_);
     if (bind_group_) wgpuBindGroupRelease(bind_group_);
     for (WGPUBuffer b : {heap_, args_buf_, op_buf_, readback_})
       if (b) wgpuBufferRelease(b);
@@ -579,14 +585,19 @@ class WebGpuDevice final : public gpu::Device {
     mcb.userdata1 = &status;
     mcb.userdata2 = &msg;
     wait(wgpuBufferMapAsync(readback_, WGPUMapMode_Read, 0, size, mcb));
+    // Unmapped before anything can throw, so the next read-back can map it again.
+    if (status == WGPUMapAsyncStatus_Success) {
+      std::memcpy(host, wgpuBufferGetConstMappedRange(readback_, 0, size), bytes);
+      wgpuBufferUnmap(readback_);
+    }
+    // Every batch ends here, waiting on the device, which is where Dawn reports
+    // errors it did not raise at once (validation inside a pass, a lost device).
     check_device_error();
     if (status != WGPUMapAsyncStatus_Success) fail("read-back failed: " + msg);
-    std::memcpy(host, wgpuBufferGetConstMappedRange(readback_, 0, size), bytes);
-    wgpuBufferUnmap(readback_);
   }
 
   Context& c_;
-  std::unique_lock<std::mutex> lock_;
+  std::unique_lock<std::recursive_mutex> lock_;
   std::vector<Range> ranges_;  // std::vector of vectors: mirrors keep their addresses on growth
   std::uint64_t cursor_ = kAlign;  // nothing at address 0: it stays the null pointer
   WGPUBuffer heap_ = nullptr, args_buf_ = nullptr, op_buf_ = nullptr, readback_ = nullptr;

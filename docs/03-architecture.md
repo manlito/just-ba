@@ -339,7 +339,7 @@ backends/
   gpu/           what the GPU backends share: kernel source, structures, host side (D96)
   metal/         Apple GPU backend (milestone 4); the milestone 0 spike kernel too
   cuda/          NVIDIA GPU backend (milestone 5)
-  webgpu/        WebGPU backend, WGSL kernels (exploration on a branch, document 16)
+  webgpu/        WebGPU backend, WGSL kernels, opt-in (document 16, D127)
 tracks/          track building, triangulation
 pipeline/      * incremental reconstruction (test fixture)
 bindings/
