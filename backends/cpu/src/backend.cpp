@@ -101,25 +101,64 @@ struct Corrector {
   }
 };
 
-// Pose priors enter as "factors": 6 residual rows on up to three camera-side blocks
-// and no point, so they add to J_f only. Jacobian columns: slot 0 is 0..5, slot 1
-// is 6..11, slot 2 is 12.
-constexpr int kFactorRows = 6;
-constexpr int kFactorCols = 13;
-constexpr int kSlotBase[3] = {0, 6, 12};
+// Residuals that touch camera-side blocks only, and no point, are "factors" (D75):
+// they add to J_f only. Each kind is a FactorSet with a fixed number of residual
+// rows and up to three slots, each slot one camera-side block. Jacobians are rows x
+// cols per factor, row-major, slot s in columns slot_base[s] .. + slot_size[s].
+//
+// Pose priors: 6 rows; slot 0 the pose (0..5), slot 1 the other pose or the set's
+// rigid part (6..11), slot 2 the set's scale (12).
+constexpr int kPriorRows = 6;
+constexpr int kPriorCols = 13;
 constexpr double kIdentityTransform[8] = {1, 0, 0, 0, 0, 0, 0, 1};
 
 enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale };
 
-struct Factor {
+enum class FactorKind : std::uint8_t { PosePrior };
+
+struct PosePrior {
   bool relative = true;
   int a = -1, b = -1;   // images (b only for relative priors)
   int set = -1;         // global priors: prior set
   bool set_identity = true;
-  int slot_off[3] = {-1, -1, -1};  // f offsets, -1 when fixed or absent
   double W[36];
   double prior[7];      // relative: T_j T_i^-1 (q, t); global: q_p, C_p
-  Loss loss;
+};
+
+struct FactorSet {
+  FactorKind kind{};
+  int rows = 0, cols = 0, nslots = 0;
+  int slot_base[3] = {0, 0, 0}, slot_size[3] = {0, 0, 0};
+  std::size_t count = 0;
+  std::vector<int> slot_off;            // nslots per factor: f offset, -1 when fixed or absent
+  std::vector<std::uint8_t> slot_mask;  // nslots per factor: columns that are not variables
+  std::vector<Loss> loss;               // per factor
+  std::vector<double> r, J, m;          // rows, rows x cols and rows per factor
+  std::vector<std::size_t> begin;       // per f-block, into `list`
+  std::vector<std::array<int, 2>> list; // (factor, slot), in factor order per f-block
+
+  int off(std::size_t f, int slot) const { return slot_off[static_cast<std::size_t>(nslots) * f + static_cast<std::size_t>(slot)]; }
+  std::uint8_t mask(std::size_t f, int slot) const {
+    return slot_mask[static_cast<std::size_t>(nslots) * f + static_cast<std::size_t>(slot)];
+  }
+  double* Jf(std::size_t f) { return &J[static_cast<std::size_t>(rows * cols) * f]; }
+  const double* Jf(std::size_t f) const { return &J[static_cast<std::size_t>(rows * cols) * f]; }
+  double* rf(std::size_t f) { return &r[static_cast<std::size_t>(rows) * f]; }
+  const double* rf(std::size_t f) const { return &r[static_cast<std::size_t>(rows) * f]; }
+  double* mf(std::size_t f) { return &m[static_cast<std::size_t>(rows) * f]; }
+  const double* mf(std::size_t f) const { return &m[static_cast<std::size_t>(rows) * f]; }
+};
+
+// Parameter values: the current ones, or a candidate. `sets`: 8 per prior set
+// (q, t, s).
+struct Params {
+  std::vector<double> poses, points, intr, sets;
+  void swap(Params& o) {
+    poses.swap(o.poses);
+    points.swap(o.points);
+    intr.swap(o.intr);
+    sets.swap(o.sets);
+  }
 };
 
 }  // namespace
@@ -130,9 +169,7 @@ struct CpuBackend::Impl {
   Loss loss;
   ThreadPool pool;
 
-  // Parameters: current and candidate. `sets`: 8 per prior set (q, t, s).
-  std::vector<double> poses, points, intr, sets;
-  std::vector<double> c_poses, c_points, c_intr, c_sets;
+  Params cur, cand;
 
   // Variables. f = cameras side (pose and intrinsics blocks), e = points.
   struct FBlock {
@@ -157,11 +194,9 @@ struct CpuBackend::Impl {
   std::vector<std::size_t> img_begin, img_list, ib_begin, ib_list;
   std::vector<std::int32_t> image_block;
 
-  // Pose priors.
-  std::vector<Factor> factors;
-  std::vector<std::size_t> fac_begin;              // per f-block
-  std::vector<std::array<int, 2>> fac_list;        // (factor, slot)
-  std::vector<double> f_r, f_J, f_m;               // 6, 6 x 13 and 6 per factor
+  // Factors (camera-side residuals without a point), by kind; empty kinds are left out.
+  std::vector<PosePrior> pose_priors;
+  std::vector<FactorSet> fsets;
 
   // Linearization.
   std::vector<double> r, Jp, Jx, Jk;
@@ -174,15 +209,15 @@ struct CpuBackend::Impl {
 
   Impl(const Problem& p, const SolverOptions& o, const Gauge& gauge)
       : model(p.model), np(num_params(p.model)), loss(o.loss), pool(o.num_threads) {
-    poses = p.poses;
-    points = p.points;
-    intr = p.intrinsics;
+    cur.poses = p.poses;
+    cur.points = p.points;
+    cur.intr = p.intrinsics;
     const std::size_t n_img = p.num_images(), n_pts = p.num_points(), n_blk = p.num_intrinsics_blocks();
     const std::size_t n_sets = p.num_prior_sets();
-    sets.resize(8 * n_sets);
+    cur.sets.resize(8 * n_sets);
     for (std::size_t s = 0; s < n_sets; ++s) {
-      if (p.set_transform.empty()) std::copy_n(kIdentityTransform, 8, &sets[8 * s]);
-      else std::copy_n(&p.set_transform[8 * s], 8, &sets[8 * s]);
+      if (p.set_transform.empty()) std::copy_n(kIdentityTransform, 8, &cur.sets[8 * s]);
+      else std::copy_n(&p.set_transform[8 * s], 8, &cur.sets[8 * s]);
     }
     image_block.resize(n_img);
     for (std::size_t i = 0; i < n_img; ++i) image_block[i] = p.intrinsics_of_image(i);
@@ -316,31 +351,58 @@ struct CpuBackend::Impl {
     Cinv.assign(9 * n_pts, 0);
   }
 
+  // A factor set of `rows` residual rows over slots of the given sizes.
+  static FactorSet make_set(FactorKind kind, int rows, std::initializer_list<int> slot_sizes) {
+    FactorSet fs;
+    fs.kind = kind;
+    fs.rows = rows;
+    for (int n : slot_sizes) {
+      fs.slot_base[fs.nslots] = fs.cols;
+      fs.slot_size[fs.nslots] = n;
+      fs.cols += n;
+      ++fs.nslots;
+    }
+    return fs;
+  }
+
+  // Columns of a slot that are not variables: all of them when the block is fixed
+  // or absent, otherwise the gauge's fixed coordinates of a pose.
+  std::uint8_t slot_mask_of(int off, int image) const {
+    if (off < 0) return 0x3f;
+    return image >= 0 ? pose_fixed_cols[static_cast<std::size_t>(image)] : std::uint8_t(0);
+  }
+
+  void add_factor(FactorSet& fs, std::initializer_list<std::array<int, 2>> slots, const Loss& factor_loss) {
+    for (const auto& [off, image] : slots) {
+      fs.slot_off.push_back(off);
+      fs.slot_mask.push_back(slot_mask_of(off, image));
+    }
+    fs.loss.push_back(factor_loss);
+    ++fs.count;
+  }
+
   void build_factors(const Problem& p, const SolverOptions& o) {
     std::vector<double> W_rel, W_glob;
     prior_whitening(p, o.prior_defaults, W_rel, W_glob);
+    FactorSet priors = make_set(FactorKind::PosePrior, kPriorRows, {6, 6, 1});
     for (std::size_t k = 0; k < p.num_relative_priors(); ++k) {
-      Factor f;
+      PosePrior f;
       f.relative = true;
       f.a = p.rel_images[2 * k];
       f.b = p.rel_images[2 * k + 1];
-      f.slot_off[0] = pose_off[static_cast<std::size_t>(f.a)];
-      f.slot_off[1] = pose_off[static_cast<std::size_t>(f.b)];
       std::copy_n(&W_rel[36 * k], 36, f.W);
       std::copy_n(&p.rel_pose[7 * k], 7, f.prior);
-      f.loss = o.relative_prior_loss;
-      factors.push_back(f);
+      add_factor(priors, {{pose_off[static_cast<std::size_t>(f.a)], f.a}, {pose_off[static_cast<std::size_t>(f.b)], f.b}, {-1, -1}},
+                 o.relative_prior_loss);
+      pose_priors.push_back(f);
     }
     for (std::size_t k = 0; k < p.num_global_priors(); ++k) {
-      Factor f;
+      PosePrior f;
       f.relative = false;
       f.a = p.glob_image[k];
       f.set = p.set_of_global_prior(k);
       const auto s = static_cast<std::size_t>(f.set);
       f.set_identity = p.relation_of_set(s) == FrameRelation::Identity;
-      f.slot_off[0] = pose_off[static_cast<std::size_t>(f.a)];
-      f.slot_off[1] = rigid_off[s];
-      f.slot_off[2] = scale_off[s];
       std::copy_n(&W_glob[36 * k], 36, f.W);
       // Prior rotation, then camera centre C = -R^T t, in the set's frame.
       const double* g = &p.glob_pose[7 * k];
@@ -348,37 +410,50 @@ struct CpuBackend::Impl {
       const double conj[4] = {g[0], -g[1], -g[2], -g[3]};
       quat_rotate(conj, g + 4, f.prior + 4);
       for (int a = 4; a < 7; ++a) f.prior[a] = -f.prior[a];
-      f.loss = o.global_prior_loss;
-      factors.push_back(f);
+      add_factor(priors, {{pose_off[static_cast<std::size_t>(f.a)], f.a}, {rigid_off[s], -1}, {scale_off[s], -1}},
+                 o.global_prior_loss);
+      pose_priors.push_back(f);
     }
-    const std::size_t nfac = factors.size();
-    f_r.assign(kFactorRows * nfac, 0);
-    f_J.assign(kFactorRows * kFactorCols * nfac, 0);
-    f_m.assign(kFactorRows * nfac, 0);
+    if (priors.count > 0) fsets.push_back(std::move(priors));
 
-    // Factor lists per f-block, in factor order.
+    for (FactorSet& fs : fsets) finish_set(fs);
+  }
+
+  // Storage and the per-f-block lists of a filled factor set.
+  void finish_set(FactorSet& fs) {
+    const std::size_t rows = static_cast<std::size_t>(fs.rows);
+    fs.r.assign(rows * fs.count, 0);
+    fs.J.assign(rows * static_cast<std::size_t>(fs.cols) * fs.count, 0);
+    fs.m.assign(rows * fs.count, 0);
     std::vector<int> block_of(nf + 1, -1);
     for (std::size_t b = 0; b < fblocks.size(); ++b) block_of[static_cast<std::size_t>(fblocks[b].offset)] = static_cast<int>(b);
     std::vector<std::vector<std::array<int, 2>>> per(fblocks.size());
-    for (std::size_t f = 0; f < nfac; ++f) {
-      for (int slot = 0; slot < 3; ++slot) {
-        const int so = factors[f].slot_off[slot];
+    for (std::size_t f = 0; f < fs.count; ++f) {
+      for (int slot = 0; slot < fs.nslots; ++slot) {
+        const int so = fs.off(f, slot);
         if (so >= 0) per[static_cast<std::size_t>(block_of[static_cast<std::size_t>(so)])].push_back({static_cast<int>(f), slot});
       }
     }
-    fac_begin.assign(fblocks.size() + 1, 0);
+    fs.begin.assign(fblocks.size() + 1, 0);
     for (std::size_t b = 0; b < fblocks.size(); ++b) {
-      fac_begin[b + 1] = fac_begin[b] + per[b].size();
-      fac_list.insert(fac_list.end(), per[b].begin(), per[b].end());
+      fs.begin[b + 1] = fs.begin[b] + per[b].size();
+      fs.list.insert(fs.list.end(), per[b].begin(), per[b].end());
     }
   }
 
-  // Unwhitened-then-whitened residual of a factor and, if J is set, its Jacobian
-  // (6 x 13), both multiplied by W.
-  void eval_factor(const Factor& f, const std::vector<double>& P, const std::vector<double>& S, double* rw,
-                   double* J) const {
+  // Whitened residual of factor f of a set and, if J is set, its whitened Jacobian
+  // (rows x cols).
+  void eval_factor(const FactorSet& fs, std::size_t f, const Params& P, double* rw, double* J) const {
+    switch (fs.kind) {
+      case FactorKind::PosePrior: return eval_pose_prior(pose_priors[f], P.poses, P.sets, rw, J);
+    }
+  }
+
+  // Pose prior residual and, if J is set, its Jacobian (6 x 13), both whitened by W.
+  void eval_pose_prior(const PosePrior& f, const std::vector<double>& P, const std::vector<double>& S, double* rw,
+                       double* J) const {
     double res[6];
-    double Jraw[kFactorRows * kFactorCols];
+    double Jraw[kPriorRows * kPriorCols];
     if (f.relative) {
       double Ja[36], Jb[36];
       relative_prior<double>(&P[7 * static_cast<std::size_t>(f.a)], &P[7 * static_cast<std::size_t>(f.b)], f.prior, res,
@@ -386,10 +461,10 @@ struct CpuBackend::Impl {
       if (J) {
         for (int row = 0; row < 6; ++row) {
           for (int c = 0; c < 6; ++c) {
-            Jraw[row * kFactorCols + c] = Ja[row * 6 + c];
-            Jraw[row * kFactorCols + 6 + c] = Jb[row * 6 + c];
+            Jraw[row * kPriorCols + c] = Ja[row * 6 + c];
+            Jraw[row * kPriorCols + 6 + c] = Jb[row * 6 + c];
           }
-          Jraw[row * kFactorCols + 12] = 0;
+          Jraw[row * kPriorCols + 12] = 0;
         }
       }
     } else {
@@ -400,10 +475,10 @@ struct CpuBackend::Impl {
       if (J) {
         for (int row = 0; row < 6; ++row) {
           for (int c = 0; c < 6; ++c) {
-            Jraw[row * kFactorCols + c] = Jpose[row * 6 + c];
-            Jraw[row * kFactorCols + 6 + c] = Jrigid[row * 6 + c];
+            Jraw[row * kPriorCols + c] = Jpose[row * 6 + c];
+            Jraw[row * kPriorCols + 6 + c] = Jrigid[row * 6 + c];
           }
-          Jraw[row * kFactorCols + 12] = Jscale[row];
+          Jraw[row * kPriorCols + 12] = Jscale[row];
         }
       }
     }
@@ -414,10 +489,10 @@ struct CpuBackend::Impl {
     }
     if (J) {
       for (int row = 0; row < 6; ++row) {
-        for (int c = 0; c < kFactorCols; ++c) {
+        for (int c = 0; c < kPriorCols; ++c) {
           double v = 0;
-          for (int a = 0; a < 6; ++a) v += f.W[row * 6 + a] * Jraw[a * kFactorCols + c];
-          J[row * kFactorCols + c] = v;
+          for (int a = 0; a < 6; ++a) v += f.W[row * 6 + a] * Jraw[a * kPriorCols + c];
+          J[row * kPriorCols + c] = v;
         }
       }
     }
@@ -436,20 +511,22 @@ struct CpuBackend::Impl {
 
   // ---------------------------------------------------------------------------
 
-  double cost_of(const std::vector<double>& P, const std::vector<double>& X, const std::vector<double>& K,
-                 const std::vector<double>& S) {
-    return reprojection_cost(P, X, K) + factor_cost(P, S);
+  double cost_of(const Params& P) {
+    double c = reprojection_cost(P.poses, P.points, P.intr);
+    for (const FactorSet& fs : fsets) c += factor_cost(fs, P);
+    return c;
   }
 
-  double factor_cost(const std::vector<double>& P, const std::vector<double>& S) {
-    if (factors.empty()) return 0;
-    return 0.5 * pool.sum(factors.size(), [&](std::size_t f) {
-      double rw[6];
-      eval_factor(factors[f], P, S, rw, nullptr);
+  static constexpr int kMaxFactorRows = 6;
+
+  double factor_cost(const FactorSet& fs, const Params& P) {
+    return 0.5 * pool.sum(fs.count, [&](std::size_t f) {
+      double rw[kMaxFactorRows];
+      eval_factor(fs, f, P, rw, nullptr);
       double sq = 0;
-      for (double v : rw) sq += v * v;
+      for (int a = 0; a < fs.rows; ++a) sq += rw[a] * rw[a];
       double rho[3];
-      evaluate_loss(factors[f].loss, sq, rho);
+      evaluate_loss(fs.loss[f], sq, rho);
       return rho[0];
     });
   }
@@ -473,13 +550,13 @@ struct CpuBackend::Impl {
     pool.parallel_for(nobs, [&](std::size_t k0, std::size_t k1) {
       for (std::size_t k = k0; k < k1; ++k) {
         const std::size_t i = static_cast<std::size_t>(o_img[k]);
-        const double* pose = &poses[7 * i];
+        const double* pose = &cur.poses[7 * i];
         double* rk = &r[2 * k];
         double* jp = &Jp[12 * k];
         double* jx = &Jx[6 * k];
         double* jk = &Jk[2 * static_cast<std::size_t>(np) * k];
-        reprojection<double>(model, pose, pose + 4, &points[3 * static_cast<std::size_t>(o_pt[k])],
-                             &intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(image_block[i])],
+        reprojection<double>(model, pose, pose + 4, &cur.points[3 * static_cast<std::size_t>(o_pt[k])],
+                             &cur.intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(image_block[i])],
                              &o_xy[2 * k], rk, jp, jx, jk);
         const double w = o_w[k];
         rk[0] *= w;
@@ -547,18 +624,20 @@ struct CpuBackend::Impl {
           }
         }
       });
-      pool.parallel_for(factors.size(), [&](std::size_t f0, std::size_t f1) {
-        for (std::size_t f = f0; f < f1; ++f) {
-          double* J = &f_J[kFactorRows * kFactorCols * f];
-          for (int slot = 0; slot < 3; ++slot) {
-            const int so = factors[f].slot_off[slot];
-            if (so < 0) continue;
-            const int n = slot == 2 ? 1 : 6;
-            for (int row = 0; row < kFactorRows; ++row)
-              for (int c = 0; c < n; ++c) J[row * kFactorCols + kSlotBase[slot] + c] *= f_scale[so + c];
+      for (FactorSet& fs : fsets) {
+        pool.parallel_for(fs.count, [&](std::size_t f0, std::size_t f1) {
+          for (std::size_t f = f0; f < f1; ++f) {
+            double* J = fs.Jf(f);
+            for (int slot = 0; slot < fs.nslots; ++slot) {
+              const int so = fs.off(f, slot);
+              if (so < 0) continue;
+              const int n = fs.slot_size[slot], base = fs.slot_base[slot];
+              for (int row = 0; row < fs.rows; ++row)
+                for (int c = 0; c < n; ++c) J[row * fs.cols + base + c] *= f_scale[so + c];
+            }
           }
-        }
-      }, 16);
+        }, 16);
+      }
     }
     column_norms_and_gradient(true);
 
@@ -569,35 +648,33 @@ struct CpuBackend::Impl {
   }
 
   void linearize_factors() {
-    pool.parallel_for(factors.size(), [&](std::size_t f0, std::size_t f1) {
-      for (std::size_t f = f0; f < f1; ++f) {
-        const Factor& fa = factors[f];
-        double* rw = &f_r[kFactorRows * f];
-        double* J = &f_J[kFactorRows * kFactorCols * f];
-        eval_factor(fa, poses, sets, rw, J);
-        if (fa.loss.type != LossType::None) {
-          double sq = 0;
-          for (int a = 0; a < kFactorRows; ++a) sq += rw[a] * rw[a];
-          double rho[3];
-          evaluate_loss(fa.loss, sq, rho);
-          const Corrector corr(sq, rho);
-          corr.jacobian_rows(rw, J, kFactorRows, kFactorCols);
-          for (int a = 0; a < kFactorRows; ++a) rw[a] *= corr.residual_scaling;
-        }
-        // Columns that are not variables are zero.
-        for (int slot = 0; slot < 3; ++slot) {
-          const int n = slot == 2 ? 1 : 6;
-          std::uint8_t mask = 0;
-          if (fa.slot_off[slot] < 0) mask = 0x3f;
-          else if (slot == 0) mask = pose_fixed_cols[static_cast<std::size_t>(fa.a)];
-          else if (slot == 1 && fa.relative) mask = pose_fixed_cols[static_cast<std::size_t>(fa.b)];
-          for (int c = 0; c < n; ++c) {
-            if (!(mask & (1u << c))) continue;
-            for (int row = 0; row < kFactorRows; ++row) J[row * kFactorCols + kSlotBase[slot] + c] = 0;
+    for (FactorSet& fs : fsets) {
+      pool.parallel_for(fs.count, [&](std::size_t f0, std::size_t f1) {
+        for (std::size_t f = f0; f < f1; ++f) {
+          double* rw = fs.rf(f);
+          double* J = fs.Jf(f);
+          eval_factor(fs, f, cur, rw, J);
+          if (fs.loss[f].type != LossType::None) {
+            double sq = 0;
+            for (int a = 0; a < fs.rows; ++a) sq += rw[a] * rw[a];
+            double rho[3];
+            evaluate_loss(fs.loss[f], sq, rho);
+            const Corrector corr(sq, rho);
+            corr.jacobian_rows(rw, J, fs.rows, fs.cols);
+            for (int a = 0; a < fs.rows; ++a) rw[a] *= corr.residual_scaling;
+          }
+          // Columns that are not variables are zero.
+          for (int slot = 0; slot < fs.nslots; ++slot) {
+            const int n = fs.slot_size[slot], base = fs.slot_base[slot];
+            const std::uint8_t mask = fs.mask(f, slot);
+            for (int c = 0; c < n; ++c) {
+              if (!(mask & (1u << c))) continue;
+              for (int row = 0; row < fs.rows; ++row) J[row * fs.cols + base + c] = 0;
+            }
           }
         }
-      }
-    }, 16);
+      }, 16);
+    }
   }
 
   // Observation list of a pose or intrinsics block; empty for the others.
@@ -615,29 +692,24 @@ struct CpuBackend::Impl {
     }
   }
 
-  // Factor Jacobian entry (row, column c of the slot) for factor list entry q.
-  const double* factor_J(std::size_t q, int& base) const {
-    const auto [f, slot] = fac_list[q];
-    base = kSlotBase[slot];
-    return &f_J[kFactorRows * kFactorCols * static_cast<std::size_t>(f)];
-  }
-
-  // f_m = J_factor x for every factor.
+  // m = J_factor x for every factor.
   void factors_times(const double* x) {
-    pool.parallel_for(factors.size(), [&](std::size_t f0, std::size_t f1) {
-      for (std::size_t f = f0; f < f1; ++f) {
-        const double* J = &f_J[kFactorRows * kFactorCols * f];
-        double* m = &f_m[kFactorRows * f];
-        for (int row = 0; row < kFactorRows; ++row) m[row] = 0;
-        for (int slot = 0; slot < 3; ++slot) {
-          const int so = factors[f].slot_off[slot];
-          if (so < 0) continue;
-          const int n = slot == 2 ? 1 : 6;
-          for (int row = 0; row < kFactorRows; ++row)
-            for (int c = 0; c < n; ++c) m[row] += J[row * kFactorCols + kSlotBase[slot] + c] * x[so + c];
+    for (FactorSet& fs : fsets) {
+      pool.parallel_for(fs.count, [&](std::size_t f0, std::size_t f1) {
+        for (std::size_t f = f0; f < f1; ++f) {
+          const double* J = fs.Jf(f);
+          double* m = fs.mf(f);
+          for (int row = 0; row < fs.rows; ++row) m[row] = 0;
+          for (int slot = 0; slot < fs.nslots; ++slot) {
+            const int so = fs.off(f, slot);
+            if (so < 0) continue;
+            const int n = fs.slot_size[slot], base = fs.slot_base[slot];
+            for (int row = 0; row < fs.rows; ++row)
+              for (int c = 0; c < n; ++c) m[row] += J[row * fs.cols + base + c] * x[so + c];
+          }
         }
-      }
-    }, 16);
+      }, 16);
+    }
   }
 
   // diag = squared column norms of J; g = J^T r when `gradient` is set.
@@ -660,16 +732,19 @@ struct CpuBackend::Impl {
                 g[c] += J[c] * r[2 * k] + J[n + c] * r[2 * k + 1];
               }
             }
-            for (std::size_t q = fac_begin[b]; q < fac_begin[b + 1]; ++q) {
-              int base;
-              const double* J = factor_J(q, base);
-              const double* rf = &f_r[kFactorRows * static_cast<std::size_t>(fac_list[q][0])];
-              for (int row = 0; row < kFactorRows; ++row)
-                for (int c = 0; c < n; ++c) {
-                  const double v = J[row * kFactorCols + base + c];
-                  d[c] += v * v;
-                  g[c] += v * rf[row];
-                }
+            for (const FactorSet& fs : fsets) {
+              for (std::size_t q = fs.begin[b]; q < fs.begin[b + 1]; ++q) {
+                const auto [f, slot] = fs.list[q];
+                const double* J = fs.Jf(static_cast<std::size_t>(f));
+                const double* rf = fs.rf(static_cast<std::size_t>(f));
+                const int base = fs.slot_base[slot];
+                for (int row = 0; row < fs.rows; ++row)
+                  for (int c = 0; c < n; ++c) {
+                    const double v = J[row * fs.cols + base + c];
+                    d[c] += v * v;
+                    g[c] += v * rf[row];
+                  }
+              }
             }
             for (int c = 0; c < fb.size; ++c) {
               diag_f[fb.offset + c] = d[c];
@@ -723,7 +798,7 @@ struct CpuBackend::Impl {
   }
 
   // y = J_f^T t (gathered per camera-side block); with `factors_too`, plus
-  // J_factor^T f_m.
+  // J_factor^T m.
   void jft_times_t(double* y, bool factors_too) {
     pool.parallel_for(
         fblocks.size(),
@@ -741,12 +816,15 @@ struct CpuBackend::Impl {
               for (int c = 0; c < n; ++c) acc[c] += J[c] * t[2 * k] + J[n + c] * t[2 * k + 1];
             }
             if (factors_too) {
-              for (std::size_t q = fac_begin[b]; q < fac_begin[b + 1]; ++q) {
-                int base;
-                const double* J = factor_J(q, base);
-                const double* m = &f_m[kFactorRows * static_cast<std::size_t>(fac_list[q][0])];
-                for (int row = 0; row < kFactorRows; ++row)
-                  for (int c = 0; c < n; ++c) acc[c] += J[row * kFactorCols + base + c] * m[row];
+              for (const FactorSet& fs : fsets) {
+                for (std::size_t q = fs.begin[b]; q < fs.begin[b + 1]; ++q) {
+                  const auto [f, slot] = fs.list[q];
+                  const double* J = fs.Jf(static_cast<std::size_t>(f));
+                  const double* m = fs.mf(static_cast<std::size_t>(f));
+                  const int base = fs.slot_base[slot];
+                  for (int row = 0; row < fs.rows; ++row)
+                    for (int c = 0; c < n; ++c) acc[c] += J[row * fs.cols + base + c] * m[row];
+                }
               }
             }
             for (int c = 0; c < n; ++c) y[fb.offset + c] = acc[c];
@@ -861,13 +939,15 @@ struct CpuBackend::Impl {
                 for (int c = 0; c < n; ++c)
                   P[a * n + c] -= EC[3 * a] * E[3 * c] + EC[3 * a + 1] * E[3 * c + 1] + EC[3 * a + 2] * E[3 * c + 2];
             }
-            for (std::size_t qf = fac_begin[b]; qf < fac_begin[b + 1]; ++qf) {
-              int base;
-              const double* J = factor_J(qf, base);
-              for (int row = 0; row < kFactorRows; ++row)
-                for (int a = 0; a < n; ++a)
-                  for (int c = 0; c < n; ++c)
-                    P[a * n + c] += J[row * kFactorCols + base + a] * J[row * kFactorCols + base + c];
+            for (const FactorSet& fs : fsets) {
+              for (std::size_t qf = fs.begin[b]; qf < fs.begin[b + 1]; ++qf) {
+                const auto [f, slot] = fs.list[qf];
+                const double* J = fs.Jf(static_cast<std::size_t>(f));
+                const int base = fs.slot_base[slot], cols = fs.cols;
+                for (int row = 0; row < fs.rows; ++row)
+                  for (int a = 0; a < n; ++a)
+                    for (int c = 0; c < n; ++c) P[a * n + c] += J[row * cols + base + a] * J[row * cols + base + c];
+              }
             }
             for (int a = 0; a < n; ++a) P[a * n + a] += d2_f[fb.offset + a];
             if (!spd_inverse(P, n)) ok = false;
@@ -987,22 +1067,21 @@ struct CpuBackend::Impl {
       }
       return m0 * (r[2 * k] + m0 / 2) + m1 * (r[2 * k + 1] + m1 / 2);
     });
-    if (!factors.empty()) {
+    if (!fsets.empty()) {
       factors_times(dx_f.data());
-      out.model_cost_change -= pool.sum(factors.size(), [&](std::size_t f) {
-        const double* m = &f_m[kFactorRows * f];
-        const double* rf = &f_r[kFactorRows * f];
-        double v = 0;
-        for (int row = 0; row < kFactorRows; ++row) v += m[row] * (rf[row] + m[row] / 2);
-        return v;
-      });
+      for (const FactorSet& fs : fsets) {
+        out.model_cost_change -= pool.sum(fs.count, [&](std::size_t f) {
+          const double* m = fs.mf(f);
+          const double* rf = fs.rf(f);
+          double v = 0;
+          for (int row = 0; row < fs.rows; ++row) v += m[row] * (rf[row] + m[row] / 2);
+          return v;
+        });
+      }
     }
 
     // Candidate: unscale the step and retract.
-    c_poses = poses;
-    c_points = points;
-    c_intr = intr;
-    c_sets = sets;
+    cand = cur;
     // The step norm is taken in stored coordinates (candidate minus current, the
     // quaternion included), as Ceres does for its parameter tolerance (D62).
     double sq = 0;
@@ -1015,25 +1094,25 @@ struct CpuBackend::Impl {
       const auto idx = static_cast<std::size_t>(fb.index);
       switch (fb.kind) {
         case BlockKind::Pose:
-          pose_retract(&poses[7 * idx], delta, &c_poses[7 * idx]);
-          add_difference(&c_poses[7 * idx], &poses[7 * idx], 7);
+          pose_retract(&cur.poses[7 * idx], delta, &cand.poses[7 * idx]);
+          add_difference(&cand.poses[7 * idx], &cur.poses[7 * idx], 7);
           break;
         case BlockKind::Intrinsics: {
           const std::size_t at = static_cast<std::size_t>(np) * idx;
-          double* k = &c_intr[at];
+          double* k = &cand.intr[at];
           for (int c = 0; c < fb.size; ++c) k[c] += delta[c];
-          add_difference(k, &intr[at], fb.size);
+          add_difference(k, &cur.intr[at], fb.size);
           break;
         }
         // A set's transform is two blocks, as in the Ceres harness: the rigid part
         // (7 stored values) and the scale (1).
         case BlockKind::SetRigid:
-          pose_retract(&sets[8 * idx], delta, &c_sets[8 * idx]);
-          add_difference(&c_sets[8 * idx], &sets[8 * idx], 7);
+          pose_retract(&cur.sets[8 * idx], delta, &cand.sets[8 * idx]);
+          add_difference(&cand.sets[8 * idx], &cur.sets[8 * idx], 7);
           break;
         case BlockKind::SetScale:
-          c_sets[8 * idx + 7] = sets[8 * idx + 7] * std::exp(delta[0]);
-          add_difference(&c_sets[8 * idx + 7], &sets[8 * idx + 7], 1);
+          cand.sets[8 * idx + 7] = cur.sets[8 * idx + 7] * std::exp(delta[0]);
+          add_difference(&cand.sets[8 * idx + 7], &cur.sets[8 * idx + 7], 1);
           break;
       }
     }
@@ -1044,9 +1123,9 @@ struct CpuBackend::Impl {
         // Two statements on purpose: one expression would let the compiler fuse the
         // multiply and add, which changes rounding and with it the iteration history.
         const double d = e_scale[e + c] * dx_e[e + c];
-        c_points[3 * j + c] += d;
+        cand.points[3 * j + c] += d;
       }
-      add_difference(&c_points[3 * j], &points[3 * j], 3);
+      add_difference(&cand.points[3 * j], &cur.points[3 * j], 3);
     }
     out.step_norm = std::sqrt(sq);
     out.valid = std::isfinite(out.model_cost_change) && out.model_cost_change > 0 && std::isfinite(out.step_norm);
@@ -1060,16 +1139,16 @@ struct CpuBackend::Impl {
       const double* v = nullptr;
       int n = 0;
       switch (fb.kind) {
-        case BlockKind::Pose: v = &poses[7 * idx]; n = 7; break;
-        case BlockKind::Intrinsics: v = &intr[static_cast<std::size_t>(np) * idx]; n = np; break;
-        case BlockKind::SetRigid: v = &sets[8 * idx]; n = 7; break;
-        case BlockKind::SetScale: v = &sets[8 * idx + 7]; n = 1; break;
+        case BlockKind::Pose: v = &cur.poses[7 * idx]; n = 7; break;
+        case BlockKind::Intrinsics: v = &cur.intr[static_cast<std::size_t>(np) * idx]; n = np; break;
+        case BlockKind::SetRigid: v = &cur.sets[8 * idx]; n = 7; break;
+        case BlockKind::SetScale: v = &cur.sets[8 * idx + 7]; n = 1; break;
       }
       for (int a = 0; a < n; ++a) s += v[a] * v[a];
     }
     for (std::size_t j = 0; j < point_off.size(); ++j) {
       if (point_off[j] < 0) continue;
-      for (int a = 0; a < 3; ++a) s += points[3 * j + a] * points[3 * j + a];
+      for (int a = 0; a < 3; ++a) s += cur.points[3 * j + a] * cur.points[3 * j + a];
     }
     return std::sqrt(s);
   }
@@ -1080,7 +1159,7 @@ CpuBackend::CpuBackend(const Problem& problem, const SolverOptions& options, con
 
 CpuBackend::~CpuBackend() = default;
 
-double CpuBackend::cost() { return impl_->cost_of(impl_->poses, impl_->points, impl_->intr, impl_->sets); }
+double CpuBackend::cost() { return impl_->cost_of(impl_->cur); }
 
 void CpuBackend::linearize(bool compute_scaling) { impl_->linearize(compute_scaling); }
 
@@ -1093,24 +1172,21 @@ StepResult CpuBackend::compute_step(double radius, double eta, int min_linear_it
 }
 
 bool CpuBackend::candidate_cost(double* cost) {
-  *cost = impl_->cost_of(impl_->c_poses, impl_->c_points, impl_->c_intr, impl_->c_sets);
+  *cost = impl_->cost_of(impl_->cand);
   return std::isfinite(*cost);
 }
 
 void CpuBackend::accept_candidate() {
-  impl_->poses.swap(impl_->c_poses);
-  impl_->points.swap(impl_->c_points);
-  impl_->intr.swap(impl_->c_intr);
-  impl_->sets.swap(impl_->c_sets);
+  impl_->cur.swap(impl_->cand);
 }
 
 void CpuBackend::write_back(Problem& problem) const {
-  problem.poses = impl_->poses;
-  problem.points = impl_->points;
-  problem.intrinsics = impl_->intr;
+  problem.poses = impl_->cur.poses;
+  problem.points = impl_->cur.points;
+  problem.intrinsics = impl_->cur.intr;
   const bool any_transform = std::any_of(problem.set_relation.begin(), problem.set_relation.end(),
                                          [](FrameRelation r) { return r != FrameRelation::Identity; });
-  if (!problem.set_transform.empty() || any_transform) problem.set_transform = impl_->sets;
+  if (!problem.set_transform.empty() || any_transform) problem.set_transform = impl_->cur.sets;
 }
 
 }  // namespace jba::cpu
