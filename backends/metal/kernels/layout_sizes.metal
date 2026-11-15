@@ -1,5 +1,5 @@
 // Sizes of the shared structures as Metal lays them out, checked by the host against
-// its own (backends/metal/src/device.mm). Embedded after the shared kernels.
+// its own (backends/metal/src/backend.mm). Embedded after the shared kernels.
 
 kernel void layout_sizes(device uint* out [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
   if (tid != 0) return;

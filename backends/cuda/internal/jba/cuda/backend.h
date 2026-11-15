@@ -8,15 +8,19 @@
 
 namespace jba::cuda {
 
-// Whether a CUDA device is present (and the driver can run this build's kernels).
+// Whether a CUDA device is present and runs this build's kernels (a test kernel, once
+// per process).
 bool available();
 
-// Name of the CUDA device used (device 0), or an empty string.
+// Name of the CUDA device used (the calling thread's current device), or an empty
+// string.
 std::string device_name();
 
 // CUDA backend (milestone 5): the shared GPU host logic (jba/gpu/backend.h, D96) on
-// a CUDA device. The kernels are the shared source compiled by nvcc. Needs only the
-// CUDA runtime, linked statically.
+// the calling thread's current CUDA device (cudaSetDevice before the solve picks
+// another; the thread's device is restored after each call). The kernels are the
+// shared source compiled by nvcc. Needs the CUDA runtime, linked statically, and with
+// sparse_schur cuDSS, which loads cuBLAS and NVRTC.
 //
 // Throws std::runtime_error when no CUDA device is present or a kernel fails.
 class CudaBackend final : public gpu::GpuBackend {

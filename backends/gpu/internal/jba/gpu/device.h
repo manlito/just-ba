@@ -8,7 +8,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -77,15 +79,28 @@ struct Buffer {
   std::size_t bytes = 0;
 };
 
+// Thrown where the device's memory, or a 32-bit index of strategy B, does not reach:
+// LinearSolverType::Auto then takes the iterative solver (D102).
+struct DoesNotFit : std::runtime_error {
+  using std::runtime_error::runtime_error;
+};
+
+enum class FactorStatus {
+  Solved,
+  NotPositiveDefinite,  // or any other failure of the factorization itself: the step falls back
+  OutOfMemory,          // the factorization could not get its memory
+};
+
 // Factorization of the reduced camera system in double (strategy B), lower triangle
-// in compressed columns. analyze() once per solve; factor_solve() per step.
+// in compressed columns. analyze() once per solve (throws DoesNotFit when the
+// factorization cannot fit); factor_solve() per step.
 class DirectSolver {
  public:
   virtual ~DirectSolver() = default;
-  virtual void analyze(std::size_t n, const std::vector<long>& column_starts, const std::vector<int>& rows) = 0;
-  // Factorizes the matrix with these values and solves in place; false when it is not
-  // positive definite.
-  virtual bool factor_solve(const std::vector<double>& values, std::vector<double>& rhs) = 0;
+  virtual void analyze(std::size_t n, const std::vector<std::int64_t>& column_starts,
+                       const std::vector<int>& rows) = 0;
+  // Factorizes the matrix with these values and solves in place.
+  virtual FactorStatus factor_solve(const std::vector<double>& values, std::vector<double>& rhs) = 0;
 };
 
 class Device {
@@ -93,11 +108,15 @@ class Device {
   virtual ~Device() = default;
   virtual std::string name() const = 0;
 
-  // `bytes` (at least 16), copied from `init` or zeroed. A host-visible buffer has a
-  // host side the host may read and write (with to_device / to_host).
+  // `bytes` (at least 16), copied from `init` (which holds that many) or zeroed. A
+  // host-visible buffer has a host side the host may read and write (with to_device /
+  // to_host). Throws DoesNotFit when the memory is not there.
   virtual Buffer alloc(std::size_t bytes, const void* init, bool host_visible) = 0;
+  // Device memory still free for this process's allocations, as far as it is known.
+  virtual std::size_t free_memory() const { return std::numeric_limits<std::size_t>::max(); }
   // Host side to device after the host wrote it, and back before the host reads it.
-  // No-ops where the memory is shared.
+  // No-ops where the memory is shared. to_device may return before the copy is done:
+  // the host writes that host side again only after a finish() or a to_host().
   virtual void to_device(const Buffer& b) = 0;
   virtual void to_host(const Buffer& b) = 0;
 

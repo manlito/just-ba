@@ -1,10 +1,10 @@
 #include "jba/gpu/backend.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -51,6 +51,10 @@ constexpr float kPivotFloor = 1e-6f;
 constexpr std::size_t kChunkObservations = 32;
 constexpr std::size_t kTileChunk = 1024;  // entries per group of schur_tiles
 constexpr int kResidualResetPeriod = 10;  // Ceres's conjugate gradients default
+// Test hooks (testing::).
+int testing_factor_failures = 0;
+FactorStatus testing_factor_status = FactorStatus::NotPositiveDefinite;
+bool testing_fail_setup = false;
 
 Kernel linearize_kernel(CameraModel model) {
   switch (model) {
@@ -92,19 +96,26 @@ struct GpuBackend::Impl {
   // compressed columns for the direct solver (csc_src: each value's place among the
   // tiles'), analyzed once.
   bool direct = false;
+  bool allow_fallback = false;  // Auto: strategy B may give way to A (D102)
+  std::string note;             // why it did
+  std::vector<int> block_at;    // f offset -> camera-side block
+  std::vector<std::pair<const cpu::FactorSet*, std::size_t>> fac_index;  // factor -> (set, index in it)
   std::size_t ntiles = 0, ntile_chunks = 0;
   Buffer tile_vals;
-  std::vector<long> csc_begin;
+  std::vector<std::int64_t> csc_begin;
   std::vector<int> csc_rows;
   std::vector<std::uint32_t> csc_src;
   std::vector<double> csc_vals, rhs;
   std::unique_ptr<DirectSolver> solver;
 
-  Impl(const Problem& p, const SolverOptions& o, const Gauge& gauge, std::unique_ptr<Device> device)
-      : sys(p, o, gauge), dev(std::move(device)), direct(o.linear_solver == LinearSolverType::SparseSchur) {
-    if (direct) {
+  // try_direct: Auto may take strategy B (false on the second attempt, D102).
+  Impl(const Problem& p, const SolverOptions& o, const Gauge& gauge, std::unique_ptr<Device> device, bool try_direct)
+      : sys(p, o, gauge), dev(std::move(device)), allow_fallback(o.linear_solver == LinearSolverType::Auto) {
+    if (o.linear_solver == LinearSolverType::SparseSchur || (allow_fallback && try_direct)) {
       solver = dev->direct_solver();
-      if (!solver) throw std::runtime_error(dev->name() + ": sparse_schur is not available on this device");
+      if (solver) direct = true;
+      else if (!allow_fallback)
+        throw std::runtime_error(dev->name() + ": sparse_schur is not available on this device");
     }
     dev->scoped([&] { setup(p); });
   }
@@ -113,7 +124,16 @@ struct GpuBackend::Impl {
   template <typename T, typename F>
   Buffer buffer(std::size_t count, F*& field, const T* init = nullptr, bool host_visible = false) {
     static_assert(sizeof(T) == sizeof(F));
-    const Buffer b = dev->alloc(std::max<std::size_t>(count * sizeof(T), 16), count > 0 ? init : nullptr, host_visible);
+    // Devices take at least 16 bytes and copy that many from init: a shorter array is
+    // padded with zeros first (review of milestone 5, finding 2).
+    const std::size_t bytes = count * sizeof(T);
+    unsigned char pad[16] = {};
+    const void* src = count > 0 ? init : nullptr;
+    if (src != nullptr && bytes < sizeof(pad)) {
+      std::memcpy(pad, src, bytes);
+      src = pad;
+    }
+    const Buffer b = dev->alloc(std::max<std::size_t>(bytes, sizeof(pad)), src, host_visible);
     field = reinterpret_cast<F*>(static_cast<std::uintptr_t>(b.address));
     return b;
   }
@@ -301,8 +321,8 @@ struct GpuBackend::Impl {
     buffer<float>(sys.nf, args.q);
     dx_e = mirrored<float>(sys.ne, args.dx_e);
 
-    if (direct) setup_direct();
-    else {
+    if (direct) setup_direct();  // may leave strategy B
+    if (!direct) {
       buffer<float>(1, args.Eo);
       buffer<float>(1, args.Go);
       buffer<Tile>(1, args.tiles);
@@ -332,149 +352,298 @@ struct GpuBackend::Impl {
     linearize_k = linearize_kernel(sys.model);
   }
 
-  void setup_direct() {
-    const std::size_t nfb = sys.fblocks.size();
-    std::vector<int> block_at(sys.nf + 1, -1);  // f offset -> block
-    for (std::size_t b = 0; b < nfb; ++b) block_at[static_cast<std::size_t>(sys.fblocks[b].offset)] = static_cast<int>(b);
-    // Blocks an observation touches, with their roles.
-    auto touched = [&](std::size_t k, int* blocks) {
-      blocks[0] = sys.o_pose[k] >= 0 ? block_at[static_cast<std::size_t>(sys.o_pose[k])] : -1;
-      blocks[1] = sys.o_intr[k] >= 0 ? block_at[static_cast<std::size_t>(sys.o_intr[k])] : -1;
-      blocks[2] = sys.has_depth && sys.o_dw[k] != 0 && sys.o_dep[k] >= 0
-                      ? block_at[static_cast<std::size_t>(sys.o_dep[k])]
-                      : -1;
-    };
-    // Each observation's place in the per-image list (pose and depth roles) and in the
-    // per-intrinsics-block list: the entries name observations by these.
-    std::vector<std::uint32_t> pos_img(sys.nobs), pos_ib(sys.nobs);
-    for (std::size_t q = 0; q < sys.nobs; ++q) {
-      pos_img[sys.img_list[q]] = static_cast<std::uint32_t>(q);
-      pos_ib[sys.ib_list[q]] = static_cast<std::uint32_t>(q);
-    }
-    auto place = [&](std::uint32_t role, std::size_t k) { return role == 1 ? pos_ib[k] : pos_img[k]; };
-    std::map<std::pair<int, int>, std::vector<TileEntry>> lists;
-    auto add = [&](int A, int B, TileEntry e) {
-      if (A > B) return;
-      lists[{A, B}].push_back(e);
-    };
-    for (std::size_t j = 0; j < npts; ++j) {
+  // Strategy B's structure, counted before anything is built (setup_direct): the
+  // blocks each observation touches by role, and per camera-side block A the tiles
+  // (A, B), B >= A, with their entry counts.
+  struct DirectPlan {
+    std::vector<std::array<int, 3>> obs_blocks;  // per observation: pose, intrinsics, depth block (-1: none)
+    std::vector<std::uint32_t> pos_img, pos_ib;  // each observation's place in img_list and ib_list
+    std::vector<std::vector<std::uint32_t>> fac_of;  // per block, the factors touching it, increasing
+    std::vector<std::vector<std::pair<int, std::size_t>>> tiles_of;  // per block A: (B, entries), increasing B
+    std::size_t ntiles = 0, entries = 0, tile_chunks = 0, nvals = 0, nnz = 0;
+    std::size_t eo_floats = 0;  // E (and G) per observation and role
+    std::size_t device_bytes = 0;
+  };
+
+  // The tile entries of block A, in the order the tiles' sums take them: for each
+  // point that A's observations see, in increasing order, each observation ka of it
+  // that touches A, each observation kb of it (only ka itself when the point is not
+  // eliminated) and each role of kb, then the factors touching A. emit(B, entry) for
+  // every B >= A. This is the order of the former map of lists, so the sums, and the
+  // results, are unchanged.
+  template <typename Emit>
+  void tile_entries(const DirectPlan& P, std::size_t A, Emit&& emit) const {
+    std::size_t q0, q1;
+    const std::vector<std::size_t>* list;
+    sys.obs_range(sys.fblocks[A], q0, q1, list);
+    const int a = static_cast<int>(A);
+    std::size_t last = static_cast<std::size_t>(-1);
+    for (std::size_t q = q0; q < q1; ++q) {
+      const auto j = static_cast<std::size_t>(sys.o_pt[(*list)[q]]);
+      if (j == last) continue;  // the list is in observation order, so by point
+      last = j;
       const bool eliminated = sys.point_off[j] >= 0;
       for (std::size_t ka = sys.pt_begin[j]; ka < sys.pt_begin[j + 1]; ++ka) {
-        int ba[3];
-        touched(ka, ba);
+        const auto& ba = P.obs_blocks[ka];
+        std::uint32_t ra = 3;
+        for (std::uint32_t r = 0; r < 3; ++r)
+          if (ba[r] == a) ra = r;
+        if (ra == 3) continue;
+        const std::uint32_t pa = ra == 1 ? P.pos_ib[ka] : P.pos_img[ka];
         for (std::size_t kb = sys.pt_begin[j]; kb < sys.pt_begin[j + 1]; ++kb) {
           if (!eliminated && ka != kb) continue;
-          int bb[3];
-          touched(kb, bb);
-          for (std::uint32_t ra = 0; ra < 3; ++ra)
-            for (std::uint32_t rb = 0; rb < 3; ++rb) {
-              if (ba[ra] < 0 || bb[rb] < 0) continue;
-              add(ba[ra], bb[rb],
-                  {place(ra, ka), place(rb, kb),
-                   ra | (rb << 2) | (ka == kb ? 32u : 0u) | (eliminated ? 64u : 0u)});
-            }
+          const auto& bb = P.obs_blocks[kb];
+          for (std::uint32_t rb = 0; rb < 3; ++rb) {
+            if (bb[rb] < a) continue;  // also -1
+            emit(bb[rb], TileEntry{pa, rb == 1 ? P.pos_ib[kb] : P.pos_img[kb],
+                                   ra | (rb << 2) | (ka == kb ? 32u : 0u) | (eliminated ? 64u : 0u)});
+          }
         }
       }
     }
-    std::size_t f_global = 0;
-    for (const auto& fs : sys.fsets) {
-      for (std::size_t f = 0; f < fs.count; ++f, ++f_global) {
-        for (int sa = 0; sa < fs.nslots; ++sa)
-          for (int sb = 0; sb < fs.nslots; ++sb) {
-            const int oa = fs.off(f, sa), ob = fs.off(f, sb);
-            if (oa < 0 || ob < 0) continue;
-            add(block_at[static_cast<std::size_t>(oa)], block_at[static_cast<std::size_t>(ob)],
-                {static_cast<std::uint32_t>(f_global), 0,
-                 static_cast<std::uint32_t>(sa) | (static_cast<std::uint32_t>(sb) << 2) | 16u});
-          }
+    for (const std::uint32_t f : P.fac_of[A]) {
+      const auto& [fs, fl] = fac_index[f];
+      for (int sa = 0; sa < fs->nslots; ++sa) {
+        const int oa = fs->off(fl, sa);
+        if (oa < 0 || block_at[static_cast<std::size_t>(oa)] != a) continue;
+        for (int sb = 0; sb < fs->nslots; ++sb) {
+          const int ob = fs->off(fl, sb);
+          if (ob < 0) continue;
+          const int B = block_at[static_cast<std::size_t>(ob)];
+          if (B < a) continue;
+          emit(B, TileEntry{f, 0, static_cast<std::uint32_t>(sa) | (static_cast<std::uint32_t>(sb) << 2) | 16u});
+        }
       }
     }
-    for (std::size_t b = 0; b < nfb; ++b) lists[{static_cast<int>(b), static_cast<int>(b)}];  // every diagonal
+  }
 
-    std::vector<Tile> tiles;
+  DirectPlan plan_direct() {
+    DirectPlan P;
+    const std::size_t nfb = sys.fblocks.size(), nobs = sys.nobs;
+    block_at.assign(sys.nf + 1, -1);  // f offset -> block
+    for (std::size_t b = 0; b < nfb; ++b) block_at[static_cast<std::size_t>(sys.fblocks[b].offset)] = static_cast<int>(b);
+    P.obs_blocks.resize(nobs);
+    P.pos_img.resize(nobs);
+    P.pos_ib.resize(nobs);
+    sys.pool.parallel_for(nobs, [&](std::size_t k0, std::size_t k1) {
+      for (std::size_t k = k0; k < k1; ++k) {
+        auto& bl = P.obs_blocks[k];
+        bl[0] = sys.o_pose[k] >= 0 ? block_at[static_cast<std::size_t>(sys.o_pose[k])] : -1;
+        bl[1] = sys.o_intr[k] >= 0 ? block_at[static_cast<std::size_t>(sys.o_intr[k])] : -1;
+        bl[2] = sys.has_depth && sys.o_dw[k] != 0 && sys.o_dep[k] >= 0
+                    ? block_at[static_cast<std::size_t>(sys.o_dep[k])]
+                    : -1;
+        // img_list and ib_list are permutations: q -> k.
+        P.pos_img[sys.img_list[k]] = static_cast<std::uint32_t>(k);
+        P.pos_ib[sys.ib_list[k]] = static_cast<std::uint32_t>(k);
+      }
+    });
+    fac_index.clear();
+    P.fac_of.assign(nfb, {});
+    for (const auto& fs : sys.fsets)
+      for (std::size_t f = 0; f < fs.count; ++f) {
+        const auto fg = static_cast<std::uint32_t>(fac_index.size());
+        fac_index.push_back({&fs, f});
+        for (int sl = 0; sl < fs.nslots; ++sl) {
+          const int o = fs.off(f, sl);
+          if (o < 0) continue;
+          auto& l = P.fac_of[static_cast<std::size_t>(block_at[static_cast<std::size_t>(o)])];
+          if (l.empty() || l.back() != fg) l.push_back(fg);
+        }
+      }
+
+    // Count each block's tiles and entries, in parallel over the blocks.
+    P.tiles_of.assign(nfb, {});
+    sys.pool.parallel_for(
+        nfb,
+        [&](std::size_t a0, std::size_t a1) {
+          std::vector<std::size_t> count(nfb, 0);
+          std::vector<int> seen;
+          for (std::size_t A = a0; A < a1; ++A) {
+            seen.assign(1, static_cast<int>(A));  // every diagonal tile
+            tile_entries(P, A, [&](int B, const TileEntry&) {
+              if (count[static_cast<std::size_t>(B)]++ == 0 && B != static_cast<int>(A)) seen.push_back(B);
+            });
+            std::sort(seen.begin(), seen.end());
+            auto& out = P.tiles_of[A];
+            out.reserve(seen.size());
+            for (const int B : seen) {
+              out.push_back({B, count[static_cast<std::size_t>(B)]});
+              count[static_cast<std::size_t>(B)] = 0;
+            }
+          }
+        },
+        1);
+
+    for (std::size_t A = 0; A < nfb; ++A) {
+      const auto& fa = sys.fblocks[A];
+      for (const auto& [B, n] : P.tiles_of[A]) {
+        const auto& fb = sys.fblocks[static_cast<std::size_t>(B)];
+        ++P.ntiles;
+        P.entries += n;
+        P.tile_chunks += (n + kTileChunk - 1) / kTileChunk;
+        P.nvals += static_cast<std::size_t>(fa.size * fb.size);
+        for (int col = 0; col < fa.size; ++col)
+          for (int y = 0; y < fb.size; ++y) P.nnz += fb.offset + y >= fa.offset + col;
+      }
+    }
+    const std::size_t np = static_cast<std::size_t>(sys.np);
+    P.eo_floats = 18 * nobs + (sys.has_depth ? 6 * nobs : 0) + (any_intr ? 3 * np * nobs : 0);
+    P.device_bytes = P.ntiles * sizeof(Tile) + P.tile_chunks * (sizeof(TileChunk) + kChunkFloats * sizeof(float)) +
+                     P.entries * sizeof(TileEntry) + 2 * P.eo_floats * sizeof(float) + P.nvals * sizeof(float);
+    return P;
+  }
+
+  // Strategy B: the tile lists, the per-observation E and G, and the lower triangle in
+  // compressed columns, analyzed once. Throws DoesNotFit where the structure passes a
+  // 32-bit index or the device's free memory; with Auto it may instead leave
+  // strategy A (direct = false).
+  void setup_direct() {
+    if (testing_fail_setup) {
+      testing_fail_setup = false;
+      throw DoesNotFit(dev->name() + ": sparse_schur set-up failed (test)");
+    }
+    DirectPlan P = plan_direct();
+    const std::size_t nfb = sys.fblocks.size();
+    std::string why;
+    if (P.entries > 0xffffffffu || P.nvals > 0xffffffffu || P.eo_floats > 0xffffffffu ||
+        P.nnz > 0x7fffffffu)
+      why = "the reduced camera system passes sparse_schur's 32-bit indices (" + std::to_string(P.entries) +
+            " tile entries, " + std::to_string(P.nnz) + " non-zeros)";
+    else if (P.device_bytes > dev->free_memory() / 10 * 8)
+      why = "the reduced camera system needs " + std::to_string(P.device_bytes >> 20) + " MiB of device memory, " +
+            std::to_string(dev->free_memory() >> 20) + " MiB are free";
+    if (!why.empty() && !allow_fallback) throw DoesNotFit(dev->name() + ": " + why);
+    if (!why.empty()) {
+      direct = false;
+      solver.reset();
+      note = "auto: iterative_schur, as " + why;
+      return;
+    }
+
+    // Tiles in order of column block, then row block, and their entries.
+    std::vector<Tile> tiles(P.ntiles);
     std::vector<TileChunk> tchunks;
-    std::vector<TileEntry> entries;
-    std::size_t nvals = 0;
-    // Tiles by column block, then row block: the order of the compressed columns.
-    std::vector<std::vector<std::pair<int, std::size_t>>> by_col(nfb);  // (row block, tile)
-    for (auto& [ab, list] : lists) {
-      Tile T{};
-      T.a = static_cast<std::uint32_t>(ab.first);
-      T.b = static_cast<std::uint32_t>(ab.second);
-      T.c0 = static_cast<std::uint32_t>(tchunks.size());
-      const std::size_t e0 = entries.size();
-      entries.insert(entries.end(), list.begin(), list.end());
-      for (std::size_t e = e0; e < entries.size(); e += kTileChunk)
-        tchunks.push_back({static_cast<std::uint32_t>(tiles.size()), static_cast<std::uint32_t>(e),
-                           static_cast<std::uint32_t>(std::min(entries.size(), e + kTileChunk))});
-      T.c1 = static_cast<std::uint32_t>(tchunks.size());
-      T.voff = static_cast<std::uint32_t>(nvals);
-      nvals += static_cast<std::size_t>(sys.fblocks[T.a].size * sys.fblocks[T.b].size);
-      by_col[T.a].push_back({ab.second, tiles.size()});
-      tiles.push_back(T);
-      list.clear();
-      list.shrink_to_fit();
+    tchunks.reserve(P.tile_chunks);
+    std::vector<std::size_t> tile_first(nfb + 1, 0), entry_first(P.ntiles + 1, 0);
+    {
+      std::size_t t = 0, nvals = 0;
+      for (std::size_t A = 0; A < nfb; ++A) {
+        tile_first[A] = t;
+        for (const auto& [B, n] : P.tiles_of[A]) {
+          Tile& T = tiles[t];
+          T.a = static_cast<std::uint32_t>(A);
+          T.b = static_cast<std::uint32_t>(B);
+          T.c0 = static_cast<std::uint32_t>(tchunks.size());
+          const std::size_t e0 = entry_first[t];
+          for (std::size_t e = e0; e < e0 + n; e += kTileChunk)
+            tchunks.push_back({static_cast<std::uint32_t>(t), static_cast<std::uint32_t>(e),
+                               static_cast<std::uint32_t>(std::min(e0 + n, e + kTileChunk))});
+          T.c1 = static_cast<std::uint32_t>(tchunks.size());
+          T.voff = static_cast<std::uint32_t>(nvals);
+          nvals += static_cast<std::size_t>(sys.fblocks[A].size * sys.fblocks[static_cast<std::size_t>(B)].size);
+          entry_first[t + 1] = e0 + n;
+          ++t;
+        }
+      }
+      tile_first[nfb] = t;
+    }
+    {
+      std::vector<TileEntry> entries(P.entries);
+      sys.pool.parallel_for(
+          nfb,
+          [&](std::size_t a0, std::size_t a1) {
+            std::vector<std::size_t> cursor(nfb, 0);
+            for (std::size_t A = a0; A < a1; ++A) {
+              for (std::size_t t = tile_first[A]; t < tile_first[A + 1]; ++t) cursor[tiles[t].b] = entry_first[t];
+              tile_entries(P, A, [&](int B, const TileEntry& e) { entries[cursor[static_cast<std::size_t>(B)]++] = e; });
+            }
+          },
+          1);
+      buffer<TileEntry>(entries.size(), args.entries, entries.data());
     }
     ntiles = tiles.size();
     ntile_chunks = tchunks.size();
     buffer<Tile>(tiles.size(), args.tiles, tiles.data());
     buffer<TileChunk>(tchunks.size(), args.tile_chunks, tchunks.data());
-    buffer<TileEntry>(entries.size(), args.entries, entries.data());
     buffer<float>(kChunkFloats * tchunks.size(), args.tile_partial);
-    tile_vals = mirrored<float>(nvals, args.tile_vals);
+    tile_vals = mirrored<float>(P.nvals, args.tile_vals);
     // Each observation's E and G per role (obs_schur_e, obs_schur_g), by list place.
-    const std::size_t np = static_cast<std::size_t>(sys.np);
-    const std::size_t n_dep = sys.has_depth ? 6 * sys.nobs : 0, n_intr = any_intr ? 3 * np * sys.nobs : 0;
-    if (18 * sys.nobs + n_dep + n_intr > 0xffffffffu)
-      throw std::runtime_error(dev->name() + ": too many observations for sparse_schur");
+    const std::size_t n_dep = sys.has_depth ? 6 * sys.nobs : 0;
     args.eo_dep = static_cast<std::uint32_t>(18 * sys.nobs);
     args.eo_intr = static_cast<std::uint32_t>(18 * sys.nobs + n_dep);
-    buffer<float>(18 * sys.nobs + n_dep + n_intr, args.Eo);
-    buffer<float>(18 * sys.nobs + n_dep + n_intr, args.Go);
+    buffer<float>(P.eo_floats, args.Eo);
+    buffer<float>(P.eo_floats, args.Go);
 
     // Lower triangle, compressed columns: column c of block A holds rows r >= c of
-    // every tile (A, B), B >= A, in increasing B.
-    csc_begin.assign(sys.nf + 1, 0);
+    // every tile (A, B), B >= A, in increasing B. Columns follow the blocks' order.
+    std::vector<std::size_t> nnz_first(nfb + 1, 0);
     for (std::size_t A = 0; A < nfb; ++A) {
       const auto& fa = sys.fblocks[A];
-      for (int col = 0; col < fa.size; ++col) {
-        const std::size_t c = static_cast<std::size_t>(fa.offset + col);
-        for (const auto& [B, ti] : by_col[A]) {
-          const Tile& T = tiles[ti];
-          const auto& fb = sys.fblocks[static_cast<std::size_t>(B)];
-          for (int y = 0; y < fb.size; ++y) {
-            const int r = fb.offset + y;
-            if (r < static_cast<int>(c)) continue;
-            csc_rows.push_back(r);
-            csc_src.push_back(T.voff + static_cast<std::uint32_t>(col * fb.size + y));
-          }
-        }
-        csc_begin[c + 1] = static_cast<long>(csc_rows.size());
+      std::size_t n = 0;
+      for (const auto& [B, cnt] : P.tiles_of[A]) {
+        const auto& fb = sys.fblocks[static_cast<std::size_t>(B)];
+        for (int col = 0; col < fa.size; ++col)
+          for (int y = 0; y < fb.size; ++y) n += fb.offset + y >= fa.offset + col;
       }
+      nnz_first[A + 1] = nnz_first[A] + n;
     }
+    csc_begin.assign(sys.nf + 1, 0);
+    csc_rows.resize(P.nnz);
+    csc_src.resize(P.nnz);
+    sys.pool.parallel_for(
+        nfb,
+        [&](std::size_t a0, std::size_t a1) {
+          for (std::size_t A = a0; A < a1; ++A) {
+            const auto& fa = sys.fblocks[A];
+            std::size_t at = nnz_first[A];
+            for (int col = 0; col < fa.size; ++col) {
+              const std::size_t c = static_cast<std::size_t>(fa.offset + col);
+              for (std::size_t t = tile_first[A]; t < tile_first[A + 1]; ++t) {
+                const Tile& T = tiles[t];
+                const auto& fb = sys.fblocks[T.b];
+                for (int y = 0; y < fb.size; ++y) {
+                  const int r = fb.offset + y;
+                  if (r < static_cast<int>(c)) continue;
+                  csc_rows[at] = r;
+                  csc_src[at] = T.voff + static_cast<std::uint32_t>(col * fb.size + y);
+                  ++at;
+                }
+              }
+              csc_begin[c + 1] = static_cast<std::int64_t>(at);
+            }
+          }
+        },
+        1);
     csc_vals.assign(csc_rows.size(), 0.0);
     rhs.assign(sys.nf, 0.0);
     if (sys.nf == 0) return;
     solver->analyze(sys.nf, csc_begin, csc_rows);
   }
 
-  // Factorizes the tiles the device formed and solves S dx_f = b into x. False when
-  // the system is not positive definite (the step is then invalid).
-  bool direct_solve() {
+  // Factorizes the tiles the device formed and solves S dx_f = b into x.
+  FactorStatus direct_solve() {
     // Nothing free on the camera side (only points are refined): the reduced system
     // is empty, dx_f has no entries, and the solver must not see the empty structure.
-    if (sys.nf == 0) return true;
+    if (sys.nf == 0) return FactorStatus::Solved;
     dev->to_host(tile_vals);
     dev->to_host(bvec);
     const float* tv = host(tile_vals);
-    for (std::size_t i = 0; i < csc_vals.size(); ++i) csc_vals[i] = static_cast<double>(tv[csc_src[i]]);
+    sys.pool.parallel_for(csc_vals.size(), [&](std::size_t i0, std::size_t i1) {
+      for (std::size_t i = i0; i < i1; ++i) csc_vals[i] = static_cast<double>(tv[csc_src[i]]);
+    });
     const float* bf = host(bvec);
     for (std::size_t c = 0; c < sys.nf; ++c) rhs[c] = static_cast<double>(bf[c]);
-    if (!solver->factor_solve(csc_vals, rhs)) return false;
+    FactorStatus st = solver->factor_solve(csc_vals, rhs);
+    if (testing_factor_failures > 0) {
+      --testing_factor_failures;
+      st = testing_factor_status;
+    }
+    if (st != FactorStatus::Solved) return st;
     float* xf = host(x);
     for (std::size_t c = 0; c < sys.nf; ++c) xf[c] = static_cast<float>(rhs[c]);
     dev->to_device(x);
-    return true;
+    return FactorStatus::Solved;
   }
 
   // ---------------------------------------------------------------------------
@@ -707,13 +876,23 @@ struct GpuBackend::Impl {
     }
     bool iterative = !direct;
     if (direct) {
-      // Strategy B: factorize the reduced camera system on the host. Formed in
-      // single precision, it can lose definiteness where points have a degenerate
-      // depth direction; that step then falls back to conjugate gradients on the
-      // implicit system, which tolerates it.
+      // Strategy B: factorize the reduced camera system in double. Formed in single
+      // precision, it can lose definiteness where points have a degenerate depth
+      // direction; that step then falls back to conjugate gradients on the implicit
+      // system, which tolerates it. A factorization that ran out of memory ends
+      // strategy B for the solve (Auto) or the solve (sparse_schur asked for).
       out.linear_iterations = 1;
       if (s.bad) return out;
-      if (!direct_solve()) iterative = true;
+      const FactorStatus st = direct_solve();
+      if (st == FactorStatus::OutOfMemory) {
+        if (!allow_fallback)
+          throw DoesNotFit(dev->name() + ": sparse_schur ran out of device memory in the factorization; "
+                                         "iterative_schur needs less");
+        direct = false;
+        solver.reset();
+        note = "auto: sparse_schur ran out of device memory in the factorization; iterative_schur from there on";
+      }
+      if (st != FactorStatus::Solved) iterative = true;
     }
     if (iterative) {
       {
@@ -766,8 +945,33 @@ struct GpuBackend::Impl {
 };
 
 GpuBackend::GpuBackend(const Problem& problem, const SolverOptions& options, const Gauge& gauge,
-                       std::unique_ptr<Device> device)
-    : impl_(std::make_unique<Impl>(problem, options, gauge, std::move(device))) {}
+                       const std::function<std::unique_ptr<Device>()>& make_device) {
+  try {
+    impl_ = std::make_unique<Impl>(problem, options, gauge, make_device(), true);
+  } catch (const DoesNotFit& e) {
+    // Auto's strategy B did not fit after all (an allocation, or the factorization's
+    // analysis): again on a fresh device, which frees the first one's memory.
+    if (options.linear_solver != LinearSolverType::Auto) throw;
+    const std::string why = e.what();
+    impl_.reset();
+    impl_ = std::make_unique<Impl>(problem, options, gauge, make_device(), false);
+    impl_->note = "auto: iterative_schur, as sparse_schur did not fit (" + why + ")";
+  }
+}
+
+LinearSolverType GpuBackend::linear_solver() const {
+  return impl_->direct ? LinearSolverType::SparseSchur : LinearSolverType::IterativeSchur;
+}
+
+std::string GpuBackend::note() const { return impl_->note; }
+
+namespace testing {
+void fail_factorizations(int count, FactorStatus status) {
+  testing_factor_failures = count;
+  testing_factor_status = status;
+}
+void fail_direct_setup(bool fail) { testing_fail_setup = fail; }
+}  // namespace testing
 
 GpuBackend::~GpuBackend() = default;
 

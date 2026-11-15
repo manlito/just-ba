@@ -80,9 +80,11 @@ bool backend_available(BackendKind kind);
 // The linear solver of each step (document 03, strategies A and B). Both eliminate
 // the points by the Schur complement.
 enum class LinearSolverType {
-  // The backend's fastest: SparseSchur on Metal, and on CUDA when built with cuDSS;
-  // IterativeSchur otherwise (the only one the CPU has). Measured from 16 to 2,000
-  // images (D92, D98).
+  // The backend's fastest for the problem (D92, D98, D102): on Metal, and on CUDA
+  // when built with cuDSS, SparseSchur unless the reduced system would not fit the
+  // device's memory (and if its factorization runs out of memory part way,
+  // IterativeSchur from there on); IterativeSchur otherwise (the only one the CPU
+  // has). SolverSummary::linear_solver says which ran.
   Auto,
   // A: the reduced camera system applied implicitly, preconditioned conjugate
   // gradients, preconditioner its camera blocks (Ceres's ITERATIVE_SCHUR with
@@ -96,7 +98,8 @@ enum class LinearSolverType {
 };
 
 std::string_view linear_solver_name(LinearSolverType type);  // "auto", "iterative_schur", "sparse_schur"
-// The type Auto stands for on a backend; other types are returned as they are.
+// The type Auto stands for on a backend before the problem is seen (its first choice);
+// other types are returned as they are.
 LinearSolverType resolve_linear_solver(LinearSolverType type, BackendKind backend);
 std::optional<LinearSolverType> linear_solver_from_name(std::string_view name);
 
@@ -148,7 +151,7 @@ struct IterationSummary {
   int linear_iterations = 0;
   bool step_valid = false;
   bool step_accepted = false;
-  double time_seconds = 0;      // wall time since the solve started
+  double time_seconds = 0;      // wall time since solve() was called
 };
 
 enum class Termination {
@@ -172,7 +175,16 @@ struct SolverSummary {
   int iterations = 0;           // not counting iteration 0
   int accepted_steps = 0;
   int linear_iterations = 0;    // total
+  // Wall time of the whole call to solve(), from its entry to its return: checks,
+  // the backend's set-up (on a GPU, the device's start-up in the first solve of a
+  // process, every allocation and upload, and for SparseSchur the reduced system's
+  // structure and its analysis), the iterations and the write-back (document 05).
   double time_seconds = 0;
+  double setup_seconds = 0;     // the part before the trust-region loop starts
+  // The linear solver the steps used: what Auto resolved to for this problem and
+  // device, or the type asked for. A SparseSchur solve that ran out of device memory
+  // part way continues with IterativeSchur and reports it here and in the message.
+  LinearSolverType linear_solver = LinearSolverType::IterativeSchur;
   std::vector<IterationSummary> history;  // iteration 0 first
   Gauge gauge;  // freedoms actually held fixed
 };

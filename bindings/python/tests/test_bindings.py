@@ -396,15 +396,23 @@ def test_cuda_backend():
     p, _, _ = small_problem()
     perturb(p)
     results = {}
-    for name, backend in [("cpu", jba.Backend.CPU), ("cuda", jba.Backend.CUDA)]:
+    # The default (auto) too: sparse_schur when the build has cuDSS (review of
+    # milestone 5, finding 9).
+    for name, backend, solver in [
+        ("cpu", jba.Backend.CPU, jba.LinearSolver.ITERATIVE_SCHUR),
+        ("cuda", jba.Backend.CUDA, jba.LinearSolver.ITERATIVE_SCHUR),
+        ("cuda_auto", jba.Backend.CUDA, jba.LinearSolver.AUTO),
+    ]:
         q = p.copy()
         o = jba.SolverOptions()
         o.backend = backend
-        o.linear_solver = jba.LinearSolver.ITERATIVE_SCHUR
+        o.linear_solver = solver
         o.function_tolerance = 1e-12
         o.parameter_tolerance = 1e-12
         o.max_iterations = 200
         s = jba.solve(q, o)
         assert s.termination == jba.Termination.CONVERGENCE, s.message
+        assert s.time_seconds >= s.setup_seconds > 0
         results[name] = s.final_cost
-    assert abs(results["cuda"] - results["cpu"]) <= 1e-6 * results["cpu"]
+    for name in ("cuda", "cuda_auto"):
+        assert abs(results[name] - results["cpu"]) <= 1e-6 * results["cpu"]

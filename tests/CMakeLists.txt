@@ -54,6 +54,8 @@ endif()
 if(_gpu_backends)
   add_executable(jba_gpu_check gpu_check.cpp)
   target_link_libraries(jba_gpu_check PRIVATE jba jba_internal jba_warnings)
+  # The test hooks of jba/gpu/backend.h; the library itself comes with jba.
+  target_include_directories(jba_gpu_check PRIVATE $<TARGET_PROPERTY:jba_gpu,INTERFACE_INCLUDE_DIRECTORIES>)
   # `solvers`: "both", or "sparse" for a case that only sparse_schur can take.
   function(_jba_gpu_tests name gen check solvers)
     set(file ${CMAKE_CURRENT_BINARY_DIR}/gpu_${name}.jba)
@@ -82,6 +84,16 @@ if(_gpu_backends)
   endfunction()
   function(jba_gpu_sparse_case name gen check)
     _jba_gpu_tests(${name} "${gen}" "${check}" sparse)
+  endfunction()
+  # A check of the backends with sparse_schur only, on an existing case's file:
+  # <backend>_<name>.
+  function(jba_gpu_sparse_check name case check)
+    separate_arguments(check_list UNIX_COMMAND "${check}")
+    foreach(be IN LISTS _gpu_sparse_backends)
+      add_test(NAME ${be}_${name} COMMAND jba_gpu_check ${CMAKE_CURRENT_BINARY_DIR}/gpu_${case}.jba --backend ${be}
+                                          ${check_list})
+      set_tests_properties(${be}_${name} PROPERTIES FIXTURES_REQUIRED gpu_${case} LABELS gpu SKIP_RETURN_CODE 77)
+    endforeach()
   endfunction()
   include(gpu_cases.cmake)
 endif()

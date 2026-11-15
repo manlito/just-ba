@@ -3,6 +3,7 @@
 // Small random problems for tests. Not the synthetic generator of document 05
 // (milestone 2); just enough geometry to exercise residuals and file formats.
 
+#include <algorithm>
 #include <cmath>
 #include <random>
 
@@ -108,9 +109,12 @@ inline void reference_project(jba::CameraModel model, const double* k, const dou
 // `points` points, each point seen by every camera with pixel noise. With
 // track_length > 0, point j is seen only by images j mod images and the next
 // track_length - 1 on the ring, as in a walked capture; 0 keeps every image (and the
-// same random sequence as before the option existed).
+// same random sequence as before the option existed). far_points: that fraction of
+// the points (every k-th) is pushed 40 units further along the cameras' common view
+// direction and spread 10 times wider, so its depth is weakly determined, as for
+// BAL's far points (0 changes nothing).
 inline jba::Problem random_problem(jba::CameraModel model, int images, int points, std::uint64_t seed,
-                                   double pixel_noise = 0.5, int track_length = 0) {
+                                   double pixel_noise = 0.5, int track_length = 0, double far_points = 0) {
   std::mt19937_64 rng(seed);
   jba_test::Uniform u(-1, 1);
   jba_test::Normal noise(0, pixel_noise);
@@ -129,6 +133,15 @@ inline jba::Problem random_problem(jba::CameraModel model, int images, int point
     p.poses.insert(p.poses.end(), {q[0], q[1], q[2], q[3], -RC[0], -RC[1], -RC[2]});
   }
   for (int j = 0; j < points; ++j) p.points.insert(p.points.end(), {u(rng), u(rng), u(rng)});
+  if (far_points > 0) {
+    const int every = std::max(1, static_cast<int>(std::lround(1 / far_points)));
+    for (int j = 0; j < points; j += every) {
+      double* X = &p.points[3 * static_cast<std::size_t>(j)];
+      X[0] *= 10;
+      X[1] *= 10;
+      X[2] += 40;
+    }
+  }
   for (int i = 0; i < images; ++i) {
     const double* pose = &p.poses[7 * static_cast<std::size_t>(i)];
     for (int j = 0; j < points; ++j) {

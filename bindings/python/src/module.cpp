@@ -444,7 +444,9 @@ NB_MODULE(_core, m) {
       .def_ro("iterations", &jba::SolverSummary::iterations)
       .def_ro("accepted_steps", &jba::SolverSummary::accepted_steps)
       .def_ro("linear_iterations", &jba::SolverSummary::linear_iterations)
-      .def_ro("time_seconds", &jba::SolverSummary::time_seconds)
+      .def_ro("time_seconds", &jba::SolverSummary::time_seconds, "Wall time of the whole call, set-up included.")
+      .def_ro("setup_seconds", &jba::SolverSummary::setup_seconds, "The part of it before the iterations.")
+      .def_ro("linear_solver", &jba::SolverSummary::linear_solver, "The linear solver the steps used.")
       .def_ro("history", &jba::SolverSummary::history)
       .def_ro("gauge", &jba::SolverSummary::gauge)
       .def("__repr__", [](const jba::SolverSummary& s) {

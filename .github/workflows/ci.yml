@@ -95,6 +95,39 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure -j 4 -LE "${{ inputs.full && 'gpu' || 'gpu|slow' }}"
 
+  # Document 08's "CUDA kernels compiled (not run)": the CUDA backend and cuDSS's
+  # solver built with nvcc on a hosted runner without a GPU (review of milestone 5,
+  # finding 7). The toolkit's compiler and runtime from NVIDIA's apt repository,
+  # cuDSS from its redistributable archive; the tests run, and the CUDA ones skip
+  # (no device). Free: the hosted Linux runner, no GPU.
+  cuda-compile:
+    name: CUDA backend compiled (not run)
+    runs-on: ubuntu-24.04
+    env:
+      CUDA_VERSION: "13-0"
+      CUDSS_ARCHIVE: libcudss-linux-x86_64-1.0.0.35_cuda13-archive
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the CUDA compiler and runtime
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update -q
+          sudo apt-get install -y -q cuda-nvcc-${CUDA_VERSION} cuda-cudart-dev-${CUDA_VERSION} libcublas-dev-${CUDA_VERSION} cuda-nvrtc-${CUDA_VERSION}
+          echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+      - name: Fetch cuDSS
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cudss/redist/libcudss/linux-x86_64/${CUDSS_ARCHIVE}.tar.xz
+          tar xf ${CUDSS_ARCHIVE}.tar.xz
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CUDA=ON -DJBA_WITH_CUDSS=ON
+          -DCMAKE_CUDA_ARCHITECTURES=75 -Dcudss_DIR=${{ github.workspace }}/${{ env.CUDSS_ARCHIVE }}/lib/cmake/cudss
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test (CUDA tests skip without a device)
+        run: ctest --test-dir build --output-on-failure -j 4 -LE slow
+
   generated-code:
     name: generated code is current
     runs-on: ubuntu-24.04

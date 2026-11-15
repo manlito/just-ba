@@ -4,7 +4,9 @@
 //                 [--loss NAME[:SCALE]] [--<type>-loss NAME[:SCALE]]
 //                 [--max-iterations N] [--function-tolerance X] [--parameter-tolerance X]
 //                 [--max-cost-diff X] [--max-centre-diff X] [--max-rotation-diff X] [--no-repeat]
-//                 [--linear-solver iterative_schur|sparse_schur] [--expect-fallback]
+//                 [--linear-solver auto|iterative_schur|sparse_schur] [--expect-fallback]
+//                 [--fail-factorizations N] [--fail-factorization-oom] [--fail-direct-setup]
+//                 [--expect-solver iterative_schur|sparse_schur] [--expect-error]
 //
 // Solves with the CPU and the GPU backend (default metal) from the same start and
 // options (the CPU always with iterative_schur, the GPU with --linear-solver), then
@@ -15,7 +17,14 @@
 //   (defaults 1e-4); 0 skips a check;
 // - a second GPU solve gives bit-identical parameters (unless --no-repeat);
 // - with --expect-fallback, at least one sparse_schur step fell back to conjugate
-//   gradients (so that path is tested; the option fails with iterative_schur).
+//   gradients (so that path is tested; the option fails with iterative_schur);
+// - with --expect-solver, the linear solver the GPU solve reports having used.
+// The fallbacks of D102 are forced through the test hooks of jba/gpu/backend.h:
+// --fail-factorizations N makes the next N factorizations of each GPU solve report a
+// matrix that is not positive definite, --fail-factorization-oom the first one report
+// that it ran out of memory, --fail-direct-setup strategy B's set-up throw DoesNotFit.
+// With --expect-error the GPU solve must throw (sparse_schur asked for and not
+// fitting), and nothing else is checked.
 // Document 05 asks for 1e-3 in cost in single precision; the defaults are what the
 // backend actually reaches on the synthetic cases. Prints JSON; skips (exit 77)
 // without a device for the backend.
@@ -29,6 +38,7 @@
 #include <vector>
 
 #include "jba/geometry.h"
+#include "jba/gpu/backend.h"
 #include "jba/problem_io.h"
 #include "jba/solver.h"
 
@@ -77,7 +87,9 @@ int main(int argc, char** argv) {
     o.function_tolerance = 1e-12;
     o.parameter_tolerance = 1e-12;
     double max_cost = 1e-6, max_centre = 1e-4, max_rotation = 1e-4;
-    bool repeat = true, expect_fallback = false;
+    bool repeat = true, expect_fallback = false, fail_oom = false, fail_setup = false, expect_error = false;
+    int fail_factorizations = 0;
+    std::string expect_solver;
     jba::LinearSolverType gpu_solver = jba::LinearSolverType::IterativeSchur;  // the flag's default
     for (int a = 2; a < argc; ++a) {
       const std::string key = argv[a];
@@ -85,8 +97,12 @@ int main(int argc, char** argv) {
         repeat = false;
         continue;
       }
-      if (key == "--expect-fallback") {
-        expect_fallback = true;
+      if (key == "--expect-fallback" || key == "--fail-factorization-oom" || key == "--fail-direct-setup" ||
+          key == "--expect-error") {
+        (key == "--expect-fallback" ? expect_fallback
+         : key == "--fail-factorization-oom" ? fail_oom
+         : key == "--fail-direct-setup"      ? fail_setup
+                                             : expect_error) = true;
         continue;
       }
       if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
@@ -102,6 +118,8 @@ int main(int argc, char** argv) {
       else if (key == "--max-iterations") o.max_iterations = std::stoi(val);
       else if (key == "--function-tolerance") o.function_tolerance = std::stod(val);
       else if (key == "--parameter-tolerance") o.parameter_tolerance = std::stod(val);
+      else if (key == "--fail-factorizations") fail_factorizations = std::stoi(val);
+      else if (key == "--expect-solver") expect_solver = val;
       else if (key == "--max-cost-diff") max_cost = std::stod(val);
       else if (key == "--max-centre-diff") max_centre = std::stod(val);
       else if (key == "--max-rotation-diff") max_rotation = std::stod(val);
@@ -130,6 +148,11 @@ int main(int argc, char** argv) {
       jba::SolverOptions opts = o;
       opts.backend = kind;
       opts.linear_solver = kind == jba::BackendKind::Cpu ? jba::LinearSolverType::IterativeSchur : gpu_solver;
+      if (kind != jba::BackendKind::Cpu) {  // armed for each GPU solve, so the repeat sees the same
+        if (fail_oom) jba::gpu::testing::fail_factorizations(1, jba::gpu::FactorStatus::OutOfMemory);
+        else jba::gpu::testing::fail_factorizations(fail_factorizations, jba::gpu::FactorStatus::NotPositiveDefinite);
+        jba::gpu::testing::fail_direct_setup(fail_setup);
+      }
       const auto t0 = std::chrono::steady_clock::now();
       const jba::SolverSummary s = jba::solve(p, opts);
       seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -137,6 +160,17 @@ int main(int argc, char** argv) {
     };
     jba::Problem cpu = start, gpu = start;
     double t_cpu = 0, t_gpu = 0;
+    if (expect_error) {
+      try {
+        run(backend, gpu, t_gpu);
+      } catch (const std::exception& e) {
+        std::printf("{\"problem\": \"%s\", \"backend\": \"%s\", \"error\": \"%s\", \"ok\": true}\n", path.c_str(),
+                    std::string(jba::backend_name(backend)).c_str(), e.what());
+        return 0;
+      }
+      std::printf("{\"problem\": \"%s\", \"error\": null, \"ok\": false}\n", path.c_str());
+      return 1;
+    }
     const jba::SolverSummary sc = run(jba::BackendKind::Cpu, cpu, t_cpu);
     const jba::SolverSummary sg = run(backend, gpu, t_gpu);
 
@@ -176,10 +210,12 @@ int main(int argc, char** argv) {
     // sparse_schur takes one linear iteration per step when it factorizes, more when
     // the step fell back to conjugate gradients.
     int fallback_steps = 0;
-    if (gpu_solver == jba::LinearSolverType::SparseSchur)
+    if (sg.linear_solver == jba::LinearSolverType::SparseSchur)
       for (const jba::IterationSummary& it : sg.history) fallback_steps += it.linear_iterations > 1;
+    const std::string used(jba::linear_solver_name(sg.linear_solver));
 
-    const bool ok = (!expect_fallback || fallback_steps > 0) && cost_diff <= max_cost &&
+    const bool ok = (!expect_fallback || fallback_steps > 0) && (expect_solver.empty() || used == expect_solver) &&
+                    cost_diff <= max_cost &&
                     (max_centre == 0 || centre_diff <= max_centre) &&
                     (max_rotation == 0 || rotation_diff <= max_rotation) && identical &&
                     sg.termination != jba::Termination::Failure;
@@ -187,10 +223,11 @@ int main(int argc, char** argv) {
         "{\"problem\": \"%s\", \"backend\": \"%s\", \"cpu_cost\": %.12g, \"gpu_cost\": %.12g, \"cost_diff\": %.3g, "
         "\"centre_diff\": %.3g, \"rotation_diff\": %.3g, \"cpu_iterations\": %d, \"gpu_iterations\": %d, "
         "\"gpu_termination\": \"%s\", \"gpu_message\": \"%s\", \"repeatable\": %s, \"cpu_seconds\": %.3f, "
-        "\"gpu_seconds\": %.3f, \"fallback_steps\": %d, \"ok\": %s}\n",
+        "\"gpu_seconds\": %.3f, \"gpu_linear_solver\": \"%s\", \"fallback_steps\": %d, \"ok\": %s}\n",
         path.c_str(), std::string(jba::backend_name(backend)).c_str(), sc.final_cost, sg.final_cost, cost_diff, centre_diff, rotation_diff, sc.iterations,
         sg.iterations, std::string(jba::termination_name(sg.termination)).c_str(), sg.message.c_str(),
-        repeat ? (identical ? "true" : "false") : "null", t_cpu, t_gpu, fallback_steps, ok ? "true" : "false");
+        repeat ? (identical ? "true" : "false") : "null", t_cpu, t_gpu, used.c_str(), fallback_steps,
+        ok ? "true" : "false");
     return ok ? 0 : 1;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "error: %s\n", e.what());

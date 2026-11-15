@@ -19,9 +19,8 @@ std::string format(const char* fmt, double a, double b) {
 }  // namespace
 
 void run_trust_region(Backend& backend, const SolverOptions& o, const IterationCallback& callback,
-                      SolverSummary& s) {
+                      SolverSummary& s, std::chrono::steady_clock::time_point start) {
   using Clock = std::chrono::steady_clock;
-  const auto start = Clock::now();
   auto elapsed = [&] { return std::chrono::duration<double>(Clock::now() - start).count(); };
 
   // A single-precision backend cannot resolve damping below a share of the diagonal,
@@ -31,6 +30,7 @@ void run_trust_region(Backend& backend, const SolverOptions& o, const IterationC
   double decrease_factor = 2;
   int invalid_steps = 0;
 
+  s.setup_seconds = elapsed();
   double x_cost = backend.cost();
   s.initial_cost = x_cost;
   s.final_cost = x_cost;

@@ -70,9 +70,10 @@ add_subdirectory(residuals)
 add_subdirectory(backends/cpu)
 add_subdirectory(tracks)
 add_subdirectory(api)
-if(JBA_WITH_METAL OR JBA_WITH_CUDA)
-  add_subdirectory(backends/gpu)
-endif()
+# The GPU backends' shared host logic is plain C++: built on every platform, with or
+# without a GPU backend, so every compiler CI has sees it (review of milestone 5,
+# finding 7). Only a GPU backend links it.
+add_subdirectory(backends/gpu)
 if(JBA_WITH_METAL)
   add_subdirectory(backends/metal)
 endif()

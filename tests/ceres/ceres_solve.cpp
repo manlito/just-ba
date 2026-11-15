@@ -93,8 +93,11 @@ int main(int argc, char** argv) {
                 r.initial_cost, jba_initial, rel);
     std::printf("  \"final_cost\": %.17g,\n  \"iterations\": %d,\n  \"termination\": \"%s\",\n  \"time_seconds\": %.4f,\n",
                 r.final_cost, r.iterations, r.termination.c_str(), r.time_seconds);
+    std::printf("  \"wall_seconds\": %.4f,\n", r.wall_seconds);
     std::printf("  \"history_cost\": [");
     for (std::size_t i = 0; i < r.history_cost.size(); ++i) std::printf("%s%.17g", i ? ", " : "", r.history_cost[i]);
+    std::printf("],\n  \"history_time\": [");
+    for (std::size_t i = 0; i < r.history_time.size(); ++i) std::printf("%s%.6f", i ? ", " : "", r.history_time[i]);
     std::printf("]\n}\n");
 
     // The check covers reprojection-only problems: jba_initial has no other terms.

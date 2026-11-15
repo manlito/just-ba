@@ -5,8 +5,9 @@
 // backends/metal/kernels/prelude.metal) and nvcc (after the CUDA prelude,
 // backends/cuda/kernels/prelude.cuh). The preludes define the address-space macros;
 // without one, this header is plain C++ and every pointer is a plain pointer of the
-// same size, so the layouts agree by construction. Metal also checks the sizes at
-// run time (layout_sizes).
+// same size, so the layouts agree by construction, but for uint_pair, which is the
+// kernels' uint2 and a struct of two uints on the host (same size and alignment).
+// Metal also checks the sizes at run time (layout_sizes).
 //
 // Kept to the subset of C++ that Metal Shading Language accepts: no standard headers,
 // no constructors, no default member values.

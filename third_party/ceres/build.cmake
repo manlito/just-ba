@@ -90,7 +90,11 @@ set(common
   -DCMAKE_BUILD_TYPE=${CONFIG}
   -DCMAKE_INSTALL_PREFIX=${PREFIX}
   -DCMAKE_PREFIX_PATH=${PREFIX}
-  -DCMAKE_POLICY_VERSION_MINIMUM=3.5)
+  -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  # Nothing in the user's package registry (~/.cmake/packages; Eigen's build writes
+  # there otherwise, pointing into WORK; review of milestone 5).
+  -DCMAKE_EXPORT_PACKAGE_REGISTRY=OFF -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON
+  -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF)
 if(GENERATOR)
   list(APPEND common -G "${GENERATOR}")
 endif()

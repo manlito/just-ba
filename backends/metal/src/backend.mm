@@ -120,11 +120,12 @@ class AccelerateSolver final : public gpu::DirectSolver {
     if (have_symbolic_) SparseCleanup(symbolic_);
   }
 
-  void analyze(std::size_t n, const std::vector<long>& column_starts, const std::vector<int>& rows) override {
+  void analyze(std::size_t n, const std::vector<std::int64_t>& column_starts, const std::vector<int>& rows) override {
+    column_starts_.assign(column_starts.begin(), column_starts.end());
     structure_ = {};
     structure_.rowCount = static_cast<int>(n);
     structure_.columnCount = static_cast<int>(n);
-    structure_.columnStarts = const_cast<long*>(column_starts.data());
+    structure_.columnStarts = column_starts_.data();
     structure_.rowIndices = const_cast<int*>(rows.data());
     structure_.attributes.kind = SparseSymmetric;
     structure_.attributes.triangle = SparseLowerTriangle;
@@ -136,7 +137,7 @@ class AccelerateSolver final : public gpu::DirectSolver {
     have_symbolic_ = true;
   }
 
-  bool factor_solve(const std::vector<double>& values, std::vector<double>& rhs) override {
+  gpu::FactorStatus factor_solve(const std::vector<double>& values, std::vector<double>& rhs) override {
     SparseMatrix_Double S{};
     S.structure = structure_;
     S.data = const_cast<double*>(values.data());
@@ -149,10 +150,11 @@ class AccelerateSolver final : public gpu::DirectSolver {
       SparseSolve(f, v);
     }
     SparseCleanup(f);
-    return ok;
+    return ok ? gpu::FactorStatus::Solved : gpu::FactorStatus::NotPositiveDefinite;
   }
 
  private:
+  std::vector<long> column_starts_;
   SparseMatrixStructure structure_{};
   SparseOpaqueSymbolicFactorization symbolic_{};
   bool have_symbolic_ = false;
@@ -171,11 +173,18 @@ class MetalDevice final : public gpu::Device {
 
   Buffer alloc(std::size_t bytes, const void* init, bool) override {
     id<MTLBuffer> b = [lib_.device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
-    if (b == nil) fail("buffer allocation failed (" + std::to_string(bytes) + " bytes)", nil);
+    if (b == nil) throw gpu::DoesNotFit("metal: buffer allocation failed (" + std::to_string(bytes) + " bytes)");
     if (init != nullptr) std::memcpy(b.contents, init, bytes);
     else std::memset(b.contents, 0, bytes);
     resources_.push_back(b);
     return {b.contents, b.gpuAddress, bytes};
+  }
+
+  // Unified memory: what the device recommends for its working set, less what is
+  // allocated.
+  std::size_t free_memory() const override {
+    const std::uint64_t limit = lib_.device.recommendedMaxWorkingSetSize, used = lib_.device.currentAllocatedSize;
+    return limit > used ? static_cast<std::size_t>(limit - used) : 0;
   }
 
   void to_device(const Buffer&) override {}
@@ -246,6 +255,6 @@ class MetalDevice final : public gpu::Device {
 std::unique_ptr<gpu::Device> make_device() { return std::make_unique<MetalDevice>(); }
 
 MetalBackend::MetalBackend(const Problem& problem, const SolverOptions& options, const Gauge& gauge)
-    : gpu::GpuBackend(problem, options, gauge, make_device()) {}
+    : gpu::GpuBackend(problem, options, gauge, make_device) {}
 
 }  // namespace jba::metal

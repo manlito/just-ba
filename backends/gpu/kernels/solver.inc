@@ -39,8 +39,11 @@ using namespace jba_gpu;
 
 // In-place inverse of a symmetric positive semi-definite n x n matrix by Cholesky,
 // with the pivot floor. False only for a diagonal entry that is not positive or a
-// value that is not finite.
-JBA_FUNC bool spd_inverse(JBA_THREAD float* A, int n, float floor) {
+// value that is not finite. With d2 (a camera block of the reduced system, d2 its
+// damping): a diagonal entry that is not positive has lost the Schur sum to rounding,
+// since in exact arithmetic it is at least d2; its pivot is raised to d2 instead of
+// failing (review of milestone 5, finding 5; D103).
+JBA_FUNC bool spd_inverse(JBA_THREAD float* A, int n, float floor, JBA_DEVICE const float* d2) {
   float L[kMaxParams * kMaxParams];
   float Li[kMaxParams * kMaxParams];
   for (int i = 0; i < n * n; ++i) L[i] = Li[i] = 0;
@@ -50,8 +53,10 @@ JBA_FUNC bool spd_inverse(JBA_THREAD float* A, int n, float floor) {
       for (int k = 0; k < j; ++k) s -= L[i * n + k] * L[j * n + k];
       if (i == j) {
         const float diag = A[i * n + i];
-        if (!(diag > 0) || !isfinite(s)) return false;
-        s = max(s, floor * diag);
+        if (!isfinite(s) || !isfinite(diag)) return false;
+        if (diag > 0) s = max(s, floor * diag);
+        else if (d2 != nullptr && d2[i] > 0) s = max(s, d2[i]);
+        else return false;
         L[i * n + i] = sqrt(s);
       } else {
         L[i * n + j] = s / L[j * n + j];
@@ -433,7 +438,7 @@ JBA_KERNEL(block_finish) {
     for (int c = 0; c < n; ++c) a.b[off + c] = acc[c] - a.g_f[off + c];
   } else {
     for (int c = 0; c < n; ++c) acc[c * n + c] += a.d2_f[off + c];
-    if (!spd_inverse(acc, n, a.pivot_floor)) JBA_SET_BAD(s);
+    if (!spd_inverse(acc, n, a.pivot_floor, a.d2_f + off)) JBA_SET_BAD(s);
     JBA_DEVICE float* P = a.Pinv + fb.pinv_offset;
     for (int i = 0; i < n * n; ++i) P[i] = acc[i];
   }
@@ -759,7 +764,7 @@ JBA_KERNEL(point_blocks) {
     }
   }
   for (int x = 0; x < 3; ++x) C[4 * x] += a.d2_e[e + x];
-  if (!spd_inverse(C, 3, a.pivot_floor)) JBA_SET_BAD(s);
+  if (!spd_inverse(C, 3, a.pivot_floor, nullptr)) JBA_SET_BAD(s);
   for (int i = 0; i < 9; ++i) a.Cinv[9 * j + i] = C[i];
 }
 

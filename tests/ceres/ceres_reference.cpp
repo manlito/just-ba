@@ -3,6 +3,7 @@
 #include <ceres/rotation.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <stdexcept>
@@ -443,6 +444,9 @@ Options options_from(const jba::SolverOptions& o, const jba::Problem& problem, L
 }
 
 Result solve(jba::Problem& p, const Options& o) {
+  // Wall time from here, building the Ceres problem included, as just-ba's time
+  // includes its set-up (document 05, D101).
+  const auto wall_start = std::chrono::steady_clock::now();
   const int np = jba::num_params(p.model);
 
   ceres::Problem::Options popts;
@@ -733,10 +737,15 @@ Result solve(jba::Problem& p, const Options& o) {
     r.history_radius.push_back(it.trust_region_radius);
     r.history_relative_decrease.push_back(it.relative_decrease);
     r.history_accepted.push_back(it.step_is_successful);
+    r.history_time.push_back(it.cumulative_time_in_seconds);
   }
   r.termination = ceres::TerminationTypeToString(summary.termination_type);
   r.usable = summary.IsSolutionUsable();
   r.time_seconds = summary.total_time_in_seconds;
+  r.wall_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - wall_start).count();
+  // Ceres's iteration times count from Solve(); from the start of the call instead.
+  const double before_solve = r.wall_seconds - r.time_seconds;
+  for (double& t : r.history_time) t += before_solve;
   return r;
 }
 

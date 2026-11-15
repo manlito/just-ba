@@ -36,8 +36,9 @@ constexpr const char* kUsage =
     "                               the file's loss.* sections, else the library's defaults\n"
     "  --gauge <auto|none>          default auto\n"
     "  --backend <cpu|metal|cuda>   default cpu\n"
-    "  --linear-solver <auto|iterative_schur|sparse_schur>  default auto: sparse_schur on\n"
-    "                               metal, iterative_schur on cpu (sparse_schur needs metal)\n"
+    "  --linear-solver <auto|iterative_schur|sparse_schur>  default auto: the backend's fastest\n"
+    "                               for the problem (sparse_schur needs metal, or cuda with cuDSS)\n"
+    "  --warm-up                    solve once untimed first, so the device is started\n"
     "  --threads <n>                default 0 (all hardware threads)\n";
 
 // A string as a JSON string literal, quotes included.
@@ -126,9 +127,15 @@ int solve(int argc, char** argv) {
   const std::string input = argv[2];
   std::string output, history;
   jba::SolverOptions o;
+  bool warm_up = false;
   std::optional<jba::Loss> loss_flags[jba::kNumLossTypes];  // override the file's loss.* sections
   for (int a = 3; a < argc; a += 2) {
     const std::string key = argv[a];
+    if (key == "--warm-up") {
+      warm_up = true;
+      --a;
+      continue;
+    }
     if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
     const std::string val = argv[a + 1];
     if (key == "--output") output = val;
@@ -171,6 +178,14 @@ int solve(int argc, char** argv) {
   o = jba::with_problem_losses(o, p);  // loss.* sections, if any (D80)
   for (std::size_t t = 0; t < jba::kNumLossTypes; ++t)
     if (loss_flags[t]) *jba::loss_of(o, t) = *loss_flags[t];
+  if (warm_up) {
+    // The first solve of a process starts the device (CUDA's context and cuDSS,
+    // Metal's kernels); a later one does not (document 05).
+    jba::Problem copy = p;
+    jba::SolverOptions w = o;
+    w.max_iterations = 1;
+    jba::solve(copy, w);
+  }
   const jba::SolverSummary s = jba::solve(p, o);
   jba::store_losses(p, o);  // the output records the losses it was solved with
   if (!output.empty()) jba::write_problem(output, p);
@@ -189,15 +204,14 @@ int solve(int argc, char** argv) {
       "\"loss_scale\": %g, \"gauge\": %s, \"backend\": \"%s\", \"linear_solver\": \"%s\", "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
       "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f, "
-      "\"cost_by_type\": %s}\n",
+      "\"setup_seconds\": %.4f, \"warm_up\": %s, \"cost_by_type\": %s}\n",
       json_string(input).c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
       p.num_observations(), p.num_relative_priors(), p.num_global_priors(), p.num_gravity_priors(),
       std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, gauge_json(s.gauge).c_str(),
       std::string(jba::backend_name(o.backend)).c_str(),
-      std::string(jba::linear_solver_name(jba::resolve_linear_solver(o.linear_solver, o.backend))).c_str(), s.initial_cost,
-      s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
-      std::string(jba::termination_name(s.termination)).c_str(), json_string(s.message).c_str(), s.time_seconds,
-      by_type.c_str());
+      std::string(jba::linear_solver_name(s.linear_solver)).c_str(), s.initial_cost, s.final_cost, s.iterations,
+      s.accepted_steps, s.linear_iterations, std::string(jba::termination_name(s.termination)).c_str(),
+      json_string(s.message).c_str(), s.time_seconds, s.setup_seconds, warm_up ? "true" : "false", by_type.c_str());
   return s.termination == jba::Termination::Failure ? 1 : 0;
 }
 

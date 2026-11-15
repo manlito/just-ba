@@ -74,3 +74,20 @@ jba_gpu_case(points_only "--model PINHOLE --images 12 --fix-images 12" "")
 # the path, as in no_gauge.
 jba_gpu_sparse_case(fallback "--model RADIAL --images 12 --points 300 --track-length 2"
                     "--expect-fallback --max-centre-diff 0 --max-rotation-diff 0")
+
+# Not a parity case: BAL's shape without a download (review of milestone 5, finding
+# 9): an intrinsics block per image with focal and distortion free, and a tenth of
+# the points far away, so their depth is weak.
+jba_gpu_case(bal_shape "--model RADIAL --images 30 --points 2000 --track-length 6 --per-image-intrinsics --free-intrinsics 5 --far-points 0.1"
+             "--max-centre-diff 0 --max-rotation-diff 0")
+
+# The fallbacks of sparse_schur (D98, D102), forced by gpu_check's test hooks on the
+# pinhole case: a factorization that fails falls back to conjugate gradients for its
+# step; with auto, one that runs out of memory, or a set-up that does not fit, leaves
+# sparse_schur for iterative_schur; asked for explicitly, a set-up that does not fit
+# is an error.
+jba_gpu_sparse_check(sparse_forced_fallback pinhole "--linear-solver sparse_schur --fail-factorizations 3 --expect-fallback")
+jba_gpu_sparse_check(auto_sparse pinhole "--linear-solver auto --expect-solver sparse_schur")
+jba_gpu_sparse_check(auto_factorization_oom pinhole "--linear-solver auto --fail-factorization-oom --expect-solver iterative_schur")
+jba_gpu_sparse_check(auto_setup_oom pinhole "--linear-solver auto --fail-direct-setup --expect-solver iterative_schur")
+jba_gpu_sparse_check(sparse_setup_oom pinhole "--linear-solver sparse_schur --fail-direct-setup --expect-error")

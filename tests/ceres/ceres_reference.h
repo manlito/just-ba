@@ -168,8 +168,10 @@ struct Result {
   int linear_iterations = 0;
   std::string termination;
   bool usable = false;
-  double time_seconds = 0;
+  double time_seconds = 0;  // Ceres's total_time_in_seconds: from Solve() on
+  double wall_seconds = 0;  // the whole call, building the Ceres problem included
   std::vector<double> history_cost;  // iteration 0 first
+  std::vector<double> history_time;  // since the call started, per iteration
   std::vector<int> history_linear_iterations;
   std::vector<double> history_radius;
   std::vector<double> history_relative_decrease;

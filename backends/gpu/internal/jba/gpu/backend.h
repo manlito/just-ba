@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <memory>
+#include <string>
 
 #include "jba/backend.h"
 #include "jba/gpu/device.h"
@@ -19,16 +21,24 @@ namespace jba::gpu {
 // in double and uploaded.
 //
 // Two linear solvers (D92): sparse_schur forms the reduced camera system on the device
-// and factorizes it on the host in double (Device::direct_solver), falling back to
-// conjugate gradients when the single-precision system is not positive definite;
+// and factorizes it in double (Device::direct_solver), falling back to conjugate
+// gradients for a step whose single-precision system is not positive definite;
 // iterative_schur runs the CPU backend's implicit Schur complement with preconditioned
 // conjugate gradients entirely on the device. Results are the same from run to run.
+//
+// options.linear_solver may be Auto: the backend then picks for this problem and
+// device (D102): sparse_schur where the device has a direct solver, unless the
+// reduced system would not fit the device's memory or its 32-bit indices; and if the
+// factorization runs out of memory part way, the solve continues with
+// iterative_schur. Asked for explicitly, sparse_schur throws DoesNotFit instead.
 //
 // Throws std::runtime_error when a kernel fails or sparse_schur is asked of a device
 // without a direct solver.
 class GpuBackend : public Backend {
  public:
-  GpuBackend(const Problem& problem, const SolverOptions& options, const Gauge& gauge, std::unique_ptr<Device> device);
+  // make_device is called once, or twice when Auto's first choice does not fit.
+  GpuBackend(const Problem& problem, const SolverOptions& options, const Gauge& gauge,
+             const std::function<std::unique_ptr<Device>()>& make_device);
   ~GpuBackend() override;
 
   double cost() override;
@@ -46,9 +56,22 @@ class GpuBackend : public Backend {
   // Copies the current parameters into `problem`.
   void write_back(Problem& problem) const;
 
+  // The linear solver the steps use (after a fallback, IterativeSchur), and what the
+  // solve should report about a change of solver; empty when there was none.
+  LinearSolverType linear_solver() const;
+  std::string note() const;
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };
+
+// Test hooks (tests/gpu_check.cpp): make the next `count` factorizations of strategy B
+// report `status`, or the next set-up of strategy B throw DoesNotFit, so the fallbacks
+// are tested without a broken matrix or a full device. Process-wide; not thread-safe.
+namespace testing {
+void fail_factorizations(int count, FactorStatus status);
+void fail_direct_setup(bool fail);
+}  // namespace testing
 
 }  // namespace jba::gpu
