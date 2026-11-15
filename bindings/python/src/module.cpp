@@ -218,7 +218,7 @@ NB_MODULE(_core, m) {
       .value("CUDA", jba::BackendKind::Cuda);
   nb::enum_<jba::LinearSolverType>(m, "LinearSolver",
                                    "Inner solve: AUTO (the backend's fastest), ITERATIVE_SCHUR (every backend) "
-                                   "or SPARSE_SCHUR (Metal).")
+                                   "or SPARSE_SCHUR (Metal; CUDA with cuDSS).")
       .value("AUTO", jba::LinearSolverType::Auto)
       .value("ITERATIVE_SCHUR", jba::LinearSolverType::IterativeSchur)
       .value("SPARSE_SCHUR", jba::LinearSolverType::SparseSchur);

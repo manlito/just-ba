@@ -146,6 +146,8 @@ def run(args):
     for name, path in problems:
         runs = [solve(cli, path, args) for _ in range(args.repeats)]
         first = runs[0]
+        # The solver auto stands for, as the library resolved it for this build.
+        result["linear_solver"] = first["linear_solver"]
         for r in runs[1:]:
             if any(r[k] != first[k] for k in COUNTS) or r["final_cost"] != first["final_cost"]:
                 raise RuntimeError(f"{name}: repeated runs differ; the solver should be deterministic (D59)")
@@ -204,15 +206,13 @@ def main():
     ap.add_argument("--threads", type=int, default=0, help="solver threads (0: all)")
     ap.add_argument("--backend", default="cpu", choices=["cpu", "metal", "cuda"])
     ap.add_argument("--linear-solver", default="auto", choices=["auto", "iterative_schur", "sparse_schur"],
-                    help="auto: sparse_schur on metal, iterative_schur on cpu (the library's rule)")
+                    help="auto: the library's rule for the backend, as this build resolves it")
     ap.add_argument("--large", action="store_true", help="add the main-size-range problems (LARGE)")
     ap.add_argument("--ceres", help="jba_ceres_solve to run on every problem too (speed reference)")
     ap.add_argument("--ceres-sparse-library", default="accelerate",
                     choices=["eigen", "accelerate", "suite_sparse", "cuda"])
     ap.add_argument("--only", help="comma-separated substrings of problem names")
     args = ap.parse_args()
-    if args.linear_solver == "auto":
-        args.linear_solver = "sparse_schur" if args.backend == "metal" else "iterative_schur"
     result = run(args)
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

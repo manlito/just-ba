@@ -67,7 +67,11 @@ std::optional<LinearSolverType> linear_solver_from_name(std::string_view name) {
 
 LinearSolverType resolve_linear_solver(LinearSolverType type, BackendKind backend) {
   if (type != LinearSolverType::Auto) return type;
-  return backend == BackendKind::Metal ? LinearSolverType::SparseSchur : LinearSolverType::IterativeSchur;
+  if (backend == BackendKind::Metal) return LinearSolverType::SparseSchur;
+#ifdef JBA_HAVE_CUDSS
+  if (backend == BackendKind::Cuda) return LinearSolverType::SparseSchur;
+#endif
+  return LinearSolverType::IterativeSchur;
 }
 
 namespace {

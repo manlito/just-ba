@@ -80,16 +80,18 @@ bool backend_available(BackendKind kind);
 // The linear solver of each step (document 03, strategies A and B). Both eliminate
 // the points by the Schur complement.
 enum class LinearSolverType {
-  // The backend's fastest: SparseSchur on Metal, IterativeSchur on the CPU and CUDA
-  // (the only one they have so far). Measured from 16 to 2,000 images (D92).
+  // The backend's fastest: SparseSchur on Metal, and on CUDA when built with cuDSS;
+  // IterativeSchur otherwise (the only one the CPU has). Measured from 16 to 2,000
+  // images (D92, D98).
   Auto,
   // A: the reduced camera system applied implicitly, preconditioned conjugate
   // gradients, preconditioner its camera blocks (Ceres's ITERATIVE_SCHUR with
   // SCHUR_JACOBI). Every backend.
   IterativeSchur,
   // B: the reduced camera system formed and factorized by sparse Cholesky (Ceres's
-  // SPARSE_SCHUR): exact steps, so fewer and dearer iterations. Metal backend only
-  // for now: formed on the GPU, factorized in double by Accelerate.
+  // SPARSE_SCHUR): exact steps, so fewer and dearer iterations. GPU backends only:
+  // formed on the GPU, factorized in double by Accelerate (Metal) or cuDSS (CUDA, when
+  // built with it).
   SparseSchur,
 };
 
