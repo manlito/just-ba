@@ -5,7 +5,7 @@ for refining reconstructions that come with noisy camera poses from ARKit, ARCor
 or another tracker. Early development: milestones 0 to 4 done, the main use case (`jba::refine`)
 with gravity, the Manhattan prior from line segments, depth at keypoints, covariances
 and export to COLMAP, checked against Ceres and synthetic ground truth, on the CPU and
-on Apple GPUs (Metal); the CUDA backend is milestone 5, in progress.
+on Apple GPUs (Metal) and NVIDIA GPUs (CUDA, milestone 5: met on Linux, Windows check outstanding).
 The plan is in [docs/](docs/README.md).
 
 ## Build
