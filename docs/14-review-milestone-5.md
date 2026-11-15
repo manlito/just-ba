@@ -366,4 +366,5 @@ repository.
 2. Should `Auto` ever throw for lack of memory when another solver of the same
    backend would run (finding 4)?
 3. venice-52 stays an exception in the documents. Is finding 5 worth fixing before
-   milestone 6, given that real captures take the same fallback?
+   milestone 6, given that real captures take the same fallback? Answered by D109: not before
+   milestone 6.

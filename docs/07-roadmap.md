@@ -479,7 +479,8 @@ dense synthetic problems, by 20 to 45 ms (D105).
 
 Details in document 08.
 
-- Wheels for Linux (CPU and CUDA) and macOS, published to PyPI from CI.
+- Wheels for Linux x86_64 (CPU and CUDA), macOS arm64 and Windows x86_64 (CPU and
+  CUDA), published to PyPI by a release workflow started by hand (D108, D111).
 - Benchmark results stored per commit; gates on accuracy and time per iteration.
 - Generated documentation site: user guide, Python API reference, residual and camera
   model reference, benchmark tables.
@@ -537,6 +538,6 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 |---|---|---|
 | Single precision is not accurate enough on large or badly scaled scenes | GPU results miss tolerance | Local parameterization, compensated sums, host-side double decisions; double on CUDA as fallback |
 | Conjugate gradients converge slowly with very noisy priors | Slow or stalled solves | Direct solve option; better preconditioner |
-| Three kernel targets drift apart | Backend-specific bugs | One symbolic source; cross-backend equality tests (`ctest -L gpu`), run by hand; CI's full mode runs them without failing on them (document 08) |
+| Three kernel targets drift apart | Backend-specific bugs | One symbolic source; cross-backend equality tests (`ctest -L gpu`), run by hand (D110) |
 | "Fastest" is not reached against Caspar | Core promise missed, and found late because CUDA now comes after Metal | Profile against it at the start of milestone 5; adopt full-system conjugate gradients if it wins |
 | Scope growth through new residual types | Core path slows down | The regression rule in document 05: no new residual without proof the existing benchmarks held |

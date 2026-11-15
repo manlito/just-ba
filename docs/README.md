@@ -75,15 +75,17 @@ Still open (full list in [00-decisions.md](00-decisions.md)):
 
 1. **Default prior weights.** Relative priors are set from three ARCore captures
    (D77); global priors, and ARKit, still need captures.
-2. **From the review of milestones 3 and 4** (document 13): whether CI's full mode
-   keeps its Metal step, and what agreement between backends `refine` must give on
-   real captures.
-3. **From the review of milestone 5** (document 14): whether the rest of venice-52's
-   invalid steps (a camera block of the reduced system losing definiteness in single
-   precision) is studied before milestone 6. Its other two questions are answered
-   by D101 and D102.
+2. **From the review of milestones 3 and 4** (document 13): what agreement between
+   backends `refine` must give on real captures. Its Metal step question is answered
+   by D110 (removed; Metal tested by hand).
+3. **From the review of milestone 5** (document 14): answered by D101, D102 and
+   D109 (venice-52 not studied before milestone 6).
 4. **From the review of the fixes** (document 15): its two questions are answered by
    D105 (`Auto` keeps one rule) and D106 (Caspar compared on its own scale).
+5. **Before milestone 6:** which CUDA versions the wheels support. CUDA 12 and 13
+   were asked for; D52's C++23 needs CUDA 13.3. Decided so far: no Linux arm64
+   wheels (D108), CI and releases started by hand (D110, D111), docs on Cloudflare
+   Pages (D112).
 
 ## Reference material
 

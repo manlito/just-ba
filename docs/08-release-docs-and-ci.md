@@ -19,7 +19,8 @@ working proof of concept. This document covers what that requires.
   (neither was `justba`). The name is not reserved until something is published
   under it.
 - Publishing: PyPI trusted publishing from the release workflow, so no long-lived
-  token is stored.
+  token is stored. The workflow is started by hand and uses no GitHub environment
+  (D111); the pending publisher on PyPI is registered for `release.yml`.
 - Versioning: semantic versions; the Python API is the public contract. Pre-1.0 while
   the API settles.
 
@@ -27,7 +28,7 @@ working proof of concept. This document covers what that requires.
 
 | Wheel | Platforms | Contents |
 |---|---|---|
-| Default | Linux x86_64 and arm64, macOS arm64, Windows x86_64 | CPU backend. On macOS also the Metal backend, since it needs only system frameworks. |
+| Default | Linux x86_64, macOS arm64, Windows x86_64 (Linux arm64 not in the first release, D108) | CPU backend. On macOS also the Metal backend, since it needs only system frameworks. |
 | CUDA | Linux x86_64, Windows x86_64 | CPU plus CUDA backend. Depends on NVIDIA's pip packages for the CUDA runtime (and solver libraries if the direct-solve option is enabled). |
 | Source distribution | all | For anyone building themselves |
 
@@ -36,6 +37,8 @@ Open points:
 - One package that loads CUDA at run time when present, or a separate CUDA package
   (the common `-cu12` and `-cu13` naming). Run-time loading gives users one name to
   install; separate packages keep the default wheel small. Decide in milestone 6.
+  Which CUDA versions are supported (12, 13 or both) is open in document 00: D52
+  needs CUDA 13.3.
 - Windows is a target (required by the desktop app, document 09): CPU and CUDA
   wheels for Windows x86_64, built and tested on hosted Windows runners, with GPU
   tests on the owner's Windows laptop.
@@ -58,8 +61,8 @@ Built automatically and published on every release, with a preview on pull reque
 | Design notes | This `docs/` folder | As is |
 
 Tooling follows the language choice: Sphinx or MkDocs for the Python side, with
-Doxygen (C++) or rustdoc (Rust) for the core. Hosting on GitHub Pages or Read the
-Docs, both free for open source projects.
+Doxygen (C++) or rustdoc (Rust) for the core. Hosted on Cloudflare Pages (D112),
+which is free and serves a site built from a private repository.
 
 Docstring examples are executed in CI so the documentation cannot go stale.
 
@@ -87,18 +90,19 @@ job checks that the generated residual code is current. Since milestone 4 the fu
 mode's macOS job also runs the 114 Metal tests (`ctest -L gpu`) as an informational
 step that cannot fail the run. That sits between the table below (hosted macOS "if
 it proves reliable") and the decision at the end of this document (by hand, never
-in CI); which one holds is open (document 00). The table below is the plan for the
-public repository.
+in CI). D110 settles it: the step is removed and the Metal tests are run by hand.
+CI stays manual and light through milestone 6, and the release workflow is started
+by hand too (D111). The table below is the plan for the public repository.
 
 | Job | Runner | When | Cost |
 |---|---|---|---|
 | Build, unit tests, Level 1 and Level 2 checks on CPU (document 05) | Hosted Linux, Windows and macOS | Every pull request | Free |
 | CUDA kernels compiled (not run) | Hosted Linux with the CUDA toolkit installed | Every pull request | Free |
 | Kernel logic on CPU: the generated kernels built as host code and compared with the reference | Hosted Linux | Every pull request | Free |
-| Metal backend tests | Hosted macOS arm64 if it proves reliable; otherwise run by hand on the owner's Mac | Every pull request if hosted; otherwise by hand before releases | Free |
+| Metal backend tests | By hand on the owner's Mac (D110) | Before releases and after GPU changes | Free |
 | CUDA backend tests and speed benchmark | Not a CI job. Run by hand on the owner's laptop, or on the development VM when it is up | Before releases and after GPU changes | None beyond development |
 | CPU speed regression gate | Hosted Linux | Every pull request | Free |
-| Wheels | Hosted, all platforms | On release tags | Free |
+| Wheels and PyPI publishing | Hosted, all platforms | Started by hand (`release.yml`, D111) | Free |
 | Documentation build and publish | Hosted Linux | Pull request preview; publish on release | Free |
 
 Points to note:
@@ -127,4 +131,4 @@ Points to note:
 | Licence | Decided: Apache-2.0 |
 | One wheel with run-time CUDA loading, or separate CUDA wheels | Decide in milestone 6 after measuring wheel sizes |
 | GPU testing | Decided: by hand, never in CI. The owner's Mac for Metal; the owner's laptop (Linux and Windows) or the development VM for CUDA. |
-| Documentation host | GitHub Pages |
+| Documentation host | Decided: Cloudflare Pages (D112) |
