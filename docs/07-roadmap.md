@@ -506,12 +506,17 @@ Built (2026-11-15, D114 to D119):
 - The documentation site in `docs-site/` and `docs.yml` (by hand): clean with
   warnings as errors, 10 docstring examples pass.
 
-Not done yet, so the exit is not met: none of the three workflows has run on GitHub
-(the release, the benchmark gate, whose first run gives its baseline, and the docs);
-the CUDA wheels have not been built; nothing is on PyPI or Cloudflare Pages. The
-owner's set-up for that: pending publishers on PyPI for `just-ba-cu12` and
-`just-ba-cu13`, and the Cloudflare project, token and account ID as repository
-secrets.
+Run on GitHub (2026-11-15): CI passes with the benchmark gate (baseline from the
+runner, times compared on its CPU model only, D117); the release workflow builds and
+tests all seven wheels and the sdist (0.4 to 2.0 MB, D114); the docs workflow builds
+the site and its examples pass.
+
+Not done yet, so the exit is not met: nothing is on PyPI or Cloudflare Pages, and the
+CUDA wheels have not run on a GPU (`bench/gpu_check.py --wheel` on the laptop, Linux
+and Windows, which also shows that NVIDIA's libraries load from their pip packages
+alone; the build machines had them installed elsewhere too). The owner's set-up for
+publishing: pending publishers on PyPI for `just-ba-cu12` and `just-ba-cu13`, and
+the Cloudflare project, token and account ID as repository secrets.
 
 ## Milestone 7: incremental pipeline and COLMAP parity
 

@@ -55,7 +55,7 @@ are taken by hand on an otherwise idle machine; CI does not run this.
 | `apple-m5pro-metal-iterative.json` | The same Mac; Metal backend, iterative_schur, with Ceres with Accelerate alongside |
 | `rtx2070maxq-cuda-sparse.json` | The owner's laptop (i7-9750H, RTX 2070 Max-Q, Linux); CUDA backend, auto (sparse_schur with cuDSS), `--huge`; Ceres 2.2.0 with SuiteSparse (`ceres`) and Ceres master with cuDSS (`ceres_gpu`) alongside |
 | `rtx2070maxq-cuda-iterative.json` | The same laptop; CUDA backend, iterative_schur, `--large` |
-| `github-ubuntu-24.04.json` | CI's hosted Linux runner (4 threads), CPU backend, venice-52 left out; taken from the first run of the CI job "benchmark gate (CPU)", at `6bf71db` (a 2-CPU runner, GCC 13.3) |
+| `github-ubuntu-24.04.json` | CI's hosted Linux runner (4 threads), CPU backend, venice-52 left out; from a run of the CI job "benchmark gate (CPU)" at `9524cb8` (AMD EPYC 7763, 2 CPUs, GCC 13.3); times are compared only on that CPU model |
 
 The milestone 5 comparison with Caspar and bae, which `run.py` does not drive, is in
 `competitors/`.
