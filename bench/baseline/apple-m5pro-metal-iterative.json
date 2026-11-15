@@ -1,5 +1,5 @@
 {
- "commit": "7d0db8d-dirty",
+ "commit": "d936151-dirty",
  "machine": {
   "system": "Darwin",
   "release": "25.6.0",
@@ -19,13 +19,20 @@
    "relative_priors": 0,
    "global_priors": 0,
    "initial_cost": 850912.4606808367,
-   "final_cost": 13345.196727768873,
-   "iterations": 36,
-   "accepted_steps": 33,
-   "linear_iterations": 1530,
+   "final_cost": 13344.71311982657,
+   "iterations": 46,
+   "accepted_steps": 46,
+   "linear_iterations": 2917,
    "termination": "convergence",
-   "time_seconds": 0.2455,
-   "time_per_iteration": 0.006819444444444444
+   "time_seconds": 0.4128,
+   "time_per_iteration": 0.008973913043478261,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 30,
+    "final_cost": 13344.32806121437,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.3636
+   }
   },
   "problem-21-11315-pre": {
    "images": 21,
@@ -34,13 +41,20 @@
    "relative_priors": 0,
    "global_priors": 0,
    "initial_cost": 4413239.31443223,
-   "final_cost": 30378.641546439074,
-   "iterations": 10,
-   "accepted_steps": 10,
-   "linear_iterations": 950,
+   "final_cost": 30378.674675006067,
+   "iterations": 11,
+   "accepted_steps": 11,
+   "linear_iterations": 1020,
    "termination": "convergence",
-   "time_seconds": 0.1146,
-   "time_per_iteration": 0.01146
+   "time_seconds": 0.1211,
+   "time_per_iteration": 0.01100909090909091,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 9,
+    "final_cost": 30378.654458568675,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.1735
+   }
   },
   "problem-16-22106-pre": {
    "images": 16,
@@ -49,13 +63,20 @@
    "relative_priors": 0,
    "global_priors": 0,
    "initial_cost": 4185659.5182496756,
-   "final_cost": 18033.914991043726,
+   "final_cost": 18033.91582946191,
    "iterations": 14,
    "accepted_steps": 14,
-   "linear_iterations": 654,
+   "linear_iterations": 691,
    "termination": "convergence",
-   "time_seconds": 0.1472,
-   "time_per_iteration": 0.010514285714285714
+   "time_seconds": 0.1558,
+   "time_per_iteration": 0.011128571428571429,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 12,
+    "final_cost": 18033.905020534497,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.5649
+   }
   },
   "problem-52-64053-pre": {
    "images": 52,
@@ -69,8 +90,15 @@
    "accepted_steps": 26,
    "linear_iterations": 953,
    "termination": "no_convergence",
-   "time_seconds": 0.7942,
-   "time_per_iteration": 0.015884
+   "time_seconds": 0.801,
+   "time_per_iteration": 0.01602,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 50,
+    "final_cost": 261805.9574666106,
+    "termination": "NO_CONVERGENCE",
+    "time_seconds": 6.237
+   }
   },
   "problem-93-61203-pre": {
    "images": 93,
@@ -79,13 +107,20 @@
    "relative_priors": 0,
    "global_priors": 0,
    "initial_cost": 5646900.249339232,
-   "final_cost": 145545.29005186135,
-   "iterations": 25,
-   "accepted_steps": 25,
-   "linear_iterations": 2390,
+   "final_cost": 145545.414063236,
+   "iterations": 20,
+   "accepted_steps": 20,
+   "linear_iterations": 2148,
    "termination": "convergence",
-   "time_seconds": 1.4431,
-   "time_per_iteration": 0.057724000000000004
+   "time_seconds": 1.2961,
+   "time_per_iteration": 0.064805,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 8,
+    "final_cost": 145545.0681223735,
+    "termination": "CONVERGENCE",
+    "time_seconds": 1.1383
+   }
   },
   "synthetic-pinhole-50": {
    "images": 50,
@@ -94,13 +129,20 @@
    "relative_priors": 0,
    "global_priors": 0,
    "initial_cost": 1443045.6951701597,
-   "final_cost": 48399.19194925878,
+   "final_cost": 48399.19194926236,
    "iterations": 6,
    "accepted_steps": 6,
    "linear_iterations": 48,
    "termination": "convergence",
-   "time_seconds": 0.0307,
-   "time_per_iteration": 0.005116666666666667
+   "time_seconds": 0.0391,
+   "time_per_iteration": 0.006516666666666667,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 4,
+    "final_cost": 48399.171608639685,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.3605
+   }
   },
   "synthetic-radial-free-30": {
    "images": 30,
@@ -109,13 +151,20 @@
    "relative_priors": 0,
    "global_priors": 0,
    "initial_cost": 1742174.1227471447,
-   "final_cost": 21293.855616681423,
-   "iterations": 17,
-   "accepted_steps": 13,
-   "linear_iterations": 483,
+   "final_cost": 21289.770347124504,
+   "iterations": 23,
+   "accepted_steps": 20,
+   "linear_iterations": 689,
    "termination": "convergence",
-   "time_seconds": 0.3406,
-   "time_per_iteration": 0.02003529411764706
+   "time_seconds": 0.4778,
+   "time_per_iteration": 0.02077391304347826,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 14,
+    "final_cost": 21289.754445361243,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.7194
+   }
   },
   "synthetic-relative-priors-50": {
    "images": 50,
@@ -129,8 +178,15 @@
    "accepted_steps": 4,
    "linear_iterations": 22,
    "termination": "convergence",
-   "time_seconds": 0.0231,
-   "time_per_iteration": 0.005775
+   "time_seconds": 0.0312,
+   "time_per_iteration": 0.0078,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 3,
+    "final_cost": 48787.18536125407,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.3256
+   }
   },
   "synthetic-global-similarity-50": {
    "images": 50,
@@ -144,8 +200,15 @@
    "accepted_steps": 4,
    "linear_iterations": 27,
    "termination": "convergence",
-   "time_seconds": 0.0315,
-   "time_per_iteration": 0.007875
+   "time_seconds": 0.0322,
+   "time_per_iteration": 0.00805,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 3,
+    "final_cost": 48622.62275613028,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.3247
+   }
   },
   "synthetic-opencv-30": {
    "images": 30,
@@ -159,8 +222,15 @@
    "accepted_steps": 4,
    "linear_iterations": 35,
    "termination": "convergence",
-   "time_seconds": 0.0171,
-   "time_per_iteration": 0.004275
+   "time_seconds": 0.0245,
+   "time_per_iteration": 0.006125,
+   "ceres": {
+    "sparse_library": "accelerate",
+    "iterations": 2,
+    "final_cost": 21379.57702530034,
+    "termination": "CONVERGENCE",
+    "time_seconds": 0.1097
+   }
   }
  }
 }

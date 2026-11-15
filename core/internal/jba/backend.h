@@ -4,6 +4,8 @@
 // linear system (document 03). Internal; it will be frozen in milestone 4 from the
 // CPU experience. Virtual calls happen a few times per outer iteration only.
 
+#include <limits>
+
 namespace jba {
 
 struct StepResult {
@@ -49,6 +51,10 @@ class Backend {
 
   // Makes the candidate the current parameters.
   virtual void accept_candidate() = 0;
+
+  // The largest trust-region radius whose damping (diag / radius) this backend's
+  // arithmetic still resolves; the loop never exceeds it. Unlimited by default.
+  virtual double max_trust_region_radius() const { return std::numeric_limits<double>::infinity(); }
 };
 
 }  // namespace jba

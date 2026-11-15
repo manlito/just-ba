@@ -77,8 +77,21 @@ def relative_change(before, after, group, refined):
     return float(np.median(rot)), float(np.median(pos))
 
 
+# Every backend and linear solver this machine has: the CPU, and the Metal backend
+# with each of its linear solvers (milestone 4).
+CONFIGS = {
+    "cpu": (jba.Backend.CPU, jba.LinearSolver.ITERATIVE_SCHUR),
+    "metal": (jba.Backend.METAL, jba.LinearSolver.ITERATIVE_SCHUR),
+    "metal_sparse": (jba.Backend.METAL, jba.LinearSolver.SPARSE_SCHUR),
+}
+
+
+@pytest.mark.parametrize("config", list(CONFIGS))
 @pytest.mark.parametrize("path", capture_files(), ids=os.path.basename)
-def test_capture_refines(path):
+def test_capture_refines(path, config):
+    backend, linear_solver = CONFIGS[config]
+    if not jba.backend_available(backend):
+        pytest.skip(f"no {config} backend here")
     sec = read_sections(path)
     begin, kp = sec["match.keypoint_begin"], sec["match.keypoints"]
     keypoints = [kp[begin[i]:begin[i + 1]] for i in range(len(begin) - 1)]
@@ -86,13 +99,18 @@ def test_capture_refines(path):
     assert scene.validate() == ""
     assert len(keypoints) == scene.num_images
 
-    r = jba.refine(scene, keypoints, matches=np.asarray(sec["match.matches"]))
+    options = jba.RefineOptions()
+    solver = options.solver
+    solver.backend = backend
+    solver.linear_solver = linear_solver
+    options.solver = solver
+    r = jba.refine(scene, keypoints, matches=np.asarray(sec["match.matches"]), options=options)
     P, rep = r.problem, r.report
     err = np.asarray(rep.reprojection_error)
     refined = r.refined.astype(bool)
     rot, pos = relative_change(scene.poses, P.poses, np.asarray(r.group), refined)
     info = json.loads(bytes(sec["capture.info"]).decode()) if "capture.info" in sec else {}
-    print(f"\n{os.path.basename(path)} ({info.get('device', {}).get('model', '?')}): "
+    print(f"\n{os.path.basename(path)} [{config}] ({info.get('device', {}).get('model', '?')}): "
           f"{scene.num_images} images, {r.num_groups} groups, {int(refined.sum())} refined, "
           f"{P.num_points} points, reprojection median {np.median(err):.2f} px, p90 {np.percentile(err, 90):.2f} px, "
           f"{len(rep.downweighted_relative)}/{scene.num_relative_priors} priors down-weighted, "

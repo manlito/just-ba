@@ -32,6 +32,9 @@ class MetalBackend final : public Backend {
   StepResult compute_step(double radius, double eta, int min_linear_iterations, int max_linear_iterations) override;
   bool candidate_cost(double* cost) override;
   void accept_candidate() override;
+  // 1e6: in single precision, damping below about 1e-6 of a diagonal entry is lost
+  // in the sums, so a larger radius would not change the step.
+  double max_trust_region_radius() const override { return 1e6; }
 
   // Copies the current parameters into `problem`.
   void write_back(Problem& problem) const;

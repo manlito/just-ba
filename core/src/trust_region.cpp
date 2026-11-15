@@ -24,7 +24,10 @@ void run_trust_region(Backend& backend, const SolverOptions& o, const IterationC
   const auto start = Clock::now();
   auto elapsed = [&] { return std::chrono::duration<double>(Clock::now() - start).count(); };
 
-  double radius = o.initial_trust_region_radius;
+  // A single-precision backend cannot resolve damping below a share of the diagonal,
+  // so the radius is capped where it still changes the system.
+  const double max_radius = std::min(o.max_trust_region_radius, backend.max_trust_region_radius());
+  double radius = std::min(o.initial_trust_region_radius, max_radius);
   double decrease_factor = 2;
   int invalid_steps = 0;
 
@@ -105,7 +108,7 @@ void run_trust_region(Backend& backend, const SolverOptions& o, const IterationC
         x_norm = backend.parameter_norm();
         backend.linearize(false);
         const double q = 2 * cur.relative_decrease - 1;
-        radius = std::min(o.max_trust_region_radius, radius / std::max(1.0 / 3.0, 1.0 - q * q * q));
+        radius = std::min(max_radius, radius / std::max(1.0 / 3.0, 1.0 - q * q * q));
         decrease_factor = 2;
         ++s.accepted_steps;
       } else {
