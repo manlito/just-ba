@@ -1,0 +1,167 @@
+// Metal backend against the CPU reference on one problem file (milestone 4).
+//
+//   jba_metal_check <problem> [--gauge auto|none] [--loss NAME[:SCALE]] [--<type>-loss NAME[:SCALE]]
+//                   [--max-iterations N] [--function-tolerance X] [--parameter-tolerance X]
+//                   [--max-cost-diff X] [--max-centre-diff X] [--max-rotation-diff X] [--no-repeat]
+//
+// Solves with both backends from the same start and options, then checks:
+// - final costs: relative difference at most --max-cost-diff (default 1e-6);
+// - median camera centre difference relative to the scene scale, and median rotation
+//   difference in radians, at most --max-centre-diff and --max-rotation-diff
+//   (defaults 1e-4); 0 skips a check;
+// - a second Metal solve gives bit-identical parameters (unless --no-repeat).
+// Document 05 asks for 1e-3 in cost in single precision; the defaults are what the
+// backend actually reaches on the synthetic cases. Prints JSON; skips (exit 77)
+// without a Metal device.
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "jba/geometry.h"
+#include "jba/problem_io.h"
+#include "jba/solver.h"
+
+namespace {
+
+bool ends_with(const std::string& s, const std::string& suffix) {
+  return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// Camera centre C = -R^T t.
+void centre(const double* pose, double* C) {
+  const double conj[4] = {pose[0], -pose[1], -pose[2], -pose[3]};
+  jba::quat_rotate(conj, pose + 4, C);
+  for (int c = 0; c < 3; ++c) C[c] = -C[c];
+}
+
+double median(std::vector<double> v) {
+  if (v.empty()) return 0;
+  std::sort(v.begin(), v.end());
+  return v[v.size() / 2];
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  try {
+    if (argc < 2) {
+      std::fprintf(stderr, "usage: %s <problem> [options]\n", argv[0]);
+      return 2;
+    }
+    if (!jba::backend_available(jba::BackendKind::Metal)) {
+      std::printf("no Metal device; skipped\n");
+      return 77;
+    }
+    const std::string path = argv[1];
+    jba::Problem start = ends_with(path, ".txt") ? jba::read_bal(path) : jba::read_problem(path);
+    jba::SolverOptions o = jba::with_problem_losses({}, start);
+    o.max_iterations = 200;
+    o.function_tolerance = 1e-12;
+    o.parameter_tolerance = 1e-12;
+    double max_cost = 1e-6, max_centre = 1e-4, max_rotation = 1e-4;
+    bool repeat = true;
+    for (int a = 2; a < argc; ++a) {
+      const std::string key = argv[a];
+      if (key == "--no-repeat") {
+        repeat = false;
+        continue;
+      }
+      if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
+      const std::string val = argv[++a];
+      auto loss = [&] {
+        const auto colon = val.find(':');
+        const auto type = jba::loss_from_name(val.substr(0, colon));
+        if (!type) throw std::invalid_argument("unknown loss " + val);
+        return jba::Loss{*type, colon != std::string::npos ? std::stod(val.substr(colon + 1)) : 1.0};
+      };
+      if (key == "--gauge") o.gauge = val == "none" ? jba::GaugeMode::None : jba::GaugeMode::Auto;
+      else if (key == "--max-iterations") o.max_iterations = std::stoi(val);
+      else if (key == "--function-tolerance") o.function_tolerance = std::stod(val);
+      else if (key == "--parameter-tolerance") o.parameter_tolerance = std::stod(val);
+      else if (key == "--max-cost-diff") max_cost = std::stod(val);
+      else if (key == "--max-centre-diff") max_centre = std::stod(val);
+      else if (key == "--max-rotation-diff") max_rotation = std::stod(val);
+      else if (key == "--loss") o.loss = loss();
+      else {
+        bool found = false;
+        for (std::size_t t = 1; t < jba::kNumLossTypes; ++t) {
+          std::string flag = "--" + std::string(jba::residual_type_name(t)) + "-loss";
+          for (char& c : flag)
+            if (c == '_') c = '-';
+          if (key == flag) {
+            *jba::loss_of(o, t) = loss();
+            found = true;
+          }
+        }
+        if (!found) throw std::invalid_argument("unknown option " + key);
+      }
+    }
+
+    auto run = [&](jba::BackendKind kind, jba::Problem& p, double& seconds) {
+      jba::SolverOptions opts = o;
+      opts.backend = kind;
+      const auto t0 = std::chrono::steady_clock::now();
+      const jba::SolverSummary s = jba::solve(p, opts);
+      seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      return s;
+    };
+    jba::Problem cpu = start, gpu = start;
+    double t_cpu = 0, t_gpu = 0;
+    const jba::SolverSummary sc = run(jba::BackendKind::Cpu, cpu, t_cpu);
+    const jba::SolverSummary sg = run(jba::BackendKind::Metal, gpu, t_gpu);
+
+    const double cost_diff = std::abs(sg.final_cost - sc.final_cost) / std::max(sc.final_cost, 1e-300);
+    // Scene scale: RMS distance of the camera centres from their mean.
+    const std::size_t n = start.num_images();
+    std::vector<double> C(3 * n), G(3 * n);
+    double mean[3] = {0, 0, 0};
+    for (std::size_t i = 0; i < n; ++i) {
+      centre(&cpu.poses[7 * i], &C[3 * i]);
+      centre(&gpu.poses[7 * i], &G[3 * i]);
+      for (int c = 0; c < 3; ++c) mean[c] += C[3 * i + c] / static_cast<double>(n);
+    }
+    double scale = 0;
+    for (std::size_t i = 0; i < n; ++i)
+      for (int c = 0; c < 3; ++c) scale += (C[3 * i + c] - mean[c]) * (C[3 * i + c] - mean[c]);
+    scale = std::sqrt(scale / static_cast<double>(std::max<std::size_t>(n, 1)));
+    std::vector<double> dc(n), dr(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      double s = 0;
+      for (int c = 0; c < 3; ++c) s += (C[3 * i + c] - G[3 * i + c]) * (C[3 * i + c] - G[3 * i + c]);
+      dc[i] = std::sqrt(s) / std::max(scale, 1e-300);
+      double dot = 0;
+      for (int c = 0; c < 4; ++c) dot += cpu.poses[7 * i + c] * gpu.poses[7 * i + c];
+      dr[i] = 2 * std::acos(std::min(1.0, std::abs(dot)));
+    }
+    const double centre_diff = median(dc), rotation_diff = median(dr);
+
+    bool identical = true;
+    if (repeat) {
+      jba::Problem again = start;
+      double t = 0;
+      run(jba::BackendKind::Metal, again, t);
+      identical = again.poses == gpu.poses && again.points == gpu.points && again.intrinsics == gpu.intrinsics;
+    }
+
+    const bool ok = cost_diff <= max_cost && (max_centre == 0 || centre_diff <= max_centre) &&
+                    (max_rotation == 0 || rotation_diff <= max_rotation) && identical &&
+                    sg.termination != jba::Termination::Failure;
+    std::printf(
+        "{\"problem\": \"%s\", \"cpu_cost\": %.12g, \"metal_cost\": %.12g, \"cost_diff\": %.3g, "
+        "\"centre_diff\": %.3g, \"rotation_diff\": %.3g, \"cpu_iterations\": %d, \"metal_iterations\": %d, "
+        "\"metal_termination\": \"%s\", \"metal_message\": \"%s\", \"repeatable\": %s, \"cpu_seconds\": %.3f, "
+        "\"metal_seconds\": %.3f, \"ok\": %s}\n",
+        path.c_str(), sc.final_cost, sg.final_cost, cost_diff, centre_diff, rotation_diff, sc.iterations,
+        sg.iterations, std::string(jba::termination_name(sg.termination)).c_str(), sg.message.c_str(),
+        repeat ? (identical ? "true" : "false") : "null", t_cpu, t_gpu, ok ? "true" : "false");
+    return ok ? 0 : 1;
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "error: %s\n", e.what());
+    return 1;
+  }
+}

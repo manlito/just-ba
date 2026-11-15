@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,21 @@ struct Gauge {
   }
 };
 
+// Where the solve runs (document 03). The CPU backend works in double and is the
+// reference. The Metal backend (Apple GPUs) does the per-observation work and the
+// linear solve in single precision on the GPU, and every decision (costs, accepting
+// a step) on the host in double; its answers agree with the CPU's within
+// single-precision tolerance, not bit for bit.
+enum class BackendKind {
+  Cpu,
+  Metal,
+};
+
+std::string_view backend_name(BackendKind kind);  // "cpu", "metal"
+std::optional<BackendKind> backend_from_name(std::string_view name);
+// Whether this build has the backend and the machine can run it.
+bool backend_available(BackendKind kind);
+
 struct SolverOptions {
   // Trust region (Levenberg-Marquardt). Defaults are Ceres's, so the two solvers
   // can be compared iteration by iteration.
@@ -90,8 +106,10 @@ struct SolverOptions {
   PriorDefaults prior_defaults;  // weights for priors that come without any
   GaugeMode gauge = GaugeMode::Auto;
 
-  // Worker threads for the CPU backend; 0 means all hardware threads. Results do
-  // not depend on the thread count.
+  BackendKind backend = BackendKind::Cpu;
+
+  // Worker threads for the CPU backend, and for the host side of the others; 0
+  // means all hardware threads. Results do not depend on the thread count.
   int num_threads = 0;
 };
 
@@ -160,7 +178,8 @@ SolverOptions with_problem_losses(SolverOptions options, const Problem& problem)
 // Stores the options' losses in the problem, one per residual type.
 void store_losses(Problem& problem, const SolverOptions& options);
 
-// Solves in place on the CPU. Throws std::invalid_argument for an invalid problem.
+// Solves in place on options.backend. Throws std::invalid_argument for an invalid
+// problem or a backend this build or machine does not have.
 SolverSummary solve(Problem& problem, const SolverOptions& options = {},
                     const IterationCallback& callback = {});
 

@@ -11,6 +11,10 @@ struct StepResult {
   double model_cost_change = 0;  // predicted decrease, > 0 when valid
   double step_norm = 0;          // norm of candidate - current, stored coordinates
   int linear_iterations = 0;
+  // Set with valid = false when the predicted decrease is below what the backend's
+  // arithmetic can resolve (single precision): the parameters are as good as this
+  // backend can make them. The CPU backend never sets it.
+  bool precision_limit = false;
 };
 
 class Backend {

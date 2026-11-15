@@ -19,7 +19,7 @@ constexpr const char* kUsage =
     "usage:\n"
     "  just-ba convert-bal <bal.txt> <out.jba>   convert a BAL problem to the just-ba format\n"
     "  just-ba info <problem>                    print sizes and the initial cost as JSON\n"
-    "  just-ba solve <problem> [options]         solve on the CPU and print a JSON summary\n"
+    "  just-ba solve <problem> [options]         solve and print a JSON summary\n"
     "\n"
     "<problem> is a .jba file, or a BAL .txt file.\n"
     "\n"
@@ -35,6 +35,7 @@ constexpr const char* kUsage =
     "  --<type>-loss <name>[:<scale>]  the same for relative-prior, global-prior, gravity; default\n"
     "                               the file's loss.* sections, else the library's defaults\n"
     "  --gauge <auto|none>          default auto\n"
+    "  --backend <cpu|metal>        default cpu\n"
     "  --threads <n>                default 0 (all hardware threads)\n";
 
 // A string as a JSON string literal, quotes included.
@@ -135,7 +136,11 @@ int solve(int argc, char** argv) {
     else if (key == "--gradient-tolerance") o.gradient_tolerance = std::stod(val);
     else if (key == "--parameter-tolerance") o.parameter_tolerance = std::stod(val);
     else if (key == "--threads") o.num_threads = std::stoi(val);
-    else if (key == "--gauge") {
+    else if (key == "--backend") {
+      const auto b = jba::backend_from_name(val);
+      if (!b) throw std::invalid_argument("unknown backend " + val);
+      o.backend = *b;
+    } else if (key == "--gauge") {
       if (val == "auto") o.gauge = jba::GaugeMode::Auto;
       else if (val == "none") o.gauge = jba::GaugeMode::None;
       else throw std::invalid_argument("unknown gauge " + val);
@@ -175,13 +180,14 @@ int solve(int argc, char** argv) {
   std::printf(
       "{\"input\": %s, \"model\": \"%s\", \"images\": %zu, \"points\": %zu, \"observations\": %zu, "
       "\"relative_priors\": %zu, \"global_priors\": %zu, \"gravity_priors\": %zu, \"loss\": \"%s\", "
-      "\"loss_scale\": %g, \"gauge\": %s, "
+      "\"loss_scale\": %g, \"gauge\": %s, \"backend\": \"%s\", "
       "\"initial_cost\": %.17g, \"final_cost\": %.17g, \"iterations\": %d, \"accepted_steps\": %d, "
       "\"linear_iterations\": %d, \"termination\": \"%s\", \"message\": %s, \"time_seconds\": %.4f, "
       "\"cost_by_type\": %s}\n",
       json_string(input).c_str(), std::string(jba::model_name(p.model)).c_str(), p.num_images(), p.num_points(),
       p.num_observations(), p.num_relative_priors(), p.num_global_priors(), p.num_gravity_priors(),
-      std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, gauge_json(s.gauge).c_str(), s.initial_cost,
+      std::string(jba::loss_name(o.loss.type)).c_str(), o.loss.scale, gauge_json(s.gauge).c_str(),
+      std::string(jba::backend_name(o.backend)).c_str(), s.initial_cost,
       s.final_cost, s.iterations, s.accepted_steps, s.linear_iterations,
       std::string(jba::termination_name(s.termination)).c_str(), json_string(s.message).c_str(), s.time_seconds,
       by_type.c_str());

@@ -22,14 +22,29 @@ target_sources(test_refine PRIVATE scene.cpp)
 jba_test(test_manhattan)
 target_sources(test_manhattan PRIVATE scene.cpp)
 
-if(JBA_WITH_METAL)
-  jba_test(test_metal_reprojection jba_metal)
-  set_tests_properties(test_metal_reprojection PROPERTIES LABELS gpu)
-endif()
-
 # Synthetic problem files, for the parity cases and the benchmark (bench/).
 add_executable(jba_make_problem make_problem.cpp)
 target_link_libraries(jba_make_problem PRIVATE jba jba_internal)
+
+if(JBA_WITH_METAL)
+  jba_test(test_metal_reprojection jba_metal)
+  set_tests_properties(test_metal_reprojection PROPERTIES LABELS gpu)
+
+  # The Metal backend against the CPU reference (milestone 4), on the parity cases'
+  # problems (tests/ceres) and the BAL test set when present. Label gpu.
+  add_executable(jba_metal_check metal_check.cpp)
+  target_link_libraries(jba_metal_check PRIVATE jba jba_internal jba_warnings)
+  function(jba_metal_case name gen check)
+    set(file ${CMAKE_CURRENT_BINARY_DIR}/metal_${name}.jba)
+    separate_arguments(gen_list UNIX_COMMAND "${gen}")
+    separate_arguments(check_list UNIX_COMMAND "${check}")
+    add_test(NAME metal_make_${name} COMMAND jba_make_problem ${file} ${gen_list})
+    add_test(NAME metal_${name} COMMAND jba_metal_check ${file} ${check_list})
+    set_tests_properties(metal_make_${name} PROPERTIES FIXTURES_SETUP metal_${name})
+    set_tests_properties(metal_${name} PROPERTIES FIXTURES_REQUIRED metal_${name} LABELS gpu SKIP_RETURN_CODE 77)
+  endfunction()
+  include(metal_cases.cmake)
+endif()
 
 if(JBA_WITH_CERES)
   add_subdirectory(ceres)

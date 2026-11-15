@@ -71,6 +71,9 @@ void run_trust_region(Backend& backend, const SolverOptions& o, const IterationC
     cur.step_norm = step.step_norm;
 
     bool accepted = false;
+    // As with the tolerances below, the iteration that ends the solve is not recorded.
+    if (!step.valid && step.precision_limit)
+      return finish(Termination::Convergence, "predicted decrease below the backend's precision");
     if (!step.valid) {
       if (++invalid_steps >= o.max_consecutive_invalid_steps)  // as in Ceres
         return finish(Termination::Failure, "too many consecutive invalid steps");
