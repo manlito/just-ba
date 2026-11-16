@@ -1,6 +1,7 @@
 # Documentation site
 
-Sphinx, built from this folder (D119). The pages under `_generated/` are written on
+Sphinx, built from this folder (D119), with the site's own theme in `_theme/justba`
+(D130). The pages under `_generated/` are written on
 every build by `gen/generate.py` from the residual definitions, the `just_ba`
 module and the stored benchmark baselines; they are not committed.
 

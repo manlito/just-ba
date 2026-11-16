@@ -1,0 +1,10 @@
+# The site's own theme (D130): Sphinx's "basic" theme (page structure, search,
+# indices) with this project's layout, style and script on top. No outside theme.
+[theme]
+inherit = "basic"
+stylesheets = ["basic.css", "justba.css"]
+sidebars = []
+pygments_style = { default = "material" }
+
+[options]
+accent = "#f2b84b"

@@ -1,0 +1,78 @@
+{#- The site's page layout (D130). Extends Sphinx's basic layout, which keeps the
+    <head> (styles, scripts, search index) and the search and index pages working;
+    this file replaces the visible page: top bar, navigation, content, footer. -#}
+{%- extends "basic/layout.html" %}
+
+{%- set jb_section = "benchmarks" if pagename == "_generated/benchmarks"
+      else ("reference" if pagename.startswith("_generated/") or pagename == "references" else "guide") %}
+
+{%- block htmltitle %}
+<title>{% if title and pagename != root_doc %}{{ title|striptags|e }} · {% endif %}{{ project }} {{ release }}</title>
+{%- endblock %}
+
+{%- block extrahead %}
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap">
+<style>:root { --accent: {{ theme_accent }}; }</style>
+{{ super() }}
+{%- endblock %}
+
+{%- block scripts %}
+{{ super() }}
+<script src="{{ pathto('_static/justba.js', 1) }}" defer></script>
+{%- endblock %}
+
+{%- block relbar1 %}{% endblock %}
+{%- block relbar2 %}{% endblock %}
+
+{%- block header %}
+<a class="jb-skip" href="#content">Skip to content</a>
+<header class="jb-top">
+  <div class="jb-top-in">
+    <a class="jb-brand" href="{{ pathto(root_doc) }}"><span class="jb-prompt" aria-hidden="true">$</span> {{ project }}</a>
+    <span class="jb-version">v{{ release }}</span>
+    <nav class="jb-sections" aria-label="Sections">
+      <a href="{{ pathto('install') }}"{% if jb_section == 'guide' %} aria-current="page"{% endif %}>Guide</a>
+      <a href="{{ pathto('_generated/api') }}"{% if jb_section == 'reference' %} aria-current="page"{% endif %}>Reference</a>
+      <a href="{{ pathto('_generated/benchmarks') }}"{% if jb_section == 'benchmarks' %} aria-current="page"{% endif %}>Benchmarks</a>
+    </nav>
+    <span class="jb-grow"></span>
+    <form class="jb-search" action="{{ pathto('search') }}" method="get" role="search">
+      <label for="jb-q" class="jb-sr">Search the documentation</label>
+      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="5"></circle><path d="m11 11 3.5 3.5"></path></svg>
+      <input id="jb-q" type="search" name="q" placeholder="Search" autocomplete="off" spellcheck="false">
+      <kbd aria-hidden="true">/</kbd>
+    </form>
+  </div>
+</header>
+{%- endblock %}
+
+{%- block content %}
+<div class="jb-wrap">
+  <nav class="jb-nav" aria-label="Documentation">
+    {{ toctree(maxdepth=1, collapse=False, titles_only=True, includehidden=True) }}
+  </nav>
+  <main class="jb-main" id="content">
+    <div class="body" role="main">
+      {% block body %}{% endblock %}
+    </div>
+    {%- if prev or next %}
+    <nav class="jb-pager" aria-label="Previous and next page">
+      {%- if prev %}<a href="{{ prev.link|e }}" rel="prev">← {{ prev.title }}</a>{% else %}<span></span>{% endif %}
+      {%- if next %}<a href="{{ next.link|e }}" rel="next">{{ next.title }} →</a>{% endif %}
+    </nav>
+    {%- endif %}
+  </main>
+</div>
+{%- endblock %}
+
+{%- block footer %}
+<footer class="jb-foot">
+  <div class="jb-foot-in">
+    <span>{{ project }} {{ release }} · Apache-2.0</span>
+    <a href="{{ pathto('references') }}">References and acknowledgements</a>
+  </div>
+</footer>
+{%- endblock %}

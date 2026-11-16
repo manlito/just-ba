@@ -21,12 +21,14 @@ extensions = ["myst_parser", "sphinx.ext.autodoc", "sphinx.ext.doctest", "sphinx
 myst_enable_extensions = ["dollarmath", "colon_fence"]
 myst_heading_anchors = 3
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
-exclude_patterns = ["_build", ".venv", "README.md", "gen"]
+exclude_patterns = ["_build", ".venv", "README.md", "gen", "_theme"]
 
 autodoc_member_order = "bysource"
 autodoc_typehints = "signature"
 # The docstring examples run with `sphinx-build -b doctest` (document 08).
 doctest_global_setup = "import numpy as np\nimport just_ba\njba = just_ba"
 
-html_theme = "furo"
+# The site's own theme in _theme/justba (D130), on Sphinx's basic theme.
+html_theme = "justba"
+html_theme_path = ["_theme"]
 html_title = f"just-ba {release}"

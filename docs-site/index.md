@@ -34,4 +34,5 @@ _generated/api
 _generated/residuals
 _generated/cameras
 _generated/benchmarks
+references
 ```

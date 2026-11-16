@@ -1,7 +1,6 @@
 # Documentation site (D118). The just_ba module itself comes from a build of the
 # repository (PYTHONPATH) or an installed wheel; see docs-site/README.md.
 sphinx==8.2.3
-furo==2025.12.19
 myst-parser==4.0.1
 wrenfold==0.6.0
 sympy==1.14.0
