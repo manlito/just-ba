@@ -6,7 +6,13 @@
   with their shapes, and each camera model's projection as LaTeX (via SymPy);
 - api.md, the Python API reference, from the just_ba module: every public name in
   one of the groups below (an unplaced name is an error, so new ones are not missed);
-- benchmarks.md from bench/baseline/*.json.
+- benchmarks.md from bench/baseline/*.json;
+- file-format.inc, the problem file format from docs/11, which file-format.md
+  includes.
+
+The design notes and the symbolic definitions cite the project's own documents and
+decisions ("document 02", "D46", "milestone 3"); public_text() drops those
+references from what the site shows, since its readers do not have those notes.
 
 Run by conf.py on every build; needs wrenfold and sympy (docs-site/requirements.txt)
 and an importable just_ba.
@@ -91,20 +97,61 @@ def residual_block(fn) -> list[str]:
     return lines + [""]
 
 
+# References to the project's own notes, as they appear inside parentheses.
+_INTERNAL = re.compile(
+    r"\b(?:milestones?\s+\d+"
+    r"|decision\s+log\s+D\d+\s+to\s+D\d+"
+    r"|decisions?\s+D\d+(?:\s+(?:to|and)\s+D\d+)?"
+    r"|definitions\s+in\s+document\s+\d+"
+    r"|D\d{1,3}(?:\s+(?:to|and)\s+D\d+)?"
+    r"|documents?\s+\d+(?:,\s+sections?\s+\d+[a-z]?(?:\s+and\s+\d+[a-z]?)?)?)\b")
+_REPO_PATH = re.compile(r"[ \t]*\(`(?:tests|core|bench|api|backends|residuals|tracks|cli|bindings|packaging|docs)/[^`]+`\)")
+
+
+def _clean_parenthesis(match: re.Match) -> str:
+    space, inner = match.group(1), match.group(2)
+    if not _INTERNAL.search(inner):
+        return match.group(0)
+    inner = _INTERNAL.sub("", inner)
+    inner = re.sub(r"\s*[,;]\s*(?=[,;]|$)", "", inner)   # separators left dangling
+    inner = re.sub(r"^\s*(?:[,;]\s*)?(?:and\s+)?", "", inner).strip()
+    inner = re.sub(r"(?:,\s*)?\band$", "", inner).strip(" ,;")
+    return f"{space}({inner})" if inner else ""
+
+
+def public_text(text: str) -> str:
+    """Text for the site: references to the project's own notes and repository paths
+    removed, the sentence around them kept."""
+    text = re.sub(r"[ \t]*Residual definitions: decisions D\d+ and D\d+\.\n?", "", text)
+    text = re.sub(r"\bdocument\s+\d+'s\s+", "", text)
+    text = text.replace("as in reprojection.py", "as in the reprojection residual")
+    text = _REPO_PATH.sub("", text)
+    text = re.sub(r"(\s*)\(([^()]*)\)", _clean_parenthesis, text)
+    return text
+
+
+def file_format_include() -> str:
+    marker = "Reader and writer: `core/src/problem_io.cpp`. Version 1."
+    notes = (ROOT / "docs" / "11-problem-file-format.md").read_text()
+    if marker not in notes:
+        raise SystemExit("generate.py: docs/11 no longer has the line the file format page starts after")
+    return public_text(notes.split(marker, 1)[1]).lstrip("\n")
+
+
 def residuals_page() -> str:
     import depth
     import directions
     import priors
     import reprojection
     out = ["# Residual reference", "",
-           "Generated from `residuals/symbolic`, the definitions the CPU, Metal and CUDA kernels are generated "
+           "Generated from the symbolic definitions that the CPU, Metal, CUDA and WebGPU kernels are generated "
            "from. Jacobians are row-major, with respect to the tangent of each block: 6 values per pose, rotation "
            "first (a left perturbation, radians), then translation.", ""]
     modules = [("Reprojection", reprojection, [reprojection.make_reprojection(m) for m in reprojection.CAMERA_MODELS[:1]]),
                ("Pose priors", priors, priors.FUNCTIONS), ("Gravity and Manhattan lines", directions, directions.FUNCTIONS),
                ("Depth at keypoints", depth, depth.FUNCTIONS)]
     for title, module, functions in modules:
-        out += [f"## {title}", "", "```text", inspect.cleandoc(module.__doc__ or ""), "```", ""]
+        out += [f"## {title}", "", "```text", public_text(inspect.cleandoc(module.__doc__ or "")), "```", ""]
         if module is reprojection:
             out += ["One function per camera model (see the camera models page); their inputs and outputs differ "
                     "only in the length of `intrinsics`. For SIMPLE_PINHOLE:", ""]
@@ -119,7 +166,7 @@ def cameras_page() -> str:
     from wrenfold.sympy_conversion import to_sympy
     import reprojection
     out = ["# Camera models", "",
-           "Generated from `residuals/symbolic/reprojection.py`. A point $X$ in world coordinates is moved to the "
+           "Generated from the symbolic definition of the reprojection residual. A point $X$ in world coordinates is moved to the "
            "camera, $P = R X + t$, and divided by depth, $u = P_x / P_z$, $v = P_y / P_z$; the model maps $(u, v)$ "
            "to pixels. Names, ids and parameter order follow COLMAP.", "",
            "| Model | COLMAP id | Parameters |", "|---|---|---|"]
@@ -169,7 +216,7 @@ def api_page() -> str:
 
 def benchmarks_page() -> str:
     out = ["# Benchmarks", "",
-           "Generated from the stored baselines (`bench/baseline`). Times are of the whole solver call, set-up "
+           "Generated from the stored benchmark baselines. Times are of the whole solver call, set-up "
            "included: warm is the best of three calls in a process that has already solved once, cold one call "
            "in a fresh process. Where shown, Ceres Solver solves the same problems with SPARSE_SCHUR and the same gauge; "
            "*equal cost* compares the time each needs to reach the worse of the two final costs.", ""]
@@ -179,7 +226,7 @@ def benchmarks_page() -> str:
         machine = next((v for k, v in MACHINES.items() if stem.startswith(k)), d.get("machine", {}).get("cpu", stem))
         solver = SOLVER.get(d.get("linear_solver"), d.get("linear_solver"))
         out += [f"## {d['backend'].upper()}, {solver}: {machine}", "",
-                f"Commit `{d.get('commit', '?')}`, {d.get('threads') or 'all'} threads."]
+                f"{d.get('threads') or 'All'} threads." if d.get('threads') else "All threads."]
         has_ceres = any("ceres" in p for p in d["problems"].values())
         if has_ceres:
             c = next(p["ceres"] for p in d["problems"].values() if "ceres" in p)
@@ -207,7 +254,7 @@ def main(dest: str) -> None:
     d = Path(dest)
     d.mkdir(parents=True, exist_ok=True)
     pages = {"residuals.md": residuals_page, "cameras.md": cameras_page, "api.md": api_page,
-             "benchmarks.md": benchmarks_page}
+             "benchmarks.md": benchmarks_page, "file-format.inc": file_format_include}
     for name, make in pages.items():
         text = make()
         path = d / name

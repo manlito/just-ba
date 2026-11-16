@@ -101,11 +101,11 @@ def poses_from_camera_to_world(T, convention: str = "opencv") -> np.ndarray:
 
     ``convention`` names the camera axes of T: "opencv" (x right, y down, z
     forward), or "opengl" / "arkit" / "arcore" (x right, y up, z backward, the
-    camera looking down -z). The world frame is kept as it is (D10).
+    camera looking down -z). The world frame is kept as it is.
 
     ARKit's ``ARCamera.transform`` and ARCore's ``Camera.getPose()`` follow the
     OpenGL camera axes according to their documentation; check this on a real
-    session before relying on it (document 02).
+    session before relying on it.
 
     An ARKit camera at (1, 2, 3) with the world's axes: in the library's axes it
     looks down the world's -z, so its rotation is half a turn about x.

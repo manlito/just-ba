@@ -198,14 +198,14 @@ NB_MODULE(_core, m) {
       .value("HUBER", jba::LossType::Huber)
       .value("CAUCHY", jba::LossType::Cauchy)
       .value("GEMAN_MCCLURE", jba::LossType::GemanMcClure);
-  nb::enum_<jba::FrameRelation>(m, "FrameRelation", "How a global prior set relates to the working frame (D19).")
+  nb::enum_<jba::FrameRelation>(m, "FrameRelation", "How a global prior set relates to the working frame.")
       .value("IDENTITY", jba::FrameRelation::Identity)
       .value("RIGID", jba::FrameRelation::Rigid)
       .value("SIMILARITY", jba::FrameRelation::Similarity);
   nb::enum_<jba::DepthKind>(m, "DepthKind", "What a depth reading measures.")
       .value("Z", jba::DepthKind::Z)
       .value("RANGE", jba::DepthKind::Range);
-  nb::enum_<jba::DepthForm>(m, "DepthForm", "Form of the depth residual (D87).")
+  nb::enum_<jba::DepthForm>(m, "DepthForm", "Form of the depth residual.")
       .value("LINEAR", jba::DepthForm::Linear)
       .value("INVERSE", jba::DepthForm::Inverse);
   m.attr("DEPTH_SCALE") = jba::kDepthScale;
@@ -252,7 +252,7 @@ NB_MODULE(_core, m) {
   // --- Problem -------------------------------------------------------------
   nb::class_<jba::Problem> problem(
       m, "Problem",
-      "A bundle adjustment problem (document 11). Poses map world to camera, stored as qw qx qy qz tx ty tz; "
+      "A bundle adjustment problem. Poses map world to camera, stored as qw qx qy qz tx ty tz; "
       "camera axes x right, y down, z forward. Array attributes are copied in and out.");
   problem.def(nb::init<>())
       .def("__copy__", [](const jba::Problem& p) { return jba::Problem(p); })
@@ -384,7 +384,7 @@ NB_MODULE(_core, m) {
         return "Loss('" + std::string(jba::loss_name(l.type)) + "', " + std::to_string(l.scale) + ")";
       });
 
-  nb::class_<jba::PriorDefaults>(m, "PriorDefaults", "Weights for priors given without any (provisional, D67).")
+  nb::class_<jba::PriorDefaults>(m, "PriorDefaults", "Weights for priors given without their own (provisional values).")
       .def(nb::init<>())
       .def_rw("relative_rotation_sigma", &jba::PriorDefaults::relative_rotation_sigma, "Relative priors: sigma = base + per-unit times the motion. Rotation base, radians.")
       .def_rw("relative_rotation_per_radian", &jba::PriorDefaults::relative_rotation_per_radian, "Radians of sigma per radian of relative rotation.")
@@ -442,9 +442,9 @@ NB_MODULE(_core, m) {
   nb::class_<jba::Gauge>(m, "Gauge", "What the solver held fixed to remove the global freedoms.")
       .def_ro("fixed_images", &jba::Gauge::fixed_images)
       .def_ro("heading_images", &jba::Gauge::heading_images,
-              "Poses whose translation and heading are held, their tilt free (gravity known, D83).")
+              "Poses whose translation and heading are held, their tilt free (gravity known).")
       .def_ro("translation_images", &jba::Gauge::translation_images,
-              "Poses whose translation alone is held; the Manhattan frame sets their rotation (D86).")
+              "Poses whose translation alone is held; the Manhattan frame sets their rotation.")
       .def_ro("manhattan_frame_held", &jba::Gauge::manhattan_frame_held)
       .def_ro("fixed_translations", &jba::Gauge::fixed_translations)
       .def_ro("fixed_set_scales", &jba::Gauge::fixed_set_scales);
@@ -623,7 +623,7 @@ NB_MODULE(_core, m) {
       "(Tracks, TrackStats).");
 
   // --- Refine --------------------------------------------------------------
-  nb::class_<jba::Covariance>(m, "Covariance", "Uncertainty of a solved problem (document 02).")
+  nb::class_<jba::Covariance>(m, "Covariance", "Uncertainty of a solved problem.")
       .def_prop_ro("pose", [](const jba::Covariance& c) { return to_numpy(c.pose, {6, 6}); },
                    "(N, 6, 6) per image, pose tangent: rotation (rad, camera axes), then translation.",
                    nb::rv_policy::move)
@@ -647,7 +647,7 @@ NB_MODULE(_core, m) {
       "max_unknowns"_a = 20000,
       "Covariances of the poses (and of the given points) of a solved problem, relative to the gauge.");
 
-  nb::class_<jba::ManhattanOptions>(m, "ManhattanOptions", "Line assignment and the support test (document 02, section 5).")
+  nb::class_<jba::ManhattanOptions>(m, "ManhattanOptions", "The Manhattan prior's line assignment and support test.")
       .def(nb::init<>())
       .def_rw("dof", &jba::ManhattanOptions::dof)
       .def_rw("max_angle_deg", &jba::ManhattanOptions::max_angle_deg)
@@ -796,6 +796,6 @@ NB_MODULE(_core, m) {
       "scene"_a, "keypoints"_a, "matches"_a = nb::none(), "tracks"_a = nb::none(), "keypoint_sigma"_a = nb::none(),
       "options"_a.sig("RefineOptions()") = jba::RefineOptions{}, "keypoint_depth"_a = nb::none(), "keypoint_depth_sigma"_a = nb::none(),
       "The main use case end to end: starting poses from the priors in `scene`, tracks from the matches, "
-      "triangulation, solve, outlier removal, repeated (D71). keypoint_depth: a reading per keypoint (NaN for "
+      "triangulation, solve, outlier removal, repeated. keypoint_depth: a reading per keypoint (NaN for "
       "none), flat or one array per image; scene.depth_* say what they are.");
 }

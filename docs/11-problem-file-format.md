@@ -170,8 +170,8 @@ sections). `P` points with a covariance.
 into this format, as the RADIAL model with one intrinsics block per image (document
 05). BAL cameras look down -z with image y up. Rotating the camera frame by pi
 about x gives our convention exactly: `R' = F R`, `t' = F t`, `F = diag(1, -1, -1)`,
-and observed y changes sign. The cost is unchanged, which `tests/test_bal.cpp`
-checks against BAL's own camera model. Focal length and distortion are marked free
+and observed y changes sign. The cost is unchanged; the tests check this against
+BAL's own camera model (`tests/test_bal.cpp`). Focal length and distortion are marked free
 and the principal point fixed, as in BAL.
 
 ## Reading from Python
@@ -198,5 +198,5 @@ def read_jba(path):
     return out
 ```
 
-The Python package (milestone 2) will ship a reader and writer; until then this
-snippet is the reference.
+The Python package reads and writes the format with `read_problem` and
+`write_problem`; this snippet shows the layout without it.
