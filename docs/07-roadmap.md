@@ -519,10 +519,18 @@ sparse_schur, and the process mapped cuDSS, cuBLAS, cuBLASLt and NVRTC from NVID
 pip packages only, not from the laptop's own CUDA 13 in /opt/cuda (D115). The laptop
 has no CUDA 12, so `just-ba-cu12` can only have loaded them from the packages.
 
-Not done yet, so the exit is not met: nothing is on PyPI or Cloudflare Pages, and the
-CUDA wheels are not yet checked on the laptop's Windows. The owner's set-up for
-publishing: pending publishers on PyPI for `just-ba-cu12` and `just-ba-cu13`, and
-the Cloudflare project, token and account ID as repository secrets.
+Published (2026-11-16, release run 43794812518 at ed4028e, one package at a time,
+D129): `just-ba`, `just-ba-cu12` and `just-ba-cu13` 0.1.0 are on PyPI, with every
+wheel and `just-ba`'s sdist. Installed from PyPI in fresh environments: `just-ba` on
+the Mac (Python 3.12; the Python tests pass, Metal available) and on the laptop's
+Linux (the tests pass); `just-ba-cu12` (CUDA 12.9) and `just-ba-cu13` (CUDA 13.4) on
+the laptop's Linux (the tests pass, CUDA available).
+
+Not done yet, so the exit is not met: the documentation site is not deployed (it
+waits for the owner's Cloudflare project, token and account ID as repository
+secrets), and nothing is checked on the laptop's Windows, the CUDA path in
+particular. If a Windows CUDA wheel turns out broken, its file is deleted on PyPI
+and the fix ships as 0.1.1.
 
 ## Milestone 7: incremental pipeline and COLMAP parity
 
