@@ -1,20 +1,20 @@
 {#- The site's page layout (D130). Extends Sphinx's basic layout, which keeps the
     <head> (styles, scripts, search index) and the search and index pages working;
-    this file replaces the visible page: top bar, navigation, content, footer. -#}
+    this file replaces the visible page: top bar, navigation, content, the page's
+    own contents, footer. -#}
 {%- extends "basic/layout.html" %}
 
-{%- set jb_section = "benchmarks" if pagename == "_generated/benchmarks"
-      else ("reference" if pagename.startswith("_generated/") or pagename == "references" else "guide") %}
+{%- set jb_section = "Reference" if pagename.startswith("_generated/") or pagename == "references" else "Guide" %}
 
 {%- block htmltitle %}
 <title>{% if title and pagename != root_doc %}{{ title|striptags|e }} · {% endif %}{{ project }} {{ release }}</title>
 {%- endblock %}
 
 {%- block extrahead %}
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap">
 <style>:root { --accent: {{ theme_accent }}; }</style>
 {{ super() }}
 {%- endblock %}
@@ -31,20 +31,17 @@
 <a class="jb-skip" href="#content">Skip to content</a>
 <header class="jb-top">
   <div class="jb-top-in">
-    <a class="jb-brand" href="{{ pathto(root_doc) }}"><span class="jb-prompt" aria-hidden="true">$</span> {{ project }}</a>
-    <span class="jb-version">v{{ release }}</span>
-    <nav class="jb-sections" aria-label="Sections">
-      <a href="{{ pathto('install') }}"{% if jb_section == 'guide' %} aria-current="page"{% endif %}>Guide</a>
-      <a href="{{ pathto('_generated/api') }}"{% if jb_section == 'reference' %} aria-current="page"{% endif %}>Reference</a>
-      <a href="{{ pathto('_generated/benchmarks') }}"{% if jb_section == 'benchmarks' %} aria-current="page"{% endif %}>Benchmarks</a>
-    </nav>
+    <a class="jb-brand" href="{{ pathto(root_doc) }}">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2.5"></circle><circle cx="17" cy="5" r="2.5"></circle><circle cx="11" cy="17" r="2.5"></circle><path d="M7.3 6.8 9.6 15M14.9 6.6 12.3 15M7.5 5.8h7"></path></svg>
+      <span>{{ project }}</span>
+    </a>
+    <span class="jb-version">{{ release }}</span>
     <span class="jb-grow"></span>
     <form class="jb-search" action="{{ pathto('search') }}" method="get" role="search">
       <label for="jb-q" class="jb-sr">Search the documentation</label>
-      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="5"></circle><path d="m11 11 3.5 3.5"></path></svg>
       <input id="jb-q" type="search" name="q" placeholder="Search" autocomplete="off" spellcheck="false">
-      <kbd aria-hidden="true">/</kbd>
     </form>
+    <a class="jb-toplink" href="https://pypi.org/project/just-ba/">PyPI</a>
   </div>
 </header>
 {%- endblock %}
@@ -55,6 +52,9 @@
     {{ toctree(maxdepth=1, collapse=False, titles_only=True, includehidden=True) }}
   </nav>
   <main class="jb-main" id="content">
+    {%- if pagename != root_doc and title %}
+    <div class="jb-crumbs">{{ jb_section }} / {{ title|striptags|e }}</div>
+    {%- endif %}
     <div class="body" role="main">
       {% block body %}{% endblock %}
     </div>
@@ -65,6 +65,12 @@
     </nav>
     {%- endif %}
   </main>
+  {%- if display_toc and pagename != root_doc %}
+  <aside class="jb-toc" aria-label="On this page">
+    <div class="jb-toc-title">On this page</div>
+    {{ toc }}
+  </aside>
+  {%- endif %}
 </div>
 {%- endblock %}
 

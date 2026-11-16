@@ -4,7 +4,7 @@
 inherit = "basic"
 stylesheets = ["basic.css", "justba.css"]
 sidebars = []
-pygments_style = { default = "material" }
+pygments_style = { default = "default" }
 
 [options]
-accent = "#f2b84b"
+accent = "#1f4fd1"
