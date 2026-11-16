@@ -8,3 +8,4 @@ pygments_style = { default = "default" }
 
 [options]
 accent = "#1f4fd1"
+accent_dark = "#7aa2ff"
