@@ -264,6 +264,7 @@ the owner to review; D127 is the owner's.
 
 | Item | When it gets decided |
 |---|---|
+| The CUDA packages on Windows (milestone 6's deferred check), and release 0.1.1 (LICENSE file, cleaned docstrings, any Windows fix) | When the laptop runs Windows |
 | Default global prior weights (D21), and whether ARKit needs relative values of its own (D77 is from ARCore) | When captures with global priors, or from ARKit, are available |
 | Which linear solver is the default on the CPU at each problem size (Metal: D92) | When the CPU has strategy B |
 | Whether venice-52 with the gauge held should be studied further (different basins by rounding; at 50 iterations Metal's sparse_schur at 0.237 million, Metal's iterative solver at 0.254, the CPU at 0.250 and Ceres with Accelerate at 0.262; on the laptop CUDA's sparse_schur at 0.272, its iterative solver at 0.252, Ceres with SuiteSparse at 0.262 and bae at 0.246 after its 20 steps). It is the one problem where just-ba's defaults do not reach a competitor's cost first. D103 recovers the steps where only the preconditioner's diagonal was lost; on CUDA 17 of sparse_schur's 50 steps are still invalid, as one camera block of the reduced system loses definiteness in single precision | After milestone 6 (D109): when the CPU has strategy B in double, or forming camera blocks in double is tried |

@@ -526,12 +526,14 @@ the Mac (Python 3.12; the Python tests pass, Metal available) and on the laptop'
 Linux (the tests pass); `just-ba-cu12` (CUDA 12.9) and `just-ba-cu13` (CUDA 13.4) on
 the laptop's Linux (the tests pass, CUDA available).
 
-The documentation site is live (2026-11-16, docs run 43801550312 at a4a1d22) at
-https://just-ba.pages.dev, with the site's own theme and a References page (D130).
+The documentation site is live (2026-11-16) at https://just-ba.pages.dev, with the
+site's own theme in light and dark and a References page (D130), and no references to
+the project's notes (D131).
 
-Not done yet, so the exit is not met: nothing is checked on the laptop's Windows, the
-CUDA path in particular. If a Windows CUDA wheel turns out broken, its file is deleted
-on PyPI and the fix ships as 0.1.1.
+Closed on 2026-11-16, with one check deferred by the owner: the CUDA packages on the
+laptop's Windows (`pip install just-ba-cu13` and `-cu12`, CUDA available). If a
+Windows CUDA wheel turns out broken, its file is deleted on PyPI and the fix ships as
+0.1.1, which also carries the LICENSE file and the cleaned docstrings.
 
 ## Milestone 7: incremental pipeline and COLMAP parity
 
