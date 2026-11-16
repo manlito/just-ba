@@ -20,7 +20,9 @@ working proof of concept. This document covers what that requires.
   under it.
 - Publishing: PyPI trusted publishing from the release workflow, so no long-lived
   token is stored. The workflow is started by hand and uses no GitHub environment
-  (D111); the pending publisher on PyPI is registered for `release.yml`.
+  (D111); the pending publishers on PyPI are registered for `release.yml`. PyPI takes
+  one pending publisher per workflow at a time, so the first release goes up one
+  package at a time (D129).
 - Versioning: semantic versions; the Python API is the public contract. Pre-1.0 while
   the API settles. The version is `project(VERSION)` in CMakeLists.txt (D114).
 - Wheels and the sdist: `.github/workflows/release.yml`, started by hand (D111, D116).
@@ -34,7 +36,10 @@ working proof of concept. This document covers what that requires.
 4. Each package's wheel installed from that run's artifacts and checked on its
    machine: `python bench/gpu_check.py --wheel <file>` (the Mac with `just-ba`, the
    laptop with `just-ba-cu12` and `just-ba-cu13`, both systems).
-5. `gh workflow run release -f publish=true`.
+5. `gh workflow run release -f publish=true`. The first release only: `just-ba` is
+   uploaded and the cu12 step fails. Add the pending publisher for `just-ba-cu12`,
+   re-run the failed publish job (`gh run rerun <run> --failed`; uploaded files are
+   skipped), then do the same for `just-ba-cu13` (D129).
 6. The documentation site deployed for the release (`gh workflow run docs -f deploy=true`).
 
 ### Wheels

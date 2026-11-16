@@ -131,12 +131,17 @@ jobs:
           mv dist/just_ba_cu13-* pkg/just-ba-cu13/
           mv dist/just_ba-* pkg/just-ba/
           ls -lR pkg
+      # skip-existing: a re-run uploads only what is not on PyPI yet, so the packages
+      # can go up one at a time while each first upload creates its project (D129).
       - uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: pkg/just-ba/
+          skip-existing: true
       - uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: pkg/just-ba-cu12/
+          skip-existing: true
       - uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: pkg/just-ba-cu13/
+          skip-existing: true
