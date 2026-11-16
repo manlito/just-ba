@@ -14,6 +14,7 @@ description = "Minimal, fast bundle adjustment: CPU, Metal and CUDA backends, po
 readme = "bindings/python/README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = ["numpy>=1.26"]
 keywords = ["bundle adjustment", "structure from motion", "photogrammetry", "ARKit", "ARCore"]
 classifiers = [
