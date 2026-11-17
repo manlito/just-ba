@@ -417,28 +417,35 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
   return a;
 }
 
-void report(const StepCallback& cb, const char* stage, const std::vector<std::int32_t>& added, const Map& m,
+// A step of one model, kept until the model is chosen: only the chosen model's steps
+// reach the caller.
+struct Step {
+  std::string stage;
+  std::vector<std::int32_t> added;
+  std::vector<double> poses;
+  std::vector<char> registered;
+  std::vector<double> points;
+  std::vector<std::int32_t> point_track;
+  double mean_error_px = 0.0;
+};
+
+void report(std::vector<Step>* steps, const char* stage, const std::vector<std::int32_t>& added, const Map& m,
             const Adjusted& a) {
-  if (!cb) return;
-  Snapshot s;
-  s.stage = stage;
-  s.added = added;
-  s.poses = &m.cams.poses;
-  s.registered = &m.registered;
-  s.points = a.problem.points;
-  s.point_track = a.track_of;
-  s.mean_error_px = a.mean_error_px;
-  cb(s);
+  if (!steps) return;
+  steps->push_back({stage, added, m.cams.poses, m.registered, a.problem.points, a.track_of, a.mean_error_px});
 }
 
 // Choosing the first pair: among pairs with status OK and enough inliers, the one with
 // the most inliers whose median triangulation angle is at least 16 degrees (COLMAP's
 // init_min_tri_angle); if there is none, the same with 8, 4, then 2 degrees.
-int choose_first_pair(const Capture& c, const Reconstruction& r, const MapperOptions& o) {
+// Only pairs whose two images are in no earlier model, as COLMAP starts a new model.
+int choose_first_pair(const Capture& c, const Reconstruction& r, const MapperOptions& o,
+                      const std::vector<char>& in_a_model) {
   for (const double floor_deg : {16.0, 8.0, 4.0, 2.0}) {
     int best = -1;
     for (std::size_t i = 0; i < c.pairs.size(); ++i) {
       const jpo_pose_result& p = r.pair_results[i];
+      if (in_a_model[static_cast<std::size_t>(c.pairs[i].a)] || in_a_model[static_cast<std::size_t>(c.pairs[i].b)]) continue;
       if (!r.pair_kept[i] || p.status != JPO_OK || p.n_inliers < o.min_first_pair_inliers ||
           p.median_tri_angle_deg < floor_deg)
         continue;
@@ -570,14 +577,16 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.cams.poses.assign(7 * n_img, 0.0);
   for (std::size_t i = 0; i < n_img; ++i) m.cams.poses[7 * i] = 1.0;
 
-  auto finish = [&](Adjusted&& a) {
-    run.poses = m.cams.poses;
-    run.registered = m.registered;
+  const Map fresh = m;  // the map before any model: tracks built, nothing registered
+
+  auto finish = [&](Map& mm, Adjusted&& a) {
+    run.poses = mm.cams.poses;
+    run.registered = mm.registered;
     run.problem = std::move(a.problem);
     run.image_of = std::move(a.image_of);
     run.obs_keypoint = std::move(a.obs_keypoint);
     run.point_track = std::move(a.track_of);
-    run.all_tracks = m.tracks;
+    run.all_tracks = mm.tracks;
     run.mean_error_px = a.mean_error_px;
     run.time.total = seconds_since(t_start);
   };
@@ -593,36 +602,10 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     run.time.adjust += seconds_since(t);
     return a;
   };
-
-  // -- 3. First pair, first points, first adjustment. The first image is the origin;
-  // the second is the relative pose as returned (camera a to camera b is then world to
-  // camera b), whose unit translation fixes the scale of the map.
-  const int first = choose_first_pair(c, run, o);
-  if (first < 0) {
-    run.error = "no pair is fit to start from";
-    run.time.total = seconds_since(t_start);
-    return run;
-  }
-  run.first_a = c.pairs[first].a;
-  run.first_b = c.pairs[first].b;
-  run.first_inliers = run.pair_results[first].n_inliers;
-  run.first_angle_deg = run.pair_results[first].median_tri_angle_deg;
-  const double identity[7] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-  std::copy(identity, identity + 7, &m.cams.poses[7 * static_cast<std::size_t>(run.first_a)]);
-  std::copy(run.pair_results[first].pose, run.pair_results[first].pose + 7,
-            &m.cams.poses[7 * static_cast<std::size_t>(run.first_b)]);
-  m.registered[run.first_a] = m.registered[run.first_b] = 1;
-  timed_points(false);
-  Adjusted last = timed_adjust(o.local_iterations);
-  report(on_step, "first pair", {run.first_a, run.first_b}, m, last);
-
-  // -- 4. Register the remaining images. Those that see the most triangulated points go
-  // first; up to pnp_batch are resected in one call, all against the same map.
-  std::vector<int> failed_with(n_img, -1);  // points an image saw when its resection last failed
+  std::vector<std::int32_t> seen_tracks;
   // The points an image sees: distinct tracks with a point. An image can hold two
   // keypoints of one track (a conflicted track); both go to PnP, which keeps one, but
   // the point counts once in the ordering and in the inlier-ratio test.
-  std::vector<std::int32_t> seen_tracks;
   auto points_seen = [&](std::size_t image) {
     seen_tracks.clear();
     for (std::int64_t k : m.image_obs[image])
@@ -630,87 +613,164 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     std::sort(seen_tracks.begin(), seen_tracks.end());
     return static_cast<int>(std::unique(seen_tracks.begin(), seen_tracks.end()) - seen_tracks.begin());
   };
-  for (;;) {
-    timed_points(true);
-    std::vector<std::pair<int, int>> seen;  // (points seen, image)
-    for (std::size_t i = 0; i < n_img; ++i) {
-      if (m.registered[i]) continue;
-      const int n = points_seen(i);
-      // An image that failed is tried again only once it sees more points than it did then.
-      if (n >= static_cast<int>(o.min_pnp_inliers) && n > failed_with[i]) seen.emplace_back(n, static_cast<int>(i));
-    }
-    if (seen.empty()) break;
-    std::sort(seen.begin(), seen.end(),
-              [](const auto& x, const auto& y) { return x.first != y.first ? x.first > y.first : x.second < y.second; });
-    // Only images that see at least half as many points as the best one: a weakly
-    // connected image is better registered later, against a larger map.
-    std::size_t n_cand = 1;
-    while (n_cand < seen.size() && n_cand < o.pnp_batch && 2 * seen[n_cand].first >= seen[0].first) ++n_cand;
 
-    t0 = Clock::now();
-    std::vector<std::uint32_t> off = {0}, cam;
-    std::vector<double> xy, xyz;
-    for (std::size_t k = 0; k < n_cand; ++k) {
-      const int image = seen[k].second;
-      cam.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(image))));
-      for (std::int64_t ob : m.image_obs[image]) {
-        const std::int32_t t = m.obs_track[ob];
-        if (m.obs_dead[ob] || !m.has_point[t]) continue;
-        const double* kp = m.keypoints.at(image, m.tracks.keypoint[ob]);
-        xy.insert(xy.end(), kp, kp + 2);
-        xyz.insert(xyz.end(), &m.X[3 * t], &m.X[3 * t] + 3);
-      }
-      off.push_back(static_cast<std::uint32_t>(xy.size() / 2));
-    }
-    jpo_resections res;
-    std::memset(&res, 0, sizeof(res));
-    res.n_images = static_cast<std::uint32_t>(n_cand);
-    res.n_cameras = static_cast<std::uint32_t>(cameras.size());
-    res.offsets = off.data();
-    res.xy = xy.data();
-    res.xyz = xyz.data();
-    res.cameras = cameras.data();
-    res.camera = cam.data();
-    std::vector<jpo_pose_result> out(n_cand);
-    jpo_ransac_options pnp_ransac;
-    jpo_ransac_options_init(&pnp_ransac);
-    pnp_ransac.max_error_px = o.pnp_max_error_px;
-    if (jpo_absolute_pose(ctx_, &res, &pnp_ransac, out.data(), nullptr) != 0) {
-      run.error = std::string("absolute pose: ") + jpo_last_error();
-      finish(std::move(last));
-      return run;
-    }
-    ++run.pnp_calls;
-    run.pnp_problems += static_cast<int>(n_cand);
-    run.time.pnp += seconds_since(t0);
-
-    std::vector<std::int32_t> added;
-    for (std::size_t k = 0; k < n_cand; ++k) {
-      const int image = seen[k].second;
-      const int n = seen[k].first;  // distinct points, not correspondences
-      const bool ok = out[k].status == JPO_OK && out[k].n_inliers >= o.min_pnp_inliers &&
-                      out[k].n_inliers >= o.min_pnp_inlier_ratio * static_cast<double>(n);
-      if (!ok) {
-        failed_with[image] = seen[k].first;
-        ++run.pnp_rejected;
-        continue;
-      }
-      std::copy(out[k].pose, out[k].pose + 7, &m.cams.poses[7 * static_cast<std::size_t>(image)]);
-      m.registered[image] = 1;
-      added.push_back(image);
-    }
-    if (added.empty()) continue;  // the rejected images wait until the map grows; others get their turn
+  // One model from the first pair `first`: steps 3 to 5. Leaves its map in `m` and its
+  // last adjustment in `last`; false when poselib-gpu fails (run.error says why).
+  Adjusted last;
+  auto grow = [&](int first, std::vector<Step>* steps) -> bool {
+    // -- 3. First pair, first points, first adjustment. The first image is the origin;
+    // the second is the relative pose as returned (camera a to camera b is then world to
+    // camera b), whose unit translation fixes the scale of the map.
+    const int fa = c.pairs[first].a, fb = c.pairs[first].b;
+    const double identity[7] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::copy(identity, identity + 7, &m.cams.poses[7 * static_cast<std::size_t>(fa)]);
+    std::copy(run.pair_results[first].pose, run.pair_results[first].pose + 7,
+              &m.cams.poses[7 * static_cast<std::size_t>(fb)]);
+    m.registered[fa] = m.registered[fb] = 1;
     timed_points(false);
     last = timed_adjust(o.local_iterations);
-    report(on_step, "register", added, m, last);
-  }
+    report(steps, "first pair", {fa, fb}, m, last);
 
-  // -- 5. Final adjustment: complete the tracks, adjust, filter, and adjust what is left.
-  timed_points(true);
-  last = timed_adjust(o.final_iterations);
-  last = timed_adjust(o.final_iterations);
-  report(on_step, "final", {}, m, last);
-  finish(std::move(last));
+    // -- 4. Register the remaining images. Those that see the most triangulated points go
+    // first; up to pnp_batch are resected in one call, all against the same map.
+    std::vector<int> failed_with(n_img, -1);  // points an image saw when its resection last failed
+    for (;;) {
+      timed_points(true);
+      std::vector<std::pair<int, int>> seen;  // (points seen, image)
+      for (std::size_t i = 0; i < n_img; ++i) {
+        if (m.registered[i]) continue;
+        const int n = points_seen(i);
+        // An image that failed is tried again only once it sees more points than it did then.
+        if (n >= static_cast<int>(o.min_pnp_inliers) && n > failed_with[i]) seen.emplace_back(n, static_cast<int>(i));
+      }
+      if (seen.empty()) break;
+      std::sort(seen.begin(), seen.end(),
+                [](const auto& x, const auto& y) { return x.first != y.first ? x.first > y.first : x.second < y.second; });
+      // Only images that see at least half as many points as the best one: a weakly
+      // connected image is better registered later, against a larger map.
+      std::size_t n_cand = 1;
+      while (n_cand < seen.size() && n_cand < o.pnp_batch && 2 * seen[n_cand].first >= seen[0].first) ++n_cand;
+
+      const auto tp = Clock::now();
+      std::vector<std::uint32_t> off = {0}, cam;
+      std::vector<double> xy, xyz;
+      for (std::size_t k = 0; k < n_cand; ++k) {
+        const int image = seen[k].second;
+        cam.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(image))));
+        for (std::int64_t ob : m.image_obs[image]) {
+          const std::int32_t t = m.obs_track[ob];
+          if (m.obs_dead[ob] || !m.has_point[t]) continue;
+          const double* kp = m.keypoints.at(image, m.tracks.keypoint[ob]);
+          xy.insert(xy.end(), kp, kp + 2);
+          xyz.insert(xyz.end(), &m.X[3 * t], &m.X[3 * t] + 3);
+        }
+        off.push_back(static_cast<std::uint32_t>(xy.size() / 2));
+      }
+      jpo_resections res;
+      std::memset(&res, 0, sizeof(res));
+      res.n_images = static_cast<std::uint32_t>(n_cand);
+      res.n_cameras = static_cast<std::uint32_t>(cameras.size());
+      res.offsets = off.data();
+      res.xy = xy.data();
+      res.xyz = xyz.data();
+      res.cameras = cameras.data();
+      res.camera = cam.data();
+      std::vector<jpo_pose_result> out(n_cand);
+      jpo_ransac_options pnp_ransac;
+      jpo_ransac_options_init(&pnp_ransac);
+      pnp_ransac.max_error_px = o.pnp_max_error_px;
+      if (jpo_absolute_pose(ctx_, &res, &pnp_ransac, out.data(), nullptr) != 0) {
+        run.error = std::string("absolute pose: ") + jpo_last_error();
+        return false;
+      }
+      ++run.pnp_calls;
+      run.pnp_problems += static_cast<int>(n_cand);
+      run.time.pnp += seconds_since(tp);
+
+      std::vector<std::int32_t> added;
+      for (std::size_t k = 0; k < n_cand; ++k) {
+        const int image = seen[k].second;
+        const int n = seen[k].first;  // distinct points, not correspondences
+        const bool ok = out[k].status == JPO_OK && out[k].n_inliers >= o.min_pnp_inliers &&
+                        out[k].n_inliers >= o.min_pnp_inlier_ratio * static_cast<double>(n);
+        if (!ok) {
+          failed_with[image] = seen[k].first;
+          ++run.pnp_rejected;
+          continue;
+        }
+        std::copy(out[k].pose, out[k].pose + 7, &m.cams.poses[7 * static_cast<std::size_t>(image)]);
+        m.registered[image] = 1;
+        added.push_back(image);
+      }
+      if (added.empty()) continue;  // the rejected images wait until the map grows; others get their turn
+      timed_points(false);
+      last = timed_adjust(o.local_iterations);
+      report(steps, "register", added, m, last);
+    }
+
+    // -- 5. Final adjustment: complete the tracks, adjust, filter, and adjust what is left.
+    timed_points(true);
+    last = timed_adjust(o.final_iterations);
+    last = timed_adjust(o.final_iterations);
+    report(steps, "final", {}, m, last);
+    return true;
+  };
+
+  // Models, as COLMAP makes them: when a model stops growing with images left over, a
+  // new one starts from a first pair of images in no model yet (on ETH3D's office the
+  // first model held 7 of 26 images, the second all 26). The model with the most
+  // images is kept, then the one with the most points.
+  std::vector<char> in_a_model(n_img, 0);
+  Map best_map;
+  Adjusted best_last;
+  std::vector<Step> best_steps;
+  std::size_t best_images = 0;
+  int best_first = -1;
+  for (int model = 0; model < o.max_models; ++model) {
+    const int first = choose_first_pair(c, run, o, in_a_model);
+    if (first < 0) break;
+    if (model > 0) m = fresh;
+    std::vector<Step> steps;
+    if (!grow(first, on_step ? &steps : nullptr)) {
+      finish(m, std::move(last));
+      return run;
+    }
+    ++run.models;
+    std::size_t images = 0;
+    for (std::size_t i = 0; i < n_img; ++i) {
+      images += m.registered[i] != 0;
+      if (m.registered[i]) in_a_model[i] = 1;
+    }
+    if (images > best_images || (images == best_images && last.problem.num_points() > best_last.problem.num_points())) {
+      best_images = images;
+      best_first = first;
+      best_map = std::move(m);
+      best_last = std::move(last);
+      best_steps = std::move(steps);
+    }
+    if (best_images == n_img) break;
+  }
+  if (best_first < 0) {
+    run.error = "no pair is fit to start from";
+    run.time.total = seconds_since(t_start);
+    return run;
+  }
+  run.first_a = c.pairs[best_first].a;
+  run.first_b = c.pairs[best_first].b;
+  run.first_inliers = run.pair_results[best_first].n_inliers;
+  run.first_angle_deg = run.pair_results[best_first].median_tri_angle_deg;
+  for (const Step& st : best_steps) {
+    Snapshot s;
+    s.stage = st.stage;
+    s.added = st.added;
+    s.poses = &st.poses;
+    s.registered = &st.registered;
+    s.points = st.points;
+    s.point_track = st.point_track;
+    s.mean_error_px = st.mean_error_px;
+    on_step(s);
+  }
+  finish(best_map, std::move(best_last));
   return run;
 }
 

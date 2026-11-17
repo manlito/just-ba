@@ -45,6 +45,7 @@ def by_name(path):
             "keypoints": list(kxy[2 * kb[i]:2 * kb[i + 1]]),
             "registered": s["reference.registered"][2][i],
             "pose": tuple(s["reference.pose"][2][7 * i:7 * i + 7]),
+            "truth": (s["truth.registered"][2][i], tuple(s["truth.pose"][2][7 * i:7 * i + 7])),
         }
     pairs = {}
     pi, pb, pm = s["pair.images"][2], s["pair.begin"][2], s["pair.match"][2]
@@ -77,6 +78,7 @@ def same(first, second):
         assert a["ref_camera"] == b["ref_camera"], f"{name}: reference camera differs"
         assert [f32(v) for v in a["keypoints"]] == b["keypoints"], f"{name}: keypoints differ"
         assert a["registered"] == b["registered"] and a["pose"] == b["pose"], f"{name}: reference pose differs"
+        assert a["truth"] == b["truth"], f"{name}: truth differs"
     assert p1 == p2, "matches differ"
     assert o1 == o2, "reference observations differ"
 
@@ -93,10 +95,12 @@ def main():
         second = os.path.join(work, f"{scene}-from-colmap.jbc")
         run([sys.executable, os.path.join(HERE, "colmap_fixture.py"), first, colmap] + extra)
         run([sys.executable, os.path.join(HERE, "colmap_capture.py"), os.path.join(colmap, "database.db"),
-             "--model", os.path.join(colmap, "sparse"), "--min-matches", "0", "-o", second])
+             "--model", os.path.join(colmap, "sparse"), "--truth", os.path.join(colmap, "truth"),
+             "--min-matches", "0", "-o", second])
         same(first, second)
         print(f"{scene}: the capture file survives the COLMAP database and model")
-        run([demo, "run", second, "--check", "--thresholds", "demo"])
+        out = run([demo, "run", second, "--check", "--thresholds", "demo"])
+        assert "Against the ground truth" in out, "no comparison with the truth"
     print("PASS")
 
 

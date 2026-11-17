@@ -12,9 +12,51 @@
 
 namespace demo {
 
+PoseAgreement compare_poses(const std::vector<char>& registered_a, const std::vector<double>& poses_a,
+                            const std::vector<char>& registered_b, const std::vector<double>& poses_b) {
+  PoseAgreement c;
+  std::vector<double> a_c, b_c, a_q, b_q, all_b_c;
+  for (std::size_t i = 0; i < registered_b.size(); ++i) {
+    if (!registered_b[i]) continue;
+    double C[3];
+    camera_centre(&poses_b[7 * i], C);
+    all_b_c.insert(all_b_c.end(), C, C + 3);
+    if (i >= registered_a.size() || !registered_a[i]) continue;
+    b_c.insert(b_c.end(), C, C + 3);
+    camera_centre(&poses_a[7 * i], C);
+    a_c.insert(a_c.end(), C, C + 3);
+    a_q.insert(a_q.end(), &poses_a[7 * i], &poses_a[7 * i] + 4);
+    b_q.insert(b_q.end(), &poses_b[7 * i], &poses_b[7 * i] + 4);
+  }
+  c.common = a_c.size() / 3;
+  if (c.common < 3) return c;
+  double Rs[9], ts[3], s, Q[9], Qt[9];
+  fit_similarity(a_c, b_c, Rs, ts, &s);
+  fit_rotation(a_q, b_q, Q);
+  transpose3(Q, Qt);
+  const double extent = bbox_diagonal(all_b_c);
+  std::vector<double> rot, centre;
+  for (std::size_t k = 0; k < c.common; ++k) {
+    double X[3];
+    for (int d = 0; d < 3; ++d)
+      X[d] = s * (Rs[3 * d] * a_c[3 * k] + Rs[3 * d + 1] * a_c[3 * k + 1] + Rs[3 * d + 2] * a_c[3 * k + 2]) + ts[d];
+    centre.push_back(std::hypot(X[0] - b_c[3 * k], X[1] - b_c[3 * k + 1], X[2] - b_c[3 * k + 2]));
+    double Ra[9], Rb[9], Rq[9];
+    quat_to_rotmat(&a_q[4 * k], Ra);
+    quat_to_rotmat(&b_q[4 * k], Rb);
+    mat3_mul(Ra, Qt, Rq);
+    rot.push_back(rotation_angle_deg(Rq, Rb));
+  }
+  c.rot_median_deg = median(rot);
+  c.rot_max_deg = *std::max_element(rot.begin(), rot.end());
+  c.centre_median = median(centre);
+  c.centre_median_pct = extent > 0 ? 100.0 * c.centre_median / extent : 0.0;
+  c.centre_max_pct = extent > 0 ? 100.0 * *std::max_element(centre.begin(), centre.end()) / extent : 0.0;
+  return c;
+}
+
 Comparison compare(const Capture& capture, const Reference& ref, const Reconstruction& r) {
   Comparison c;
-  const std::size_t n_img = capture.num_images();
   const std::size_t np = static_cast<std::size_t>(jba::num_params(capture.model));
 
   // Ours.
@@ -99,45 +141,13 @@ Comparison compare(const Capture& capture, const Reference& ref, const Reconstru
   c.our_points_seen = refs_of_ours.size();
   for (const auto& [p, refs] : refs_of_ours) c.our_points_joined += refs.size() > 1;
 
-  // Poses of the images both registered.
-  std::vector<double> ours_c, ref_c, ours_q, ref_q, all_ref_c;
-  for (std::size_t i = 0; i < n_img; ++i) {
-    if (!ref.registered[i]) continue;
-    double C[3];
-    camera_centre(&ref.poses[7 * i], C);
-    all_ref_c.insert(all_ref_c.end(), C, C + 3);
-    if (i >= r.registered.size() || !r.registered[i]) continue;
-    ref_c.insert(ref_c.end(), C, C + 3);
-    camera_centre(&r.poses[7 * i], C);
-    ours_c.insert(ours_c.end(), C, C + 3);
-    ours_q.insert(ours_q.end(), &r.poses[7 * i], &r.poses[7 * i] + 4);
-    ref_q.insert(ref_q.end(), &ref.poses[7 * i], &ref.poses[7 * i] + 4);
-  }
-  c.common = ours_c.size() / 3;
-  if (c.common < 3) return c;
-
-  double Rs[9], ts[3], s, Q[9], Qt[9];
-  fit_similarity(ours_c, ref_c, Rs, ts, &s);
-  fit_rotation(ours_q, ref_q, Q);
-  transpose3(Q, Qt);
-  const double extent = bbox_diagonal(all_ref_c);
-  std::vector<double> rot, centre;
-  for (std::size_t k = 0; k < c.common; ++k) {
-    double X[3];
-    for (int d = 0; d < 3; ++d)
-      X[d] = s * (Rs[3 * d] * ours_c[3 * k] + Rs[3 * d + 1] * ours_c[3 * k + 1] + Rs[3 * d + 2] * ours_c[3 * k + 2]) + ts[d];
-    centre.push_back(std::hypot(X[0] - ref_c[3 * k], X[1] - ref_c[3 * k + 1], X[2] - ref_c[3 * k + 2]));
-    double Ro[9], Rr[9], Ra[9];
-    quat_to_rotmat(&ours_q[4 * k], Ro);
-    quat_to_rotmat(&ref_q[4 * k], Rr);
-    mat3_mul(Ro, Qt, Ra);
-    rot.push_back(rotation_angle_deg(Ra, Rr));
-  }
-  c.rot_median_deg = median(rot);
-  c.rot_max_deg = *std::max_element(rot.begin(), rot.end());
-  c.centre_median = median(centre);
-  c.centre_median_pct = extent > 0 ? 100.0 * c.centre_median / extent : 0.0;
-  c.centre_max_pct = extent > 0 ? 100.0 * *std::max_element(centre.begin(), centre.end()) / extent : 0.0;
+  const PoseAgreement pa = compare_poses(r.registered, r.poses, ref.registered, ref.poses);
+  c.common = pa.common;
+  c.rot_median_deg = pa.rot_median_deg;
+  c.rot_max_deg = pa.rot_max_deg;
+  c.centre_median_pct = pa.centre_median_pct;
+  c.centre_max_pct = pa.centre_max_pct;
+  c.centre_median = pa.centre_median;
   return c;
 }
 

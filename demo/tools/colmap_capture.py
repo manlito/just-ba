@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write a capture file (.jbc) for jba_demo from a COLMAP database, with COLMAP's model.
 
-    colmap_capture.py database.db -o capture.jbc [--model sparse/0] [--raw] [--min-matches 15]
+    colmap_capture.py database.db -o capture.jbc [--model sparse/0] [--truth gt/] [--raw] [--min-matches 15]
 
 From the database: the cameras, the images, their keypoints and the matches of every
 pair. By default the verified matches (two_view_geometries), so both reconstructions
@@ -9,6 +9,9 @@ start from the same matches (document 05, level 3); --raw takes the matcher's ou
 (matches) instead, for the demo's own verification. With --model, COLMAP's
 reconstruction in its text format (cameras.txt, images.txt, points3D.txt) becomes the
 file's reference: its refined intrinsics, poses, points and observations. A binary
+model is converted first. With --truth, the poses of a ground-truth model in the same
+text format (ETH3D's dslr_calibration_undistorted, for one) are stored too, matched to
+the database's images by name (or, failing that, by file name alone). A binary
 model is converted first:
 
     colmap model_converter --input_path sparse/0 --output_path sparse/0-txt --output_type TXT
@@ -125,6 +128,7 @@ def main():
     ap.add_argument("database")
     ap.add_argument("-o", "--output", required=True)
     ap.add_argument("--model", help="COLMAP's reconstruction, text format, as the reference")
+    ap.add_argument("--truth", help="ground-truth poses, a model in COLMAP's text format")
     ap.add_argument("--raw", action="store_true", help="the matcher's matches, not the verified ones")
     ap.add_argument("--min-matches", type=int, default=15, help="pairs with fewer are left out (default 15)")
     args = ap.parse_args()
@@ -213,6 +217,35 @@ def main():
             ("reference.obs.keypoint", jbc.I32, (n_obs,), obs_keypoint),
         ]
         summary += f"; reference: {sum(registered)} images, {len(xyz) // 3} points, {n_obs} observations"
+    if args.truth:
+        path = os.path.join(args.truth, "images.txt")
+        if not os.path.isfile(path):
+            sys.exit(f"colmap_capture: no images.txt in {args.truth}")
+        with open(path) as f:
+            rows = [line.rstrip("\n") for line in f if not line.startswith("#")]
+        truth = {}
+        for k in range(0, len(rows), 2):
+            v = rows[k].split()
+            if v:
+                truth[" ".join(v[9:])] = [float(x) for x in v[1:8]]
+        by_base = {}
+        for name, pose in truth.items():
+            by_base.setdefault(os.path.basename(name), []).append(pose)
+        registered, poses = [0] * n_img, [1.0, 0, 0, 0, 0, 0, 0] * n_img
+        for i, (_, name, _) in enumerate(images):
+            pose = truth.get(name)
+            if pose is None and len(by_base.get(os.path.basename(name), [])) == 1:
+                pose = by_base[os.path.basename(name)][0]
+            if pose is not None:
+                registered[i] = 1
+                poses[7 * i:7 * i + 7] = pose
+        if sum(registered) < 3:
+            sys.exit(f"colmap_capture: only {sum(registered)} of the database's images are in {args.truth}")
+        sections += [
+            ("truth.registered", jbc.U8, (n_img,), registered),
+            ("truth.pose", jbc.F64, (n_img, 7), poses),
+        ]
+        summary += f"; truth: {sum(registered)} images"
     jbc.write(args.output, sections)
     print(f"{args.output}: {summary}")
 

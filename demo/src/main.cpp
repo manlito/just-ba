@@ -6,7 +6,7 @@
 //     --write: also writes each scene as a capture file (<dir>/<scene>.jbc), truth as reference.
 //
 //   jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo] [--two-view-tracks]
-//                [--tri-angle deg] [--check]
+//                [--tri-angle deg] [--json file] [--check]
 //                [common options]
 //     Reconstructs a capture file (from demo/tools/colmap_capture.py) and, when it holds a
 //     reference reconstruction, compares with it (document 05, level 3).
@@ -18,6 +18,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -35,7 +36,7 @@ int usage() {
                "usage: jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f]\n"
                "                      [--false-pairs n] [--write dir] [options]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
-               "                    [--two-view-tracks] [--tri-angle deg] [--check] [options]\n"
+               "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
                "         [--export dir] [-v]\n");
   return 2;
@@ -107,6 +108,42 @@ bool available(const demo::MapperOptions& mo) {
   return false;
 }
 
+// The comparison as JSON, for demo/tools/colmap_table.py.
+void write_json(const std::string& out, const std::string& capture, const demo::Reconstruction& r,
+                const demo::Comparison& c, std::size_t images, std::size_t truth_images, const demo::PoseAgreement& to,
+                const demo::PoseAgreement& tr) {
+  std::FILE* f = std::fopen(out.c_str(), "w");
+  if (!f) throw std::runtime_error("cannot write " + out);
+  auto side = [&](const char* name, const demo::Side& s) {
+    std::fprintf(f, "\"%s\": {\"registered\": %zu, \"points\": %zu, \"observations\": %zu, \"track_length\": %.6g, "
+                 "\"reprojection_px\": %.6g}, ", name, s.registered, s.points, s.observations, s.mean_track_length, s.mean_error_px);
+  };
+  auto poses = [&](const char* name, const demo::PoseAgreement& a) {
+    std::fprintf(f, "\"%s\": {\"common\": %zu, \"rot_median_deg\": %.6g, \"rot_max_deg\": %.6g, \"centre_median\": %.6g, "
+                 "\"centre_median_pct\": %.6g, \"centre_max_pct\": %.6g}, ", name, a.common, a.rot_median_deg, a.rot_max_deg,
+                 a.centre_median, a.centre_median_pct, a.centre_max_pct);
+  };
+  std::fprintf(f, "{\"capture\": \"%s\", \"images\": %zu, \"ok\": %s, ", capture.c_str(), images, r.ok() ? "true" : "false");
+  side("ours", c.ours);
+  side("reference", c.reference);
+  demo::PoseAgreement vs;
+  vs.common = c.common;
+  vs.rot_median_deg = c.rot_median_deg;
+  vs.rot_max_deg = c.rot_max_deg;
+  vs.centre_median = c.centre_median;
+  vs.centre_median_pct = c.centre_median_pct;
+  vs.centre_max_pct = c.centre_max_pct;
+  poses("ours_vs_reference", vs);
+  if (truth_images) {
+    std::fprintf(f, "\"truth_images\": %zu, ", truth_images);
+    poses("ours_vs_truth", to);
+    poses("reference_vs_truth", tr);
+  }
+  std::fprintf(f, "\"reference_points_split\": %zu, \"our_points_joined\": %zu, \"seconds\": %.6g}\n",
+               c.reference_points_split, c.our_points_joined, r.time.total);
+  std::fclose(f);
+}
+
 int synth(const std::vector<std::string>& args) {
   std::string scene_arg = "all", write_dir;
   demo::SceneOptions so;
@@ -170,6 +207,7 @@ int run(const std::vector<std::string>& args) {
   const std::string path = args[0];
   std::string intrinsics = "reference", thresholds = "colmap";
   bool check = false, two_view = false;
+  std::string json_path;
   double tri_angle = -1.0;
   Common c;
   for (std::size_t i = 1; i < args.size(); ++i) {
@@ -181,6 +219,7 @@ int run(const std::vector<std::string>& args) {
     } else if (a == "--intrinsics" && has_value) intrinsics = args[++i];
     else if (a == "--thresholds" && has_value) thresholds = args[++i];
     else if (a == "--check") check = true;
+    else if (a == "--json" && has_value) json_path = args[++i];
     else if (a == "--two-view-tracks") two_view = true;
     else if (a == "--tri-angle" && has_value) tri_angle = std::atof(args[++i].c_str());
 
@@ -210,9 +249,10 @@ int run(const std::vector<std::string>& args) {
   demo::Mapper mapper(mo);
   const demo::Reconstruction r = mapper.run(file.capture, printer(c.verbose));
   if (!r.ok()) std::printf("  stopped: %s\n", r.error.c_str());
-  std::printf("  pairs: %d kept of %zu (%d OK, %d without baseline, %d failed); %zu tracks; %d PnP calls, %d rejected\n",
+  std::printf("  pairs: %d kept of %zu (%d OK, %d without baseline, %d failed); %zu tracks; %d PnP calls, %d rejected;"
+              " %d model%s grown\n",
               r.pairs_kept, file.capture.pairs.size(), r.pairs_ok, r.pairs_degenerate, r.pairs_failed, r.tracks,
-              r.pnp_calls, r.pnp_rejected);
+              r.pnp_calls, r.pnp_rejected, r.models, r.models == 1 ? "" : "s");
   print_times(r);
   std::printf("  tracks: %zu built, %zu of them with two keypoints in one image; %zu after splitting\n",
               r.track_stats.components, r.track_stats.conflicted, r.all_tracks.size());
@@ -250,6 +290,24 @@ int run(const std::vector<std::string>& args) {
               "(%zu of them seen twice).\n",
               cmp.missing_filtered, cmp.missing_untriangulated, cmp.missing_untracked, cmp.ours_only_points,
               cmp.ours_only_two_view);
+  demo::PoseAgreement truth_ours, truth_ref;
+  if (!file.truth_registered.empty()) {
+    const demo::PoseAgreement o = demo::compare_poses(r.registered, r.poses, file.truth_registered, file.truth_poses);
+    const demo::PoseAgreement c2 = demo::compare_poses(ref.registered, ref.poses, file.truth_registered, file.truth_poses);
+    truth_ours = o;
+    truth_ref = c2;
+    std::size_t in_truth = 0;
+    for (char g : file.truth_registered) in_truth += g != 0;
+    std::printf("\nAgainst the ground truth (%zu images), after the same alignment; centre error in the truth's units:\n",
+                in_truth);
+    const std::pair<const char*, demo::PoseAgreement> rows[] = {{"ours", o}, {"reference", c2}};
+    for (const auto& [label, a] : rows)
+      std::printf("%-10s %3zu images: rotation median %.4f°, max %.4f°; centre median %.4g (%.4f %%), max %.4f %%\n",
+                  label, a.common, a.rot_median_deg, a.rot_max_deg, a.centre_median, a.centre_median_pct, a.centre_max_pct);
+  }
+  std::size_t truth_images = 0;
+  for (char g : file.truth_registered) truth_images += g != 0;
+  if (!json_path.empty()) write_json(json_path, path, r, cmp, n_img, truth_images, truth_ours, truth_ref);
   if (!check) return r.ok() ? 0 : 1;
   // --check: the thresholds of the generated scenes, for tests.
   const bool pass = r.ok() && cmp.common == cmp.reference.registered && cmp.rot_median_deg < 0.5 &&

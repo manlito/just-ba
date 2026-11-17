@@ -16,6 +16,19 @@ struct Side {
   double mean_error_px = 0.0;  // mean reprojection error of its observations
 };
 
+// Two sets of poses of the same images, on the images both registered: rotation error
+// after the best common rotation; camera centre error after the similarity that best
+// aligns the centres, as a percentage of the diagonal of the box around b's centres,
+// and in b's units. b is the reference (COLMAP's, or the truth).
+struct PoseAgreement {
+  std::size_t common = 0;
+  double rot_median_deg = 0.0, rot_max_deg = 0.0;
+  double centre_median_pct = 0.0, centre_max_pct = 0.0;
+  double centre_median = 0.0;
+};
+PoseAgreement compare_poses(const std::vector<char>& registered_a, const std::vector<double>& poses_a,
+                            const std::vector<char>& registered_b, const std::vector<double>& poses_b);
+
 struct Comparison {
   Side ours, reference;
   std::size_t common = 0;                       // images both registered

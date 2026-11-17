@@ -16,6 +16,7 @@ not, and a default build does not look for it.
 | `src/main.cpp` | `jba_demo`, the command line. |
 | `tools/colmap_capture.py` | A COLMAP database, and its model, to a capture file. Standard library only. |
 | `tools/colmap_compare.sh` | One scene from its images: COLMAP, then the capture file, then `jba_demo run`. |
+| `tools/colmap_table.py` | The comparison over several capture files, as Markdown tables. |
 | `tools/colmap_fixture.py`, `tools/test_colmap_roundtrip.py` | The COLMAP path tested without COLMAP. |
 | `web/demo_wasm.cpp`, `web/index.html` | The live demo: the WebAssembly entry points and the page. |
 
@@ -77,7 +78,10 @@ after the best similarity, as a share of the extent of COLMAP's camera centres; 
 which keypoints each side groups into which point (points split or joined, and why
 the reference's observations are missing from ours). `--two-view-tracks` and
 `--tri-angle deg` undo two of COLMAP's rules, for experiments.
-`--export dir` writes our model in COLMAP's text format next to it. The margins of
+`--export dir` writes our model in COLMAP's text format next to it, and `--json file`
+the figures, which `demo/tools/colmap_table.py` gathers over several scenes. With a
+ground truth in the capture file (`colmap_capture.py --truth`, as ETH3D's
+`dslr_calibration_undistorted`), both reconstructions are also compared with it. The margins of
 the pass condition are set after the first measurements (document 05).
 
 Run against COLMAP 4.2.1 on South Building and Gerrard Hall on 2026-11-16 (results in
@@ -110,6 +114,8 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 | `reference.pose` | f64 | [N, 7] | with a reference | World to camera, qw qx qy qz tx ty tz |
 | `reference.point.xyz` | f64 | [Q, 3] | with a reference | Points |
 | `reference.obs.image`, `.point`, `.keypoint` | i32 | [O] | with a reference | Each observation's image, point and keypoint |
+| `truth.registered` | u8 | [N] | no | 1 where the ground truth has a pose |
+| `truth.pose` | f64 | [N, 7] | with `truth.registered` | Ground-truth world to camera, in the truth's frame and units |
 
 ## The live demo
 

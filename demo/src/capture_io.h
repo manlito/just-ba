@@ -27,6 +27,10 @@ struct CaptureFile {
   std::vector<std::string> names;        // per image, or empty
   std::vector<std::int32_t> image_size;  // per intrinsics block: width, height; or empty
   Reference reference;
+  // Ground-truth poses, when the scene has them (ETH3D's): per image, and world to
+  // camera in the truth's frame and units. Empty: none.
+  std::vector<char> truth_registered;
+  std::vector<double> truth_poses;
 };
 
 // Throws std::runtime_error on a damaged file or one whose sections disagree.

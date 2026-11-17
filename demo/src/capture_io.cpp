@@ -105,6 +105,11 @@ CaptureFile read_capture(const std::string& path) {
     c.pairs.push_back(std::move(p));
   }
 
+  if (find(s, "truth.registered")) {
+    const auto reg = get<std::uint8_t>(s, path, "truth.registered", {n_img});
+    f.truth_registered.assign(reg.begin(), reg.end());
+    f.truth_poses = get<double>(s, path, "truth.pose", {n_img, 7});
+  }
   if (find(s, "reference.registered")) {
     Reference& ref = f.reference;
     ref.intrinsics = get<double>(s, path, "reference.intrinsics", {blocks, np}, false);
@@ -162,6 +167,11 @@ void write_capture(const std::string& path, const CaptureFile& f) {
   s.emplace_back("pair.images", make_section(pair_images, {c.pairs.size(), 2}));
   s.emplace_back("pair.begin", make_section(pair_begin, {c.pairs.size() + 1}));
   s.emplace_back("pair.match", make_section(match, {match.size() / 2, 2}));
+  if (!f.truth_registered.empty()) {
+    s.emplace_back("truth.registered",
+                   make_section(std::vector<std::uint8_t>(f.truth_registered.begin(), f.truth_registered.end()), {n_img}));
+    s.emplace_back("truth.pose", make_section(f.truth_poses, {n_img, 7}));
+  }
   const Reference& r = f.reference;
   if (!r.empty()) {
     if (!r.intrinsics.empty()) s.emplace_back("reference.intrinsics", make_section(r.intrinsics, {blocks, np}));

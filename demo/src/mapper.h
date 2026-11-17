@@ -63,6 +63,7 @@ struct MapperOptions {
   bool ignore_two_view_tracks = false;
   std::size_t pnp_batch = 4;               // images tried in one PnP call
   int local_iterations = 25;               // each adjustment after a registration
+  int max_models = 10;                     // models tried, each from images in no earlier model
   int final_iterations = 50;
   // Cauchy scale of the adjustments, pixels; 0: max_reproj_px, so every observation the
   // filter accepts counts fully (D139). A smaller scale fits each point to the majority
@@ -83,6 +84,7 @@ inline void thresholds_for_noise(double sigma, MapperOptions& o) {
 // Long-standing COLMAP defaults; not checked against 4.2.1 on this machine.
 inline void colmap_thresholds(MapperOptions& o) {
   o.pair_max_error_px = 4.0;
+  o.min_pair_inliers = 15;  // COLMAP's two-view geometry keeps pairs from 15 inliers
   o.pnp_max_error_px = 12.0;
   o.min_pnp_inliers = 30;
   o.min_pnp_inlier_ratio = 0.25;
@@ -138,6 +140,7 @@ struct Reconstruction {
   std::uint32_t first_inliers = 0;
   double first_angle_deg = 0.0;
   int pnp_calls = 0, pnp_problems = 0, pnp_rejected = 0, adjustments = 0;
+  int models = 0;                     // models grown; the one returned has the most images
   std::string pose_backend;           // what poselib-gpu ran on
   Timings time;
 };

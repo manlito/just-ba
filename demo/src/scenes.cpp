@@ -272,6 +272,8 @@ CaptureFile to_capture_file(const Scene& s) {
     f.names.push_back(name);
   }
   f.image_size = {static_cast<std::int32_t>(s.width), static_cast<std::int32_t>(s.height)};
+  f.truth_registered.assign(n_img, 1);
+  f.truth_poses = s.poses;
   Reference& r = f.reference;
   r.registered.assign(n_img, 1);
   r.poses = s.poses;

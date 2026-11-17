@@ -118,6 +118,15 @@ def main():
             w, h = (size[2 * b], size[2 * b + 1]) if size else (0, 0)
             params = " ".join(repr(v) for v in ref_intr[np_ * b:np_ * b + np_])
             f.write(f"{cid} {MODEL_NAMES[model]} {w} {h} {params}\n")
+    if "truth.registered" in s:  # the truth as a model of its own, poses only, under other names' paths
+        treg, tpose = s["truth.registered"][2], s["truth.pose"][2]
+        os.makedirs(os.path.join(args.out_dir, "truth"), exist_ok=True)
+        with open(os.path.join(args.out_dir, "truth", "images.txt"), "w") as f:
+            f.write("# Image list with two lines of data per image:\n")
+            for i in range(n_img):
+                if treg[i]:
+                    p = " ".join(repr(v) for v in tpose[7 * i:7 * i + 7])
+                    f.write(f"{1000 + i} {p} 1 truth/{names[i]}\n\n")
     point_id = [101 + 2 * j for j in range(len(xyz) // 3)]
     by_image = {}
     for k in range(len(obs_i)):
