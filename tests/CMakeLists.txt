@@ -104,6 +104,21 @@ if(_gpu_backends)
   include(gpu_cases.cmake)
 endif()
 
+# The WebGPU backend's WGSL compiles, through Tint's command-line tool from the same
+# Dawn release (D132). Needs no GPU, so it runs in CI, where the kernels never run.
+if(JBA_WITH_WEBGPU AND NOT EMSCRIPTEN)
+  find_program(JBA_TINT tint HINTS ${JBA_DAWN_DIR}/bin NO_DEFAULT_PATH)
+  if(JBA_TINT)
+    add_executable(jba_wgsl_module wgsl_module.cpp)
+    target_link_libraries(jba_wgsl_module PRIVATE jba jba_internal jba_webgpu jba_warnings)
+    add_test(NAME webgpu_wgsl_compiles
+             COMMAND ${CMAKE_COMMAND} -DWRITER=$<TARGET_FILE:jba_wgsl_module> -DTINT=${JBA_TINT}
+                     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/wgsl -P ${CMAKE_CURRENT_SOURCE_DIR}/wgsl_compiles.cmake)
+  else()
+    message(WARNING "Tint not found in ${JBA_DAWN_DIR}/bin: webgpu_wgsl_compiles left out")
+  endif()
+endif()
+
 # The CLI's --warm-up and the summary fields of D101 (document 15, finding 8).
 if(TARGET just-ba)
   add_test(NAME cli_make_problem COMMAND jba_make_problem ${CMAKE_CURRENT_BINARY_DIR}/cli_problem.jba --images 8 --points 200)
