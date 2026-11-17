@@ -751,8 +751,45 @@ above stands for fixed intrinsics (`--refine none`).
 
 The price is time: with intrinsics free the adjustments take 2.3 times as long, on
 Metal (South Building 7.6 to 17.5 s, Gerrard Hall 4.2 to 9.5 s) as on the CPU (52 to
-118 s for South Building). The shared focal length couples every camera in the
-reduced system (document 03); why it costs this much was not looked into.
+118 s for South Building). Looked into on South Building's last problem (128 images,
+100,371 points, 614,669 observations), solved again by `just-ba solve` with the
+intrinsics fixed and free; the iterations and conjugate-gradient steps are the same,
+each one costs more:
+
+| Backend, linear solver | Fixed | Free | Per step |
+|---|---|---|---|
+| Metal, `sparse_schur` (the default) | 0.119 s | 0.324 s | 2.7 times |
+| Metal, `iterative_schur` | 0.59 ms | 3.53 ms | 6.0 times |
+| CPU, `iterative_schur`, 18 threads | 2.14 ms | 3.77 ms | 1.8 times |
+| CPU, `iterative_schur`, 1 thread | 11.8 ms | 14.1 ms | 1.2 times |
+
+Ten iterations for `sparse_schur`; per conjugate-gradient step for the others. Freeing
+only the focal length costs the same as freeing all four parameters: the block is
+`num_params` wide whatever the mask, its fixed columns computed and masked. Two causes,
+both from one block shared by every observation:
+
+- **The explicit reduced system's tile entries.** `sparse_schur` builds each tile from
+  every pair of observations of each point. A shared intrinsics block takes part in
+  every observation, so the pose-intrinsics tiles get one entry per pair (5.57 million)
+  and the intrinsics-intrinsics tile as many again, all in one tile, against 3.09
+  million pose-pose entries: 4.6 times the entries, and on the shapes (4 x 6, 4 x 4)
+  that take the run-time path instead of the registers of the 6 x 6 one. Since all the
+  observations of a point share the block, the sums factor: the elimination term of
+  pose a with the intrinsics is G_a times the sum of the point's E_b, and that of the
+  intrinsics with themselves the sum of its G times the sum of its E. Summed per point
+  and block first, the entries would be one per observation and one per point, about
+  1.4 times the fixed case's in all.
+- **The gather of J^T t per block.** Both iterative solvers gather each camera-side
+  block's products over its observations in one unit of work: a thread on the CPU
+  (`jft_times_t`, `column_norms_and_gradient`), a threadgroup on the GPU
+  (`block_gather`). A pose block has about 4,800 observations; the intrinsics block
+  has all 614,669, so one thread or group works through them while the rest wait. On
+  one CPU thread the cost is 1.2 times, the arithmetic; with 18 it is 1.8 times, the
+  extra 1.6 ms barely shorter than the 2.4 ms on one. Splitting a large block into
+  chunks of fixed size whose sums are added in a fixed order would keep the results
+  deterministic and independent of the thread count.
+
+Neither is fixed yet.
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
