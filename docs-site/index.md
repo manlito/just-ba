@@ -24,6 +24,7 @@ concepts
 backends
 cli
 file-format
+demo
 ```
 
 ```{toctree}
