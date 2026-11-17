@@ -79,6 +79,7 @@ struct Map {
   std::vector<char> obs_in;                     // per observation: an inlier of its track's point
   std::vector<int> track_images;                // per track: the images it spans
   std::vector<char> obs_dead;                   // per observation: moved to a track split off
+  std::vector<char> obs_filtered;               // per observation: dropped from its track's point by the filter
   std::vector<std::int64_t> split_tried;        // per track: leftovers at its last failed split
   std::size_t n_images() const { return registered.size(); }
 };
@@ -194,6 +195,7 @@ void split_leftovers(Map& m, std::size_t t, const jba::TriangulationOptions& tri
     m.obs_track.push_back(nt);
     m.obs_in.push_back(1);
     m.obs_dead.push_back(0);
+    m.obs_filtered.push_back(0);
     m.image_obs[m.tracks.image[k]].push_back(nk);
     m.obs_dead[k] = 1;
   }
@@ -237,7 +239,11 @@ void update_points(Map& m, const MapperOptions& o, bool split) {
     if (o.ignore_two_view_tracks && m.track_images[t] <= 2) continue;
     if (m.has_point[t]) {
       // Continue the track: each registered image without an inlier gets its closest
-      // keypoint, if within the threshold (an angle when one is set, else pixels).
+      // keypoint, if within the threshold (an angle when one is set, else pixels). A
+      // keypoint the filter dropped from this point comes back only within the filter's
+      // own threshold (COLMAP's complete_max_reproj_error): let in again by the wider
+      // angle it would be adjusted and dropped every time, and would never be left over
+      // for split_leftovers to make the point it belongs to.
       used.clear();
       cand.clear();
       for (std::int64_t k = b; k < e; ++k)
@@ -249,7 +255,9 @@ void update_points(Map& m, const MapperOptions& o, bool split) {
         const double* xy = m.keypoints.at(image, m.tracks.keypoint[k]);
         const double err = reprojection_error(m, image, xy, &m.X[3 * t]);
         if (err < 0.0) continue;
-        if (o.tri_max_angle_error_deg > 0.0) {
+        if (m.obs_filtered[k]) {
+          if (err > o.max_reproj_px) continue;
+        } else if (o.tri_max_angle_error_deg > 0.0) {
           jba::Ray r;
           if (!jba::keypoint_ray(m.cams, image, xy, r) || jba::ray_angle_error(r, &m.X[3 * t]) > max_angle_rad) continue;
         } else if (err > o.max_reproj_px) {
@@ -339,7 +347,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
   }
 
   jba::SolverOptions so;
-  so.loss = {jba::LossType::Cauchy, 2.0};  // the library's own choice in refine()
+  so.loss = {jba::LossType::Cauchy, o.loss_scale > 0.0 ? o.loss_scale : o.max_reproj_px};
   so.backend = o.ba_backend;
   so.num_threads = o.threads;
   so.max_iterations = max_iterations;
@@ -362,6 +370,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
       ++kept;
     } else {
       m.obs_in[obs_of[k]] = 0;
+      m.obs_filtered[obs_of[k]] = 1;
     }
   }
   a.mean_error_px = kept ? sum / static_cast<double>(kept) : 0.0;
@@ -378,7 +387,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
     if (rays.size() >= 2 && jba::triangulation_angle(rays.data(), rays.size(), &m.X[3 * t]) * 180.0 / kPi >= o.min_tri_angle_deg)
       continue;
     m.has_point[t] = 0;
-    for (std::int64_t k = m.tracks.begin[t]; k < m.tracks.begin[t + 1]; ++k) m.obs_in[k] = 0;
+    for (std::int64_t k = m.tracks.begin[t]; k < m.tracks.begin[t + 1]; ++k) m.obs_in[k] = m.obs_filtered[k] = 0;
   }
 
   // The problem as it stands after the filter: kept observations only.
@@ -553,6 +562,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.X.assign(3 * m.tracks.size(), 0.0);
   m.obs_in.assign(n_obs, 0);
   m.obs_dead.assign(n_obs, 0);
+  m.obs_filtered.assign(n_obs, 0);
   m.split_tried.assign(m.tracks.size(), 0);
   m.cams.model = c.model;
   m.cams.intrinsics = c.intrinsics;

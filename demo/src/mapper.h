@@ -64,6 +64,10 @@ struct MapperOptions {
   std::size_t pnp_batch = 4;               // images tried in one PnP call
   int local_iterations = 25;               // each adjustment after a registration
   int final_iterations = 50;
+  // Cauchy scale of the adjustments, pixels; 0: max_reproj_px, so every observation the
+  // filter accepts counts fully (D139). A smaller scale fits each point to the majority
+  // of its keypoints and leaves valid ones, far from the image centre, to the filter.
+  double loss_scale = 0.0;
 };
 
 // Thresholds for keypoints whose noise is sigma pixels per coordinate. The defaults hold

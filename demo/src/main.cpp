@@ -183,6 +183,7 @@ int run(const std::vector<std::string>& args) {
     else if (a == "--check") check = true;
     else if (a == "--two-view-tracks") two_view = true;
     else if (a == "--tri-angle" && has_value) tri_angle = std::atof(args[++i].c_str());
+
     else return usage();
   }
   if ((intrinsics != "capture" && intrinsics != "reference") || (thresholds != "colmap" && thresholds != "demo"))

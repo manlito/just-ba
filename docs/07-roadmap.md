@@ -554,9 +554,9 @@ to 8, on the CPU and with Metal for both libraries, and in the browser on WebGPU
 the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. It reads
 COLMAP's database and model (D136), checked by a round trip without COLMAP, and was
 compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D137), then brought
-to within 2.4 and 8.7 percent of COLMAP's point counts by how it handles tracks
-(D138). Left: the margins (proposed in D138), and publishing the demo (how the docs
-workflow gets the module is still open).
+to within 1.1 and 2.3 percent of COLMAP's point counts by how it handles tracks and
+its loss (D138, D139). Left: the margins (proposed in D139), and publishing the demo
+(how the docs workflow gets the module is still open).
 
 ### First comparison with COLMAP (2026-11-16)
 
@@ -627,6 +627,37 @@ On Gerrard Hall 3.5 % of our points still hold observations that COLMAP divides
 between points, and 4,782 of COLMAP's points have no observation in ours; splitting
 from two images instead of three gained 757 points and split more of COLMAP's, so it
 was not kept. The generated scenes pass as before (seeds 0 to 8, the noise sweep).
+
+### Gerrard Hall investigated (2026-11-16, D139)
+
+Investigated by Fable 5.2 and checked here (its numbers reproduce). Two causes left:
+
+- D138's 2° rule let a keypoint the 4 px filter had dropped rejoin its point at every
+  round, to be dropped again after the adjustment. It never became a leftover, so the
+  second point it belonged to was never made. A dropped keypoint now rejoins only
+  within the filter's 4 px, as COLMAP's track completion does; others keep 2°.
+- The adjustments' Cauchy loss at 2 px fitted each point to the majority of its
+  keypoints and left valid ones, further from the image centre, to the filter: refitted
+  by plain least squares under our poses, 96 % of COLMAP's points that we only partly
+  had fit within 4 px. The loss scale is now the filter's threshold (4 px).
+
+| | South Building, ours / COLMAP | Gerrard Hall, ours / COLMAP |
+|---|---|---|
+| Registered | 128 / 128 | 100 / 100 |
+| Rotation error, median / max | 0.0053° / 0.026° | 0.022° / 0.108° |
+| Camera centre error, median / max | 0.0022 % / 0.0087 % | 0.0098 % / 0.033 % |
+| Points | 99,276 / 100,410 (-1.1 %) | 65,569 / 67,099 (-2.3 %) |
+| Observations | 614,302 / 623,589 (-1.5 %) | 389,700 / 396,206 (-1.6 %) |
+| Mean track length | 6.19 / 6.21 (-0.3 %) | 5.94 / 5.90 (+0.7 %) |
+| Mean reprojection error | 0.601 / 0.607 px | 1.133 / 1.133 px |
+| COLMAP points split over several of ours | 1,689 (1.7 %) | 2,842 (4.4 %) |
+
+Keeping the 2 px loss with a last adjustment without one reaches -0.7 % of Gerrard
+Hall's points, but by splitting more of COLMAP's points (3,502) with worse poses and
+track length, so it was not kept. Still not reproduced: about 2,700 of COLMAP's points,
+mostly two-view, 1,437 of them in tracks that span two images in ours, which suggests a
+correspondence COLMAP keeps and we drop. Why COLMAP keeps whole the points we split
+could not be determined without running COLMAP's own mapper step by step.
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
