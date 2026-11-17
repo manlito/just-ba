@@ -555,9 +555,10 @@ the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. It read
 COLMAP's database and model (D136), checked by a round trip without COLMAP, and was
 compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D137), then brought
 to within 1.1 and 2.3 percent of COLMAP's point counts by how it handles tracks and
-its loss (D138, D139), then compared on six ETH3D scenes with ground truth (D140).
-Left: COLMAP's whole model of ETH3D's office, the margins (proposed in D139), and
-publishing the demo (how the docs workflow gets the module is still open).
+its loss (D138, D139), then compared on six ETH3D scenes with ground truth (D140):
+equally accurate, given COLMAP's calibration. Left: refining intrinsics in the mapper,
+without which it fails on uncalibrated images (D141); the margins (proposed in D139);
+and publishing the demo (how the docs workflow gets the module is still open).
 
 ### First comparison with COLMAP (2026-11-16)
 
@@ -670,35 +671,45 @@ courtyard (four calibrations: a camera per image). Two failures they showed were
 meadow registered 10 of 15 images (our pair gate wanted 30 inliers where COLMAP's
 verification keeps 15) and office 7 of 26 (our first model got stuck where COLMAP's
 did, and COLMAP then grew a second model of all 26; the mapper now does the same).
-Our side on Metal, all eight scenes with the same build:
+COLMAP was run on office a second time (2026-11-17) to get its 26-image model, which
+`colmap_compare.sh` had passed over for the 7-image first one. Our side on Metal, all
+eight scenes with the same build:
 
 | Scene | Images | Registered, ours / COLMAP | Rotation median / max | Centre median / max | Points | Observations | Track length | Reprojection, ours / COLMAP | COLMAP points split | Our run |
 |---|---|---|---|---|---|---|---|---|---|---|
-| south-building | 128 | 128 / 128 | 0.0057° / 0.026° | 0.0023 % / 0.009 % | 100,366 (-0.0 %) | 614,721 (-1.4 %) | 6.12 (-1.4 %) | 0.599 / 0.607 px | 2,073 (2.1 %) | 7.4 s |
+| south-building | 128 | 128 / 128 | 0.0057° / 0.026° | 0.0023 % / 0.009 % | 100,366 (-0.0 %) | 614,721 (-1.4 %) | 6.12 (-1.4 %) | 0.599 / 0.607 px | 2,073 (2.1 %) | 7.5 s |
 | gerrard-hall | 100 | 100 / 100 | 0.0197° / 0.097° | 0.0087 % / 0.029 % | 65,714 (-2.1 %) | 389,979 (-1.6 %) | 5.93 (+0.5 %) | 1.133 / 1.133 px | 2,869 (4.3 %) | 4.1 s |
 | pipes | 14 | 14 / 14 | 0.0208° / 0.067° | 0.0344 % / 0.073 % | 3,240 (-2.1 %) | 12,182 (-1.3 %) | 3.76 (+0.9 %) | 0.603 / 0.602 px | 11 (0.3 %) | 0.2 s |
-| meadow | 15 | 14 / 14 | 0.0382° / 0.413° | 0.0405 % / 0.116 % | 736 (-0.4 %) | 2,561 (+2.4 %) | 3.48 (+2.9 %) | 0.883 / 0.789 px | 0 (0.0 %) | 0.2 s |
-| office | 26 | 26 / 7 | 0.0268° / 0.151° | 0.2104 % / 0.851 % | 7,585 (+53.3 %) | 27,595 (+67.4 %) | 3.64 (+9.2 %) | 0.754 / 0.524 px | 0 (0.0 %) | 0.4 s |
-| kicker | 31 | 30 / 30 | 0.0083° / 0.061° | 0.0122 % / 0.045 % | 12,618 (-2.0 %) | 55,710 (-1.9 %) | 4.42 (+0.1 %) | 0.867 / 0.856 px | 285 (2.2 %) | 0.6 s |
-| courtyard | 38 | 38 / 38 | 0.0082° / 0.084° | 0.0099 % / 0.095 % | 24,922 (-3.1 %) | 121,711 (-1.9 %) | 4.88 (+1.3 %) | 0.697 / 0.695 px | 230 (0.9 %) | 0.8 s |
+| meadow | 15 | 14 / 14 | 0.0382° / 0.413° | 0.0405 % / 0.116 % | 736 (-0.4 %) | 2,561 (+2.4 %) | 3.48 (+2.9 %) | 0.883 / 0.789 px | 0 (0.0 %) | 0.1 s |
+| office | 26 | 26 / 26 | 0.0231° / 0.074° | 0.0613 % / 0.256 % | 7,580 (-0.6 %) | 27,793 (-0.4 %) | 3.67 (+0.2 %) | 0.723 / 0.720 px | 16 (0.2 %) | 0.4 s |
+| kicker | 31 | 30 / 30 | 0.0083° / 0.061° | 0.0122 % / 0.045 % | 12,618 (-2.0 %) | 55,710 (-1.9 %) | 4.42 (+0.1 %) | 0.867 / 0.856 px | 285 (2.2 %) | 0.5 s |
+| courtyard | 38 | 38 / 38 | 0.0082° / 0.084° | 0.0099 % / 0.095 % | 24,922 (-3.1 %) | 121,711 (-1.9 %) | 4.88 (+1.3 %) | 0.697 / 0.695 px | 230 (0.9 %) | 0.9 s |
 | delivery_area | 44 | 44 / 44 | 0.0121° / 0.039° | 0.0067 % / 0.059 % | 30,738 (-0.5 %) | 128,719 (-1.0 %) | 4.19 (-0.5 %) | 0.647 / 0.650 px | 261 (0.8 %) | 1.0 s |
 
 | Scene | Truth images | Ours: registered, rotation median / max, centre median | COLMAP: registered, rotation median / max, centre median |
 |---|---|---|---|
 | pipes | 14 | 14, 0.164° / 0.283°, 5.0 mm (0.161 %) | 14, 0.127° / 0.271°, 4.9 mm (0.156 %) |
 | meadow | 15 | 14, 0.128° / 1.106°, 31.7 mm (0.136 %) | 14, 0.105° / 0.702°, 32.1 mm (0.138 %) |
-| office | 26 | 26, 0.411° / 0.922°, 11.7 mm (0.547 %) | 7, 0.265° / 0.593°, 6.7 mm (0.314 %) |
+| office | 26 | 26, 0.135° / 0.662°, 10.0 mm (0.469 %) | 26, 0.133° / 0.711°, 10.6 mm (0.496 %) |
 | kicker | 31 | 30, 0.066° / 0.163°, 18.2 mm (0.223 %) | 30, 0.064° / 0.184°, 17.9 mm (0.220 %) |
 | courtyard | 38 | 38, 0.076° / 0.182°, 33.7 mm (0.225 %) | 38, 0.072° / 0.182°, 33.6 mm (0.224 %) |
 | delivery_area | 44 | 44, 0.092° / 0.198°, 28.6 mm (0.238 %) | 44, 0.091° / 0.202°, 28.4 mm (0.235 %) |
 
 Points, observations and track length are ours, with our difference from COLMAP's.
-Against the ground truth (metres), both systems reach the same accuracy on the five
-scenes where both have the same images: median rotation 0.066 to 0.164° against 0.064
-to 0.127°, median centre 5 to 34 mm against 5 to 34 mm. Office is not comparable yet:
-COLMAP's model in the capture file is its 7-image first model (`colmap_compare.sh`
-took `sparse/0`; it now takes the model with the most images), so its row against
-COLMAP is meaningless, and our 26-image reconstruction used that model's calibration.
+Against the ground truth (metres) the two systems are equally accurate on all six
+ETH3D scenes: median rotation 0.066 to 0.164° against 0.064 to 0.133°, median centre
+5 to 34 mm against 5 to 34 mm.
+
+These hold with COLMAP's calibration. Our mapper keeps intrinsics fixed and uses the
+reference's, refined by COLMAP's own reconstruction (D136). Given the database's
+initial intrinsics instead (`--intrinsics capture`), it fails on every ETH3D scene (6
+to 37 of 14 to 44 images, median rotation 10 to 75°): their images carry no focal
+length, so the initial guess is COLMAP's default, 2.2 times the true one, which COLMAP
+corrects as it reconstructs. On South Building and Gerrard Hall, whose initial focal
+lengths come from the images' metadata and are 3 and 5 % off, it registers every
+image but the median rotation error against COLMAP grows to 0.33 and 1.0°. Parity
+without COLMAP's calibration needs the mapper to refine focal length and distortion,
+as COLMAP's does (D141).
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
