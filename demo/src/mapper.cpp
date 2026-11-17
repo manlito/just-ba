@@ -77,8 +77,72 @@ struct Map {
   std::vector<char> has_point;                  // per track
   std::vector<double> X;                        // 3 per track
   std::vector<char> obs_in;                     // per observation: an inlier of its track's point
+  std::vector<int> track_images;                // per track: the images it spans
+  std::vector<char> obs_dead;                   // per observation: moved to a track split off
+  std::vector<std::int64_t> split_tried;        // per track: leftovers at its last failed split
   std::size_t n_images() const { return registered.size(); }
 };
+
+// The tracks: connected components of the verified matches, two keypoints or more,
+// in a fixed order. A component with two keypoints in one image (a wrong match joined
+// two points, or a repeated pattern) is kept, unlike the library's build_tracks with
+// ConflictPolicy::Drop, which has no poses to split it with here: triangulation takes
+// at most one keypoint per image (update_points), so the wrong ones stay out (D138).
+jba::Tracks components(const jba::Keypoints& kp, const std::vector<std::int32_t>& matches, jba::TrackStats& st) {
+  const std::size_t n = static_cast<std::size_t>(kp.begin.back());
+  std::vector<std::int64_t> parent(n);
+  for (std::size_t i = 0; i < n; ++i) parent[i] = static_cast<std::int64_t>(i);
+  auto find = [&](std::int64_t x) {
+    while (parent[static_cast<std::size_t>(x)] != x) {
+      parent[static_cast<std::size_t>(x)] = parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(x)])];
+      x = parent[static_cast<std::size_t>(x)];
+    }
+    return x;
+  };
+  std::vector<char> matched(n, 0);
+  for (std::size_t k = 0; k + 3 < matches.size(); k += 4) {
+    const std::int64_t a = kp.begin[static_cast<std::size_t>(matches[k])] + matches[k + 1];
+    const std::int64_t b = kp.begin[static_cast<std::size_t>(matches[k + 2])] + matches[k + 3];
+    matched[static_cast<std::size_t>(a)] = matched[static_cast<std::size_t>(b)] = 1;
+    const std::int64_t ra = find(a), rb = find(b);
+    if (ra != rb) parent[static_cast<std::size_t>(std::max(ra, rb))] = std::min(ra, rb);
+  }
+  // Members of each root, in keypoint order; components ordered by their first keypoint.
+  std::vector<std::int64_t> count(n, 0), start(n + 1, 0);
+  for (std::size_t i = 0; i < n; ++i)
+    if (matched[i]) ++count[static_cast<std::size_t>(find(static_cast<std::int64_t>(i)))];
+  std::vector<std::int32_t> image_of(n);
+  for (std::size_t i = 0; i + 1 < kp.begin.size(); ++i)
+    for (std::int64_t g = kp.begin[i]; g < kp.begin[i + 1]; ++g) image_of[static_cast<std::size_t>(g)] = static_cast<std::int32_t>(i);
+  jba::Tracks t;
+  std::vector<std::int64_t> slot(n, -1);  // root -> its track
+  for (std::size_t i = 0; i < n; ++i) {
+    if (!matched[i] || find(static_cast<std::int64_t>(i)) != static_cast<std::int64_t>(i) || count[i] < 2) continue;
+    slot[i] = static_cast<std::int64_t>(t.size());
+    t.begin.push_back(t.begin.back() + count[i]);
+  }
+  t.image.resize(static_cast<std::size_t>(t.begin.back()));
+  t.keypoint.resize(t.image.size());
+  std::vector<std::int64_t> fill(t.begin.begin(), t.begin.end() - 1);
+  for (std::size_t i = 0; i < n; ++i) {
+    if (!matched[i]) continue;
+    const std::int64_t s = slot[static_cast<std::size_t>(find(static_cast<std::int64_t>(i)))];
+    if (s < 0) continue;
+    const std::size_t at = static_cast<std::size_t>(fill[static_cast<std::size_t>(s)]++);
+    t.image[at] = image_of[i];
+    t.keypoint[at] = static_cast<std::int32_t>(static_cast<std::int64_t>(i) - kp.begin[static_cast<std::size_t>(image_of[i])]);
+  }
+  st = {};
+  st.components = t.size();
+  st.tracks = t.size();
+  for (std::size_t c = 0; c < t.size(); ++c)
+    for (std::int64_t k = t.begin[c] + 1; k < t.begin[c + 1]; ++k)
+      if (t.image[static_cast<std::size_t>(k)] == t.image[static_cast<std::size_t>(k - 1)]) {
+        ++st.conflicted;
+        break;
+      }
+  return t;
+}
 
 // Reprojection error in pixels, negative when the point cannot be projected.
 double reprojection_error(const Map& m, int image, const double* xy, const double* X) {
@@ -92,44 +156,138 @@ double reprojection_error(const Map& m, int image, const double* xy, const doubl
   return std::hypot(u - xy[0], v - xy[1]);
 }
 
+// A track whose point leaves keypoints of three registered images or more unused may
+// hold a second point (two points joined by a wrong match, or a repeated pattern):
+// those keypoints are triangulated on their own and, if they make a point, move to a
+// new track, as the library's ConflictPolicy::Repair splits tracks once poses exist.
+// Three images, so stray wrong matches do not become points (D138).
+void split_leftovers(Map& m, std::size_t t, const jba::TriangulationOptions& tri) {
+  const std::int64_t b = m.tracks.begin[t], e = m.tracks.begin[t + 1];
+  std::vector<jba::Ray> rays;
+  std::vector<std::int64_t> idx;
+  std::vector<std::int32_t> group;
+  int images = 0;
+  for (std::int64_t k = b; k < e; ++k) {
+    const int image = m.tracks.image[k];
+    jba::Ray r;
+    if (m.obs_in[k] || m.obs_dead[k] || !m.registered[image] ||
+        !jba::keypoint_ray(m.cams, image, m.keypoints.at(image, m.tracks.keypoint[k]), r))
+      continue;
+    images += group.empty() || group.back() != image;  // track entries are in image order
+    rays.push_back(r);
+    idx.push_back(k);
+    group.push_back(image);
+  }
+  if (images < 3 || static_cast<std::int64_t>(idx.size()) <= m.split_tried[t]) return;
+  const jba::TriangulationResult res = jba::triangulate_robust(rays, tri, &group);
+  if (!res.ok || res.num_inliers < 3) {
+    m.split_tried[t] = static_cast<std::int64_t>(idx.size());
+    return;
+  }
+  const std::int32_t nt = static_cast<std::int32_t>(m.tracks.size());
+  for (std::size_t q = 0; q < idx.size(); ++q) {
+    if (!res.inlier[q]) continue;
+    const std::int64_t k = idx[q];
+    const std::int64_t nk = static_cast<std::int64_t>(m.tracks.image.size());
+    m.tracks.image.push_back(m.tracks.image[k]);
+    m.tracks.keypoint.push_back(m.tracks.keypoint[k]);
+    m.obs_track.push_back(nt);
+    m.obs_in.push_back(1);
+    m.obs_dead.push_back(0);
+    m.image_obs[m.tracks.image[k]].push_back(nk);
+    m.obs_dead[k] = 1;
+  }
+  m.tracks.begin.push_back(static_cast<std::int64_t>(m.tracks.image.size()));
+  // The images the original track still spans (the two-view rule reads it).
+  int left = 0, last = -1;
+  for (std::int64_t k = b; k < e; ++k)
+    if (!m.obs_dead[k] && m.tracks.image[k] != last) {
+      last = m.tracks.image[k];
+      ++left;
+    }
+  m.track_images[t] = left;
+  m.has_point.push_back(1);
+  m.X.insert(m.X.end(), res.X, res.X + 3);
+  m.track_images.push_back(res.num_inliers);
+  m.split_tried.push_back(0);
+}
+
 // New points for tracks that have none, and new observations for points that exist,
-// from the images registered so far.
-void update_points(Map& m, const MapperOptions& o) {
+// from the images registered so far. `split`: also split tracks (split_leftovers);
+// only right after an adjustment, as a split is never undone and poses fresh from PnP
+// could agree on a duplicate of a point.
+void update_points(Map& m, const MapperOptions& o, bool split) {
   jba::TriangulationOptions tri;
-  // The library's default (2 degrees) is for noisy tracker poses; here poses come from
-  // PnP and adjustment, so the angle is the reprojection threshold seen through the camera.
-  tri.max_angle_error_deg = std::atan(o.max_reproj_px / focal(*m.capture)) * 180.0 / kPi;
+  // The library's default (2 degrees) is for noisy tracker poses. Without an angle of
+  // its own, the reprojection threshold seen through the camera: poses here come from
+  // PnP and adjustment.
+  tri.max_angle_error_deg = o.tri_max_angle_error_deg > 0.0
+                                ? o.tri_max_angle_error_deg
+                                : std::atan(o.max_reproj_px / focal(*m.capture)) * 180.0 / kPi;
+  const double max_angle_rad = tri.max_angle_error_deg * kPi / 180.0;
   tri.min_tri_angle_deg = o.min_tri_angle_deg;
   tri.min_views = 2;
   std::vector<jba::Ray> rays;
   std::vector<std::int64_t> idx;
+  std::vector<std::int32_t> group;
+  std::vector<std::pair<double, std::int64_t>> cand;  // (error, observation)
+  std::vector<int> used;                               // images with an inlier in the track
   for (std::size_t t = 0; t < m.tracks.size(); ++t) {
     const std::int64_t b = m.tracks.begin[t], e = m.tracks.begin[t + 1];
+    if (o.ignore_two_view_tracks && m.track_images[t] <= 2) continue;
     if (m.has_point[t]) {
+      // Continue the track: each registered image without an inlier gets its closest
+      // keypoint, if within the threshold (an angle when one is set, else pixels).
+      used.clear();
+      cand.clear();
+      for (std::int64_t k = b; k < e; ++k)
+        if (m.obs_in[k]) used.push_back(m.tracks.image[k]);
       for (std::int64_t k = b; k < e; ++k) {
         const int image = m.tracks.image[k];
-        if (m.obs_in[k] || !m.registered[image]) continue;
-        const double err = reprojection_error(m, image, m.keypoints.at(image, m.tracks.keypoint[k]), &m.X[3 * t]);
-        if (err >= 0.0 && err <= o.max_reproj_px) m.obs_in[k] = 1;
+        if (m.obs_in[k] || m.obs_dead[k] || !m.registered[image] || std::find(used.begin(), used.end(), image) != used.end())
+          continue;
+        const double* xy = m.keypoints.at(image, m.tracks.keypoint[k]);
+        const double err = reprojection_error(m, image, xy, &m.X[3 * t]);
+        if (err < 0.0) continue;
+        if (o.tri_max_angle_error_deg > 0.0) {
+          jba::Ray r;
+          if (!jba::keypoint_ray(m.cams, image, xy, r) || jba::ray_angle_error(r, &m.X[3 * t]) > max_angle_rad) continue;
+        } else if (err > o.max_reproj_px) {
+          continue;
+        }
+        cand.emplace_back(err, k);
       }
+      std::sort(cand.begin(), cand.end());
+      for (const auto& [err, k] : cand) {
+        const int image = m.tracks.image[k];
+        if (std::find(used.begin(), used.end(), image) != used.end()) continue;
+        used.push_back(image);
+        m.obs_in[k] = 1;
+      }
+      if (split) split_leftovers(m, t, tri);
       continue;
     }
     rays.clear();
     idx.clear();
+    group.clear();
     for (std::int64_t k = b; k < e; ++k) {
       const int image = m.tracks.image[k];
       jba::Ray r;
-      if (!m.registered[image] || !jba::keypoint_ray(m.cams, image, m.keypoints.at(image, m.tracks.keypoint[k]), r))
+      if (m.obs_dead[k] || !m.registered[image] ||
+          !jba::keypoint_ray(m.cams, image, m.keypoints.at(image, m.tracks.keypoint[k]), r))
         continue;
       rays.push_back(r);
       idx.push_back(k);
+      group.push_back(image);
     }
     if (rays.size() < 2) continue;
-    const jba::TriangulationResult res = jba::triangulate_robust(rays, tri);
+    // At most one inlier per image: a track may hold two keypoints of one image.
+    const jba::TriangulationResult res = jba::triangulate_robust(rays, tri, &group);
     if (!res.ok) continue;
     m.has_point[t] = 1;
     for (int d = 0; d < 3; ++d) m.X[3 * t + d] = res.X[d];
     for (std::size_t k = 0; k < idx.size(); ++k) m.obs_in[idx[k]] = res.inlier[k];
+    if (split) split_leftovers(m, t, tri);
   }
 }
 
@@ -365,18 +523,15 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
       if (run.pair_inliers[offsets[i] + k]) verified.insert(verified.end(), {p.a, p.ka[k], p.b, p.kb[k]});
   }
 
-  // -- 2. Tracks. No poses yet, so only the combinatorial stage runs: a component with
-  // two keypoints in one image is dropped.
+  // -- 2. Tracks: the connected components of the verified matches. No poses yet; a
+  // component with two keypoints in one image is kept and sorted out at triangulation.
   t0 = Clock::now();
   m.keypoints.begin.push_back(0);
   for (std::size_t i = 0; i < n_img; ++i) {
     m.keypoints.xy.insert(m.keypoints.xy.end(), c.keypoints[i].begin(), c.keypoints[i].end());
     m.keypoints.begin.push_back(static_cast<std::int64_t>(m.keypoints.xy.size() / 2));
   }
-  jba::TrackOptions track_options;
-  track_options.min_views = 2;
-  track_options.conflict_policy = jba::ConflictPolicy::Drop;
-  m.tracks = jba::build_tracks(m.keypoints, verified, track_options);
+  m.tracks = components(m.keypoints, verified, run.track_stats);
   run.tracks = m.tracks.size();
   run.time.tracks = seconds_since(t0);
   const std::size_t n_obs = m.tracks.image.size();
@@ -387,9 +542,18 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
       m.obs_track[k] = static_cast<std::int32_t>(t);
       m.image_obs[m.tracks.image[k]].push_back(k);
     }
+  m.track_images.assign(m.tracks.size(), 0);
+  for (std::size_t t = 0; t < m.tracks.size(); ++t) {
+    int n = 0;
+    for (std::int64_t k = m.tracks.begin[t]; k < m.tracks.begin[t + 1]; ++k)
+      n += k == m.tracks.begin[t] || m.tracks.image[k] != m.tracks.image[k - 1];
+    m.track_images[t] = n;
+  }
   m.has_point.assign(m.tracks.size(), 0);
   m.X.assign(3 * m.tracks.size(), 0.0);
   m.obs_in.assign(n_obs, 0);
+  m.obs_dead.assign(n_obs, 0);
+  m.split_tried.assign(m.tracks.size(), 0);
   m.cams.model = c.model;
   m.cams.intrinsics = c.intrinsics;
   m.cams.image_intrinsics = c.image_intrinsics;
@@ -402,12 +566,14 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     run.problem = std::move(a.problem);
     run.image_of = std::move(a.image_of);
     run.obs_keypoint = std::move(a.obs_keypoint);
+    run.point_track = std::move(a.track_of);
+    run.all_tracks = m.tracks;
     run.mean_error_px = a.mean_error_px;
     run.time.total = seconds_since(t_start);
   };
-  auto timed_points = [&] {
+  auto timed_points = [&](bool split) {
     const auto t = Clock::now();
-    update_points(m, o);
+    update_points(m, o, split);
     run.time.triangulate += seconds_since(t);
   };
   auto timed_adjust = [&](int iterations) {
@@ -436,20 +602,30 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   std::copy(run.pair_results[first].pose, run.pair_results[first].pose + 7,
             &m.cams.poses[7 * static_cast<std::size_t>(run.first_b)]);
   m.registered[run.first_a] = m.registered[run.first_b] = 1;
-  timed_points();
+  timed_points(false);
   Adjusted last = timed_adjust(o.local_iterations);
   report(on_step, "first pair", {run.first_a, run.first_b}, m, last);
 
   // -- 4. Register the remaining images. Those that see the most triangulated points go
   // first; up to pnp_batch are resected in one call, all against the same map.
   std::vector<int> failed_with(n_img, -1);  // points an image saw when its resection last failed
+  // The points an image sees: distinct tracks with a point. An image can hold two
+  // keypoints of one track (a conflicted track); both go to PnP, which keeps one, but
+  // the point counts once in the ordering and in the inlier-ratio test.
+  std::vector<std::int32_t> seen_tracks;
+  auto points_seen = [&](std::size_t image) {
+    seen_tracks.clear();
+    for (std::int64_t k : m.image_obs[image])
+      if (!m.obs_dead[k] && m.has_point[m.obs_track[k]]) seen_tracks.push_back(m.obs_track[k]);
+    std::sort(seen_tracks.begin(), seen_tracks.end());
+    return static_cast<int>(std::unique(seen_tracks.begin(), seen_tracks.end()) - seen_tracks.begin());
+  };
   for (;;) {
-    timed_points();
+    timed_points(true);
     std::vector<std::pair<int, int>> seen;  // (points seen, image)
     for (std::size_t i = 0; i < n_img; ++i) {
       if (m.registered[i]) continue;
-      int n = 0;
-      for (std::int64_t k : m.image_obs[i]) n += m.has_point[m.obs_track[k]];
+      const int n = points_seen(i);
       // An image that failed is tried again only once it sees more points than it did then.
       if (n >= static_cast<int>(o.min_pnp_inliers) && n > failed_with[i]) seen.emplace_back(n, static_cast<int>(i));
     }
@@ -469,7 +645,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
       cam.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(image))));
       for (std::int64_t ob : m.image_obs[image]) {
         const std::int32_t t = m.obs_track[ob];
-        if (!m.has_point[t]) continue;
+        if (m.obs_dead[ob] || !m.has_point[t]) continue;
         const double* kp = m.keypoints.at(image, m.tracks.keypoint[ob]);
         xy.insert(xy.end(), kp, kp + 2);
         xyz.insert(xyz.end(), &m.X[3 * t], &m.X[3 * t] + 3);
@@ -501,7 +677,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     std::vector<std::int32_t> added;
     for (std::size_t k = 0; k < n_cand; ++k) {
       const int image = seen[k].second;
-      const std::uint32_t n = off[k + 1] - off[k];
+      const int n = seen[k].first;  // distinct points, not correspondences
       const bool ok = out[k].status == JPO_OK && out[k].n_inliers >= o.min_pnp_inliers &&
                       out[k].n_inliers >= o.min_pnp_inlier_ratio * static_cast<double>(n);
       if (!ok) {
@@ -514,13 +690,13 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
       added.push_back(image);
     }
     if (added.empty()) continue;  // the rejected images wait until the map grows; others get their turn
-    timed_points();
+    timed_points(false);
     last = timed_adjust(o.local_iterations);
     report(on_step, "register", added, m, last);
   }
 
   // -- 5. Final adjustment: complete the tracks, adjust, filter, and adjust what is left.
-  timed_points();
+  timed_points(true);
   last = timed_adjust(o.final_iterations);
   last = timed_adjust(o.final_iterations);
   report(on_step, "final", {}, m, last);

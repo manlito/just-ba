@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "align.h"
@@ -45,6 +47,57 @@ Comparison compare(const Capture& capture, const Reference& ref, const Reconstru
     ++counted;
   }
   c.reference.mean_error_px = counted ? sum / static_cast<double>(counted) : 0.0;
+
+  // Track agreement: the reference's point of each (image, keypoint), then ours.
+  auto key = [](std::int64_t image, std::int64_t keypoint) { return (image << 32) | keypoint; };
+  std::unordered_map<std::int64_t, std::int32_t> ref_point;
+  ref_point.reserve(ref.obs_image.size());
+  for (std::size_t k = 0; k < ref.obs_image.size(); ++k) ref_point[key(ref.obs_image[k], ref.obs_keypoint[k])] = ref.obs_point[k];
+  std::unordered_map<std::int32_t, std::unordered_set<std::int32_t>> ours_of_ref;  // reference point -> our points
+  std::unordered_map<std::int32_t, std::unordered_set<std::int32_t>> refs_of_ours;  // our point -> reference points
+  std::unordered_set<std::int64_t> ours_keys;
+  for (std::size_t k = 0; k < r.problem.num_observations(); ++k) {
+    const std::int64_t image = r.image_of[static_cast<std::size_t>(r.problem.obs_image[k])];
+    const std::int64_t kk = key(image, r.obs_keypoint[k]);
+    ours_keys.insert(kk);
+    const auto it = ref_point.find(kk);
+    if (it == ref_point.end()) {
+      ++c.ours_only_obs;
+      continue;
+    }
+    ++c.shared_obs;
+    ours_of_ref[it->second].insert(r.problem.obs_point[k]);
+    refs_of_ours[r.problem.obs_point[k]].insert(it->second);
+  }
+  std::unordered_map<std::int64_t, std::int32_t> track_of_key;  // our tracks' keypoints
+  for (std::size_t t = 0; t < r.all_tracks.size(); ++t)
+    for (std::int64_t k = r.all_tracks.begin[t]; k < r.all_tracks.begin[t + 1]; ++k)
+      track_of_key[key(r.all_tracks.image[k], r.all_tracks.keypoint[k])] = static_cast<std::int32_t>(t);
+  std::unordered_set<std::int32_t> tracks_with_point(r.point_track.begin(), r.point_track.end());
+  for (const auto& [kk, p] : ref_point) {
+    if (ours_keys.count(kk)) continue;
+    ++c.reference_only_obs;
+    const auto t = track_of_key.find(kk);
+    if (t == track_of_key.end()) ++c.missing_untracked;
+    else if (tracks_with_point.count(t->second)) ++c.missing_filtered;
+    else ++c.missing_untriangulated;
+  }
+  std::vector<int> obs_per_point(r.problem.num_points(), 0);
+  for (std::size_t k = 0; k < r.problem.num_observations(); ++k) ++obs_per_point[static_cast<std::size_t>(r.problem.obs_point[k])];
+  for (std::size_t j = 0; j < obs_per_point.size(); ++j) {
+    if (refs_of_ours.count(static_cast<std::int32_t>(j))) continue;
+    ++c.ours_only_points;
+    c.ours_only_two_view += obs_per_point[j] == 2;
+  }
+  std::size_t total = 0;
+  for (const auto& [p, ours] : ours_of_ref) {
+    total += ours.size();
+    c.reference_points_split += ours.size() > 1;
+  }
+  c.reference_points_seen = ours_of_ref.size();
+  c.ours_per_reference_point = c.reference_points_seen ? static_cast<double>(total) / static_cast<double>(c.reference_points_seen) : 0.0;
+  c.our_points_seen = refs_of_ours.size();
+  for (const auto& [p, refs] : refs_of_ours) c.our_points_joined += refs.size() > 1;
 
   // Poses of the images both registered.
   std::vector<double> ours_c, ref_c, ours_q, ref_q, all_ref_c;

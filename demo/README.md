@@ -8,7 +8,7 @@ not, and a default build does not look for it.
 
 | File | What it is |
 |---|---|
-| `src/mapper.h`, `src/mapper.cpp` | The mapper: pair verification, first pair, registration, triangulation, adjustment and filtering. Ported from poselib-gpu's incremental test, using only its public header `jpo.h`. |
+| `src/mapper.h`, `src/mapper.cpp` | The mapper: pair verification, tracks (connected components of the verified matches, split by triangulation where a wrong match joined two points; D138), first pair, registration, triangulation, adjustment and filtering. Ported from poselib-gpu's incremental test, using only its public header `jpo.h`. |
 | `src/scenes.h`, `src/scenes.cpp` | Generated captures with ground truth: orbit (16 images), wall walk (14), camera grid (13), with keypoint noise, wrong matches and pairs that do not overlap. |
 | `src/evaluate.h`, `src/evaluate.cpp` | A reconstruction against its ground truth. |
 | `src/capture_io.h`, `src/capture_io.cpp`, `src/container.*` | The capture file (below), in the container of document 11. |
@@ -73,7 +73,10 @@ the generated scenes' own) and the reference's refined intrinsics (`--intrinsics
 capture` for the database's), and prints both sides: images registered, points,
 observations, mean track length, mean reprojection error; then, on the images both
 registered, rotation error after the best common rotation and camera-centre error
-after the best similarity, as a share of the extent of COLMAP's camera centres.
+after the best similarity, as a share of the extent of COLMAP's camera centres; then
+which keypoints each side groups into which point (points split or joined, and why
+the reference's observations are missing from ours). `--two-view-tracks` and
+`--tri-angle deg` undo two of COLMAP's rules, for experiments.
 `--export dir` writes our model in COLMAP's text format next to it. The margins of
 the pass condition are set after the first measurements (document 05).
 

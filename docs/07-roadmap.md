@@ -553,9 +553,10 @@ Its mapper reconstructs the three generated scenes within their thresholds at se
 to 8, on the CPU and with Metal for both libraries, and in the browser on WebGPU and
 the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. It reads
 COLMAP's database and model (D136), checked by a round trip without COLMAP, and was
-compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D137). Left: the
-margins (proposed in D137), track merging if the point counts are to match, and
-publishing the demo (how the docs workflow gets the module is still open).
+compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D137), then brought
+to within 2.4 and 8.7 percent of COLMAP's point counts by how it handles tracks
+(D138). Left: the margins (proposed in D138), and publishing the demo (how the docs
+workflow gets the module is still open).
 
 ### First comparison with COLMAP (2026-11-16)
 
@@ -591,6 +592,42 @@ not yet checked. The lower reprojection error follows from the shorter tracks. T
 times are not a speed comparison: COLMAP ran on the CPU, and our mapper adjusts every
 registered image and point after each step.
 
+### Tracks as COLMAP handles them (2026-11-16, D138)
+
+A diagnostic of which keypoints each side groups into which point (`jba_demo run`
+prints it) showed the gap was not missing track merging: our points were almost never
+split versions of COLMAP's (0.1 to 0.2 %). It had three causes, fixed in the mapper:
+
+- Tracks seen in only two images: COLMAP does not triangulate them by default; ours
+  were 60,000 of South Building's 153,000 points. Now ignored with COLMAP's thresholds.
+- Match groups with two keypoints in one image (4,470 and 3,656, holding 67,600 and
+  48,000 keypoints) were dropped whole. Now kept: triangulation takes at most one
+  keypoint per image, and leftovers spanning three images or more become a point of
+  their own after an adjustment.
+- Keypoints joined a point only within the 4 px threshold before the adjustment;
+  COLMAP accepts within 2° and filters at 4 px after. Now the same with COLMAP's
+  thresholds.
+
+Pair-gate and re-verification changes were tried and made no difference. Measured on
+capture files from a second COLMAP run (COLMAP does not repeat exactly: 100,410
+points against 100,374), adjustment on Metal:
+
+| | South Building, ours / COLMAP | Gerrard Hall, ours / COLMAP |
+|---|---|---|
+| Registered | 128 / 128 | 100 / 100 |
+| Rotation error, median / max | 0.0093° / 0.030° | 0.029° / 0.150° |
+| Camera centre error, median / max | 0.0049 % / 0.011 % | 0.0095 % / 0.043 % |
+| Points | 97,975 / 100,410 (-2.4 %) | 61,247 / 67,099 (-8.7 %) |
+| Observations | 609,603 / 623,589 (-2.2 %) | 374,940 / 396,206 (-5.4 %) |
+| Mean track length | 6.22 / 6.21 (+0.2 %) | 6.12 / 5.90 (+3.7 %) |
+| Mean reprojection error | 0.585 / 0.607 px | 1.069 / 1.133 px |
+| Our run on the Mac (Metal) | 7.5 s | 4.5 s |
+
+On Gerrard Hall 3.5 % of our points still hold observations that COLMAP divides
+between points, and 4,782 of COLMAP's points have no observation in ours; splitting
+from two images instead of three gained 757 points and split more of COLMAP's, so it
+was not kept. The generated scenes pass as before (seeds 0 to 8, the noise sweep).
+
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
 
@@ -610,7 +647,8 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 - Several Manhattan headings sharing one vertical, for buildings with angled wings.
 - Plane and 3D line constraints.
 - Stronger preconditioners.
-- Track completion and merging.
+- Track merging by geometry (points close in space with no match between them). The
+  demo's mapper splits and completes tracks (D138); nothing merges them.
 - WebAssembly and WebGPU backend.
 
 ## Decisions needed from the owner

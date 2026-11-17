@@ -5,7 +5,8 @@
 //     Reconstructs the generated scenes and compares each with its ground truth.
 //     --write: also writes each scene as a capture file (<dir>/<scene>.jbc), truth as reference.
 //
-//   jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo] [--check]
+//   jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo] [--two-view-tracks]
+//                [--tri-angle deg] [--check]
 //                [common options]
 //     Reconstructs a capture file (from demo/tools/colmap_capture.py) and, when it holds a
 //     reference reconstruction, compares with it (document 05, level 3).
@@ -34,7 +35,7 @@ int usage() {
                "usage: jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f]\n"
                "                      [--false-pairs n] [--write dir] [options]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
-               "                    [--check] [options]\n"
+               "                    [--two-view-tracks] [--tri-angle deg] [--check] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
                "         [--export dir] [-v]\n");
   return 2;
@@ -168,7 +169,8 @@ int run(const std::vector<std::string>& args) {
   if (args.empty()) return usage();
   const std::string path = args[0];
   std::string intrinsics = "reference", thresholds = "colmap";
-  bool check = false;
+  bool check = false, two_view = false;
+  double tri_angle = -1.0;
   Common c;
   for (std::size_t i = 1; i < args.size(); ++i) {
     const std::string& a = args[i];
@@ -179,12 +181,16 @@ int run(const std::vector<std::string>& args) {
     } else if (a == "--intrinsics" && has_value) intrinsics = args[++i];
     else if (a == "--thresholds" && has_value) thresholds = args[++i];
     else if (a == "--check") check = true;
+    else if (a == "--two-view-tracks") two_view = true;
+    else if (a == "--tri-angle" && has_value) tri_angle = std::atof(args[++i].c_str());
     else return usage();
   }
   if ((intrinsics != "capture" && intrinsics != "reference") || (thresholds != "colmap" && thresholds != "demo"))
     return usage();
   demo::MapperOptions& mo = c.mapper;
   if (thresholds == "colmap") demo::colmap_thresholds(mo);
+  if (two_view) mo.ignore_two_view_tracks = false;
+  if (tri_angle >= 0.0) mo.tri_max_angle_error_deg = tri_angle;
   if (!available(mo)) return 2;
 
   demo::CaptureFile file = demo::read_capture(path);
@@ -207,6 +213,8 @@ int run(const std::vector<std::string>& args) {
               r.pairs_kept, file.capture.pairs.size(), r.pairs_ok, r.pairs_degenerate, r.pairs_failed, r.tracks,
               r.pnp_calls, r.pnp_rejected);
   print_times(r);
+  std::printf("  tracks: %zu built, %zu of them with two keypoints in one image; %zu after splitting\n",
+              r.track_stats.components, r.track_stats.conflicted, r.all_tracks.size());
   if (!c.export_dir.empty()) export_model(c.export_dir, r, file.names, file.image_size);
 
   const std::size_t n_img = file.capture.num_images();
@@ -227,6 +235,20 @@ int run(const std::vector<std::string>& args) {
               "median %.4f %% (%.4g units), max %.4f %% of the extent of the reference's centres.\n",
               cmp.common, cmp.rot_median_deg, cmp.rot_max_deg, cmp.centre_median_pct, cmp.centre_median,
               cmp.centre_max_pct);
+  std::printf("\nTracks: %zu observations on both sides, %zu ours only, %zu the reference's only.\n"
+              "%zu reference points have shared observations; %zu of them (%.1f %%) are split over several of\n"
+              "ours, %.3f of ours each on average. %zu of our points share observations; %zu (%.1f %%) join\n"
+              "several reference points.\n",
+              cmp.shared_obs, cmp.ours_only_obs, cmp.reference_only_obs, cmp.reference_points_seen,
+              cmp.reference_points_split,
+              cmp.reference_points_seen ? 100.0 * cmp.reference_points_split / cmp.reference_points_seen : 0.0,
+              cmp.ours_per_reference_point, cmp.our_points_seen, cmp.our_points_joined,
+              cmp.our_points_seen ? 100.0 * cmp.our_points_joined / cmp.our_points_seen : 0.0);
+  std::printf("The reference's observations we lack: %zu filtered from one of our points, %zu in a track of ours\n"
+              "with no point, %zu in no track of ours. Our points sharing nothing with the reference: %zu\n"
+              "(%zu of them seen twice).\n",
+              cmp.missing_filtered, cmp.missing_untriangulated, cmp.missing_untracked, cmp.ours_only_points,
+              cmp.ours_only_two_view);
   if (!check) return r.ok() ? 0 : 1;
   // --check: the thresholds of the generated scenes, for tests.
   const bool pass = r.ok() && cmp.common == cmp.reference.registered && cmp.rot_median_deg < 0.5 &&

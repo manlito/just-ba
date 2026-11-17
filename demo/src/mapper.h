@@ -53,6 +53,14 @@ struct MapperOptions {
   double min_pnp_inlier_ratio = 0.25;
   double max_reproj_px = 4.0;              // the filter after each adjustment
   double min_tri_angle_deg = 1.5;
+  // Largest angle between a keypoint's ray and its point for the keypoint to join the
+  // point, at triangulation and when continuing a track, before the adjustment and its
+  // reprojection filter. 0: max_reproj_px seen through the camera.
+  double tri_max_angle_error_deg = 0.0;
+  // Tracks with only two observations are not triangulated (COLMAP's mapper does the
+  // same by default, Mapper.tri_ignore_two_view_tracks): they constrain little and are
+  // the likeliest to be a wrong match.
+  bool ignore_two_view_tracks = false;
   std::size_t pnp_batch = 4;               // images tried in one PnP call
   int local_iterations = 25;               // each adjustment after a registration
   int final_iterations = 50;
@@ -77,6 +85,8 @@ inline void colmap_thresholds(MapperOptions& o) {
   o.min_first_pair_inliers = 100;
   o.max_reproj_px = 4.0;
   o.min_tri_angle_deg = 1.5;
+  o.ignore_two_view_tracks = true;
+  o.tri_max_angle_error_deg = 2.0;  // COLMAP's create_max_angle_error and continue_max_angle_error
 }
 
 // The map after a step, for a caller that draws the reconstruction as it grows.
@@ -107,6 +117,9 @@ struct Reconstruction {
   jba::Problem problem;
   std::vector<std::int32_t> image_of;
   std::vector<std::int32_t> obs_keypoint;
+  std::vector<std::int32_t> point_track;  // per point of `problem`: its track in `all_tracks`
+  jba::Tracks all_tracks;                  // every track built from the verified matches
+  jba::TrackStats track_stats;             // of building them
   double mean_error_px = 0.0;
 
   // Pair verification.
@@ -116,7 +129,7 @@ struct Reconstruction {
   std::vector<char> pair_kept;
   int pairs_ok = 0, pairs_degenerate = 0, pairs_failed = 0, pairs_kept = 0;
 
-  std::size_t tracks = 0;
+  std::size_t tracks = 0;  // built from the matches, before any split
   int first_a = -1, first_b = -1;
   std::uint32_t first_inliers = 0;
   double first_angle_deg = 0.0;
