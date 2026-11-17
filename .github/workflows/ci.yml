@@ -208,6 +208,10 @@ jobs:
         run: cmake --build build --parallel
       - name: Test (WebGPU tests skip without an adapter)
         run: ctest --test-dir build --output-on-failure -j 4 -LE slow
+      # The kernels never run here, so Tint compiling them is the check on the WGSL
+      # (D132). An error if the test is missing, which it is when Tint is not found.
+      - name: WGSL compiles (Tint)
+        run: ctest --test-dir build --output-on-failure -V -R '^webgpu_wgsl_compiles$' --no-tests=error
 
   # The WebAssembly module for the browser (D124, D127): Emscripten 7.0.0 and
   # emdawnwebgpu from the same Dawn release, built only (no browser here).

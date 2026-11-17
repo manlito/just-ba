@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -371,7 +372,10 @@ class WebGpuDevice final : public gpu::Device {
     if (pass_) wgpuComputePassEncoderRelease(pass_);
     if (enc_) wgpuCommandEncoderRelease(enc_);
     if (bind_group_) wgpuBindGroupRelease(bind_group_);
-    for (WGPUBuffer b : {heap_, args_buf_, op_buf_, readback_})
+    report_repeats();
+    if (compare_group_) wgpuBindGroupRelease(compare_group_);
+    if (compare_) wgpuComputePipelineRelease(compare_);
+    for (WGPUBuffer b : {heap_, args_buf_, op_buf_, readback_, backup_, first_, compare_out_})
       if (b) wgpuBufferRelease(b);
   }
 
@@ -423,6 +427,7 @@ class WebGpuDevice final : public gpu::Device {
     checked("heap allocation failed (" + std::to_string(hd.size >> 20) + " MiB)",
             [&] { heap_ = wgpuDeviceCreateBuffer(c_.device, &hd); });
     if (heap_ == nullptr) throw gpu::DoesNotFit("webgpu: heap allocation failed");
+    heap_size_ = hd.size;
     auto* mapped = static_cast<unsigned char*>(wgpuBufferGetMappedRange(heap_, 0, hd.size));
     if (mapped == nullptr) fail("heap not mapped");
     for (Range& r : ranges_) {
@@ -544,9 +549,16 @@ class WebGpuDevice final : public gpu::Device {
     o.radius = op.radius;
     if (groups > std::uint64_t{kMaxGroupsX} * kMaxGroupsX) fail("dispatch too large");
     o.groups = static_cast<std::uint32_t>(groups);
-    std::memcpy(ops_.data() + std::size_t{kOpStride} * nops_, &o, sizeof(o));
     const std::uint32_t gx = static_cast<std::uint32_t>(std::min<std::size_t>(groups, kMaxGroupsX));
     const std::uint32_t gy = static_cast<std::uint32_t>((groups + gx - 1) / gx);
+    // Experiment (document 16): JBA_WEBGPU_REPEAT=n runs every dispatch n more times on
+    // the memory it started from and counts the dispatches whose results differ.
+    static const int repeat = std::getenv("JBA_WEBGPU_REPEAT") ? std::atoi(std::getenv("JBA_WEBGPU_REPEAT")) : 0;
+    if (repeat > 0) {
+      repeat_dispatch(k, gx, gy, o, repeat);
+      return;
+    }
+    std::memcpy(ops_.data() + std::size_t{kOpStride} * nops_, &o, sizeof(o));
     const std::uint32_t dyn = kOpStride * nops_;
     ++nops_;
     wgpuComputePassEncoderSetPipeline(pass_, c_.pipelines[static_cast<int>(k)]);
@@ -560,6 +572,114 @@ class WebGpuDevice final : public gpu::Device {
     }
   }
 
+  // JBA_WEBGPU_REPEAT: submits what is encoded, then runs the dispatch once from a copy
+  // of the heap and `times` more from the same copy, comparing the whole heap after
+  // each run with the first, bit for bit, on the device (kCompareWgsl); only the count
+  // of differing words and the first of them come back. The solve goes on from the
+  // last run.
+  void repeat_dispatch(Kernel k, std::uint32_t gx, std::uint32_t gy, const WgslOp& o, int times) {
+    wgpuComputePassEncoderEnd(pass_);
+    wgpuComputePassEncoderRelease(pass_);
+    pass_ = nullptr;
+    flush_ops();
+    WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc_, nullptr);
+    wgpuQueueSubmit(c_.queue, 1, &cb);
+    wgpuCommandBufferRelease(cb);
+    wgpuCommandEncoderRelease(enc_);
+    enc_ = nullptr;
+    if (compare_ == nullptr) make_compare();
+    wgpuQueueWriteBuffer(c_.queue, op_buf_, 0, &o, sizeof(o));
+    RepeatStat& s = repeat_stats_[{static_cast<int>(k), o.mode}];
+    const std::uint64_t words = heap_size_ / 4;
+    const std::uint64_t groups = (words + 255) / 256;
+    const std::uint32_t cx = static_cast<std::uint32_t>(std::min<std::uint64_t>(groups, kMaxGroupsX));
+    const std::uint32_t cy = static_cast<std::uint32_t>((groups + cx - 1) / cx);
+    bool differed = false;
+    for (int r = 0; r <= times; ++r) {
+      WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(c_.device, nullptr);
+      if (r == 0) wgpuCommandEncoderCopyBufferToBuffer(enc, heap_, 0, backup_, 0, heap_size_);
+      else wgpuCommandEncoderCopyBufferToBuffer(enc, backup_, 0, heap_, 0, heap_size_);
+      WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(enc, nullptr);
+      const std::uint32_t dyn = 0;
+      wgpuComputePassEncoderSetPipeline(pass, c_.pipelines[static_cast<int>(k)]);
+      wgpuComputePassEncoderSetBindGroup(pass, 0, bind_group_, 1, &dyn);
+      wgpuComputePassEncoderDispatchWorkgroups(pass, gx, gy, 1);
+      if (r > 0) {
+        wgpuComputePassEncoderSetPipeline(pass, compare_);
+        wgpuComputePassEncoderSetBindGroup(pass, 0, compare_group_, 0, nullptr);
+        wgpuComputePassEncoderDispatchWorkgroups(pass, cx, cy, 1);
+      }
+      wgpuComputePassEncoderEnd(pass);
+      wgpuComputePassEncoderRelease(pass);
+      if (r == 0) {
+        wgpuCommandEncoderCopyBufferToBuffer(enc, heap_, 0, first_, 0, heap_size_);
+        WGPUCommandBuffer b = wgpuCommandEncoderFinish(enc, nullptr);
+        wgpuQueueSubmit(c_.queue, 1, &b);
+        wgpuCommandBufferRelease(b);
+        wgpuCommandEncoderRelease(enc);
+        continue;
+      }
+      const std::uint32_t reset[2] = {0, 0xffffffffu};
+      wgpuQueueWriteBuffer(c_.queue, compare_out_, 0, reset, sizeof(reset));
+      std::uint32_t got[2] = {};
+      read_back(enc, 0, got, sizeof(got), compare_out_);
+      if (got[0] > 0) {
+        if (s.differed == 0 && !differed) s.first_word = got[1];
+        differed = true;
+        s.max_words = std::max<std::size_t>(s.max_words, got[0]);
+      }
+    }
+    ++s.dispatches;
+    if (differed) ++s.differed;
+    begin();
+  }
+
+  // The heap's copies and the comparison kernel for JBA_WEBGPU_REPEAT.
+  void make_compare() {
+    constexpr WGPUBufferUsage copy = WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst;
+    backup_ = make_buffer(heap_size_, copy);
+    first_ = make_buffer(heap_size_, WGPUBufferUsage_Storage | copy);
+    compare_out_ = make_buffer(256, WGPUBufferUsage_Storage | copy);
+    static const char* const kCompareWgsl = R"(
+@group(0) @binding(0) var<storage, read> a: array<u32>;
+@group(0) @binding(1) var<storage, read> b: array<u32>;
+@group(0) @binding(2) var<storage, read_write> out: array<atomic<u32>, 2>;  // count, first word
+@compute @workgroup_size(256) fn compare(@builtin(workgroup_id) wg: vec3u, @builtin(num_workgroups) nw: vec3u,
+                                         @builtin(local_invocation_index) li: u32) {
+  let i = (wg.y * nw.x + wg.x) * 256u + li;
+  if (i >= arrayLength(&a)) { return; }
+  if (a[i] != b[i]) {
+    atomicAdd(&out[0], 1u);
+    atomicMin(&out[1], i);
+  }
+}
+)";
+    WGPUShaderSourceWGSL wgsl = WGPU_SHADER_SOURCE_WGSL_INIT;
+    wgsl.code = sv(kCompareWgsl);
+    WGPUShaderModuleDescriptor mdesc = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+    mdesc.nextInChain = &wgsl.chain;
+    WGPUShaderModule module = wgpuDeviceCreateShaderModule(c_.device, &mdesc);
+    WGPUComputePipelineDescriptor cdesc = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
+    cdesc.compute.module = module;
+    cdesc.compute.entryPoint = sv("compare");
+    checked("compare pipeline", [&] { compare_ = wgpuDeviceCreateComputePipeline(c_.device, &cdesc); });
+    wgpuShaderModuleRelease(module);
+    WGPUBindGroupEntry be[3] = {WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT, WGPU_BIND_GROUP_ENTRY_INIT};
+    const WGPUBuffer bufs[3] = {heap_, first_, compare_out_};
+    for (std::uint32_t i = 0; i < 3; ++i) {
+      be[i].binding = i;
+      be[i].buffer = bufs[i];
+      be[i].size = i < 2 ? heap_size_ : 8;
+    }
+    WGPUBindGroupLayout bgl = wgpuComputePipelineGetBindGroupLayout(compare_, 0);
+    WGPUBindGroupDescriptor bg = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+    bg.layout = bgl;
+    bg.entryCount = 3;
+    bg.entries = be;
+    checked("compare bind group", [&] { compare_group_ = wgpuDeviceCreateBindGroup(c_.device, &bg); });
+    wgpuBindGroupLayoutRelease(bgl);
+  }
+
   // The Ops of the dispatches encoded so far, before their submission.
   void flush_ops() {
     if (nops_ > 0) wgpuQueueWriteBuffer(c_.queue, op_buf_, 0, ops_.data(), std::size_t{kOpStride} * nops_);
@@ -568,14 +688,15 @@ class WebGpuDevice final : public gpu::Device {
 
   // Ends `enc` with a copy of heap bytes [address, address + bytes) to the read-back
   // buffer, submits it and waits, then copies into `host`.
-  void read_back(WGPUCommandEncoder enc, std::uint64_t address, void* host, std::size_t bytes) {
+  void read_back(WGPUCommandEncoder enc, std::uint64_t address, void* host, std::size_t bytes,
+                 WGPUBuffer from = nullptr) {
     const std::uint64_t size = (bytes + 3) / 4 * 4;
     if (readback_size_ < size) {
       if (readback_) wgpuBufferRelease(readback_);
       readback_size_ = std::max<std::uint64_t>(size, 1 << 16);
       readback_ = make_buffer(readback_size_, WGPUBufferUsage_MapRead | WGPUBufferUsage_CopyDst);
     }
-    wgpuCommandEncoderCopyBufferToBuffer(enc, heap_, address, readback_, 0, size);
+    wgpuCommandEncoderCopyBufferToBuffer(enc, from ? from : heap_, address, readback_, 0, size);
     WGPUCommandBuffer cb = wgpuCommandEncoderFinish(enc, nullptr);
     wgpuQueueSubmit(c_.queue, 1, &cb);
     wgpuCommandBufferRelease(cb);
@@ -602,10 +723,30 @@ class WebGpuDevice final : public gpu::Device {
     if (status != WGPUMapAsyncStatus_Success) fail("read-back failed: " + msg);
   }
 
+  struct RepeatStat {
+    std::size_t dispatches = 0, differed = 0, max_words = 0, first_word = 0;
+  };
+
+  void report_repeats() const {
+    for (const auto& [key, s] : repeat_stats_) {
+      std::fprintf(stderr, "webgpu repeat: %s mode %d: %zu of %zu dispatches differed", kKernelNames[key.first],
+                   key.second, s.differed, s.dispatches);
+      if (s.differed > 0) std::fprintf(stderr, " (up to %zu words; first at word %zu)", s.max_words, s.first_word);
+      std::fprintf(stderr, "\n");
+    }
+  }
+
   Context& c_;
   std::unique_lock<std::recursive_mutex> lock_;
   std::vector<Range> ranges_;  // std::vector of vectors: mirrors keep their addresses on growth
   std::uint64_t cursor_ = kAlign;  // nothing at address 0: it stays the null pointer
+  std::uint64_t heap_size_ = 0;
+  // JBA_WEBGPU_REPEAT: the heap before the dispatch and after its first run, the
+  // comparison's result, its kernel and binding.
+  WGPUBuffer backup_ = nullptr, first_ = nullptr, compare_out_ = nullptr;
+  WGPUComputePipeline compare_ = nullptr;
+  WGPUBindGroup compare_group_ = nullptr;
+  std::map<std::pair<int, int>, RepeatStat> repeat_stats_;
   WGPUBuffer heap_ = nullptr, args_buf_ = nullptr, op_buf_ = nullptr, readback_ = nullptr;
   std::uint64_t readback_size_ = 0;
   WGPUBindGroup bind_group_ = nullptr;
@@ -617,6 +758,8 @@ class WebGpuDevice final : public gpu::Device {
 };
 
 }  // namespace
+
+std::string wgsl_module() { return module_source(); }
 
 bool available() {
   try {
