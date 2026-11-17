@@ -77,8 +77,8 @@ after the best similarity, as a share of the extent of COLMAP's camera centres.
 `--export dir` writes our model in COLMAP's text format next to it. The margins of
 the pass condition are set after the first measurements (document 05).
 
-Not run against COLMAP itself yet: COLMAP is not installed on the machine this was
-written on. `ctest -R demo_colmap_roundtrip` runs the path without it: a generated
+Run against COLMAP 4.2.1 on South Building and Gerrard Hall on 2026-11-16 (results in
+document 07, milestone 7). `ctest -R demo_colmap_roundtrip` runs the path without COLMAP: a generated
 scene written as a COLMAP database and text model by `colmap_fixture.py` (COLMAP's
 schema, ids reversed with gaps, keypoints with six columns, a camera per image for the
 orbit), read back by `colmap_capture.py`, checked to hold the same capture, and

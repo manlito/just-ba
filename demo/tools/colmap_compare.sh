@@ -8,10 +8,16 @@
 # COLMAP extracts features (one SIMPLE_RADIAL camera for the scene), matches every pair
 # and reconstructs; its model is converted to text; colmap_capture.py writes the capture
 # file with COLMAP's verified matches and model; jba_demo runs on it and prints both
-# sides. Uses only COLMAP options that have been stable for years. Environment:
+# sides. Option names are COLMAP 4.2.1's (FeatureExtraction, FeatureMatching). Environment:
 #   COLMAP    the colmap executable (default: colmap on the path)
 #   JBA_DEMO  the jba_demo executable (default: build/demo/demo/jba_demo)
 #   MATCHER   exhaustive_matcher (default) or sequential_matcher, for long sequences
+#   USE_GPU   1 for COLMAP's GPU SIFT and matching (a CUDA build, or a display for
+#             OpenGL); default 0, which also works headless over SSH
+#   THREADS   feature extraction threads (default 4: CPU SIFT takes about 2 GB per
+#             thread on large images, and every thread ran a 15 GB laptop out of memory)
+#   MAX_IMAGE_SIZE  longest side SIFT sees, in pixels (default 3200; keypoints are
+#             scaled back to the full image)
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
@@ -24,6 +30,9 @@ shift 2
 colmap=${COLMAP:-colmap}
 demo=${JBA_DEMO:-build/demo/demo/jba_demo}
 matcher=${MATCHER:-exhaustive_matcher}
+use_gpu=${USE_GPU:-0}
+threads=${THREADS:-4}
+max_image_size=${MAX_IMAGE_SIZE:-3200}
 here=$(cd "$(dirname "$0")" && pwd)
 
 mkdir -p "$work/sparse"
@@ -34,8 +43,10 @@ if [ ! -f "$work/sparse/0/cameras.bin" ] && [ ! -f "$work/sparse/0/cameras.txt" 
   echo "COLMAP $("$colmap" help 2>&1 | head -1)" | tee "$log"
   start=$(date +%s)
   "$colmap" feature_extractor --database_path "$db" --image_path "$images" \
-    --ImageReader.single_camera 1 --ImageReader.camera_model SIMPLE_RADIAL >>"$log" 2>&1
-  "$colmap" "$matcher" --database_path "$db" >>"$log" 2>&1
+    --ImageReader.single_camera 1 --ImageReader.camera_model SIMPLE_RADIAL \
+    --FeatureExtraction.use_gpu "$use_gpu" --FeatureExtraction.num_threads "$threads" \
+    --FeatureExtraction.max_image_size "$max_image_size" >>"$log" 2>&1
+  "$colmap" "$matcher" --database_path "$db" --FeatureMatching.use_gpu "$use_gpu" >>"$log" 2>&1
   matched=$(date +%s)
   "$colmap" mapper --database_path "$db" --image_path "$images" --output_path "$work/sparse" >>"$log" 2>&1
   done_at=$(date +%s)

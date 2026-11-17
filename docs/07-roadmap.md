@@ -552,10 +552,44 @@ Started 2026-11-16: the demo app builds natively and as WebAssembly (D133 to D13
 Its mapper reconstructs the three generated scenes within their thresholds at seeds 0
 to 8, on the CPU and with Metal for both libraries, and in the browser on WebGPU and
 the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. It reads
-COLMAP's database and model (D136), checked by a round trip without COLMAP. Left:
-running the comparison on chosen scenes with COLMAP 4.2.1 (not installed on the Mac),
-setting the margins, and publishing the demo (how the docs workflow gets the module is
-still open).
+COLMAP's database and model (D136), checked by a round trip without COLMAP, and was
+compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D137). Left: the
+margins (proposed in D137), track merging if the point counts are to match, and
+publishing the demo (how the docs workflow gets the module is still open).
+
+### First comparison with COLMAP (2026-11-16)
+
+On the owner's laptop (i7-9750H, RTX 2070 Max-Q, CachyOS), COLMAP 4.2.1 from
+conda-forge's CPU build in a temporary environment, removed afterwards. COLMAP:
+`demo/tools/colmap_compare.sh` (one SIMPLE_RADIAL camera per scene, SIFT on 4 threads
+at most 3,200 px, exhaustive matching, its mapper). Ours: the same verified matches
+from COLMAP's database and COLMAP's refined intrinsics, COLMAP's mapper thresholds,
+poses on CUDA. Poses after aligning the two reconstructions (D134's measures; centre
+error over the extent of COLMAP's camera centres). Figures from the run with the
+adjustment on the CPU; on CUDA they agree to the third digit.
+
+| | South Building | Gerrard Hall |
+|---|---|---|
+| Images | 128 | 100 (5616 x 3744) |
+| Verified pairs (15 matches or more), matches | 2,600, 1.88 million | 1,331, 1.19 million |
+| Registered, ours / COLMAP | 128 / 128 | 100 / 100 |
+| Rotation error, median / max | 0.0094° / 0.037° | 0.046° / 0.133° |
+| Camera centre error, median / max | 0.0048 % / 0.016 % | 0.018 % / 0.050 % |
+| Points, ours / COLMAP | 153,040 / 100,374 (+52 %) | 87,882 / 67,126 (+31 %) |
+| Observations, ours / COLMAP | 664,905 / 623,421 (+7 %) | 370,866 / 396,194 (-6 %) |
+| Mean track length, ours / COLMAP | 4.34 / 6.21 | 4.22 / 5.90 |
+| Mean reprojection error, ours / COLMAP | 0.509 / 0.606 px | 0.924 / 1.131 px |
+| COLMAP: features and matching / mapper (CPU) | 1,140 s / 205 s | 627 s / 194 s |
+| Ours, adjustment on the CPU / on CUDA | 246 s / 58 s | 97 s / 26 s |
+
+Both register every image and agree on the poses to a few hundredths of a degree and
+a few hundredths of a percent of the scene. The points do not agree within a few
+percent: about the same observations go into a third to a half more points, with
+tracks about 30 % shorter. Most likely because our mapper neither completes nor
+merges tracks (on this roadmap's "Later" list) and COLMAP's triangulator does both;
+not yet checked. The lower reprojection error follows from the shorter tracks. The
+times are not a speed comparison: COLMAP ran on the CPU, and our mapper adjusts every
+registered image and point after each step.
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
