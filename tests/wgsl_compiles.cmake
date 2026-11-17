@@ -6,6 +6,10 @@
 #
 #   cmake -DWRITER=<jba_wgsl_module> -DTINT=<tint> -DOUT=<dir> -P wgsl_compiles.cmake
 
+# A script run with -P has no policies of its own: without this, CMake 3.x reads
+# if(... IN_LIST ...) the old way and fails (CI's first run).
+cmake_minimum_required(VERSION 3.24)
+
 foreach(v WRITER TINT OUT)
   if(NOT DEFINED ${v})
     message(FATAL_ERROR "wgsl_compiles.cmake: -D${v}=... missing")
