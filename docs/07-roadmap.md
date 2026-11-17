@@ -551,9 +551,11 @@ published.
 Started 2026-11-16: the demo app builds natively and as WebAssembly (D133 to D135).
 Its mapper reconstructs the three generated scenes within their thresholds at seeds 0
 to 8, on the CPU and with Metal for both libraries, and in the browser on WebGPU and
-the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. Left: reading
-matches exported from COLMAP, the comparison itself, and publishing the demo (how the
-docs workflow gets the module is still open).
+the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. It reads
+COLMAP's database and model (D136), checked by a round trip without COLMAP. Left:
+running the comparison on chosen scenes with COLMAP 4.2.1 (not installed on the Mac),
+setting the margins, and publishing the demo (how the docs workflow gets the module is
+still open).
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.

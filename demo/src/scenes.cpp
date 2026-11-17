@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 #include <utility>
 
@@ -259,6 +260,38 @@ Scene make_grid(const SceneOptions& o) {
 const std::vector<std::string>& scene_names() {
   static const std::vector<std::string> names = {"orbit", "wall", "grid"};
   return names;
+}
+
+CaptureFile to_capture_file(const Scene& s) {
+  CaptureFile f;
+  f.capture = s.capture;
+  const std::size_t n_img = s.capture.num_images();
+  for (std::size_t i = 0; i < n_img; ++i) {
+    char name[32];
+    std::snprintf(name, sizeof(name), "%s_%03zu.jpg", s.name.c_str(), i);
+    f.names.push_back(name);
+  }
+  f.image_size = {static_cast<std::int32_t>(s.width), static_cast<std::int32_t>(s.height)};
+  Reference& r = f.reference;
+  r.registered.assign(n_img, 1);
+  r.poses = s.poses;
+  std::vector<int> views(s.points.size() / 3, 0), index(s.points.size() / 3, -1);
+  for (const auto& kp : s.kp_point)
+    for (int j : kp) ++views[static_cast<std::size_t>(j)];
+  for (std::size_t j = 0; j < views.size(); ++j)
+    if (views[j] >= 2) {
+      index[j] = static_cast<int>(r.points.size() / 3);
+      r.points.insert(r.points.end(), &s.points[3 * j], &s.points[3 * j] + 3);
+    }
+  for (std::size_t i = 0; i < n_img; ++i)
+    for (std::size_t k = 0; k < s.kp_point[i].size(); ++k) {
+      const int j = index[static_cast<std::size_t>(s.kp_point[i][k])];
+      if (j < 0) continue;
+      r.obs_image.push_back(static_cast<std::int32_t>(i));
+      r.obs_point.push_back(j);
+      r.obs_keypoint.push_back(static_cast<std::int32_t>(k));
+    }
+  return f;
 }
 
 Scene make_scene(const std::string& name, const SceneOptions& options) {

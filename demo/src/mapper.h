@@ -22,14 +22,16 @@ struct Pair {
   std::vector<std::int32_t> ka, kb;
 };
 
-// One calibrated camera for the whole capture, the keypoints of every image and the
-// matches of the pairs the caller's matcher tried. Matches are not verified yet.
+// Calibrated cameras of one model (normally one for the whole capture), the keypoints
+// of every image and the matches of the pairs the caller's matcher tried.
 struct Capture {
   jba::CameraModel model = jba::CameraModel::Pinhole;
-  std::vector<double> intrinsics;
+  std::vector<double> intrinsics;               // num_params(model) per block
+  std::vector<std::int32_t> image_intrinsics;   // per image: its block; empty: block 0 for all
   std::vector<std::vector<double>> keypoints;  // per image: 2 per keypoint, pixels
   std::vector<Pair> pairs;
   std::size_t num_images() const { return keypoints.size(); }
+  std::int32_t block(std::size_t image) const { return image_intrinsics.empty() ? 0 : image_intrinsics[image]; }
 };
 
 struct MapperOptions {
@@ -62,6 +64,19 @@ inline void thresholds_for_noise(double sigma, MapperOptions& o) {
   o.pair_max_error_px = sigma > 0.5 ? 2.0 * sigma : 1.0;
   o.pnp_max_error_px = sigma > 1.0 ? 4.0 * sigma : 4.0;
   o.max_reproj_px = sigma > 1.0 ? 4.0 * sigma : 4.0;
+}
+
+// The defaults of COLMAP's incremental mapper and two-view geometry, for real captures:
+// RANSAC at 4 px for pairs and 12 px for PnP, at least 30 PnP inliers, filter at 4 px.
+// Long-standing COLMAP defaults; not checked against 4.2.1 on this machine.
+inline void colmap_thresholds(MapperOptions& o) {
+  o.pair_max_error_px = 4.0;
+  o.pnp_max_error_px = 12.0;
+  o.min_pnp_inliers = 30;
+  o.min_pnp_inlier_ratio = 0.25;
+  o.min_first_pair_inliers = 100;
+  o.max_reproj_px = 4.0;
+  o.min_tri_angle_deg = 1.5;
 }
 
 // The map after a step, for a caller that draws the reconstruction as it grows.

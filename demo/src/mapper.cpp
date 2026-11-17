@@ -20,24 +20,50 @@ namespace {
 using Clock = std::chrono::steady_clock;
 double seconds_since(Clock::time_point t0) { return std::chrono::duration<double>(Clock::now() - t0).count(); }
 
-// The same camera for poselib-gpu: model ids and parameter order are COLMAP's in both.
-jpo_camera to_jpo(const Capture& c) {
-  jpo_camera cam;
-  std::memset(&cam, 0, sizeof(cam));
-  cam.model = static_cast<std::int32_t>(c.model);
-  std::copy(c.intrinsics.begin(), c.intrinsics.end(), cam.params);
-  return cam;
+// The same cameras for poselib-gpu: model ids and parameter order are COLMAP's in both.
+std::vector<jpo_camera> to_jpo(const Capture& c) {
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+  std::vector<jpo_camera> cams(c.intrinsics.size() / np);
+  for (std::size_t b = 0; b < cams.size(); ++b) {
+    std::memset(&cams[b], 0, sizeof(jpo_camera));
+    cams[b].model = static_cast<std::int32_t>(c.model);
+    std::copy(&c.intrinsics[np * b], &c.intrinsics[np * b] + np, cams[b].params);
+  }
+  return cams;
 }
 
+// The median focal length over the intrinsics blocks, in pixels.
 double focal(const Capture& c) {
-  switch (c.model) {
-    case jba::CameraModel::SimplePinhole:
-    case jba::CameraModel::SimpleRadial:
-    case jba::CameraModel::Radial:
-      return c.intrinsics[0];
-    default:
-      return 0.5 * (c.intrinsics[0] + c.intrinsics[1]);
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+  const bool one_focal = c.model == jba::CameraModel::SimplePinhole || c.model == jba::CameraModel::SimpleRadial ||
+                         c.model == jba::CameraModel::Radial;
+  std::vector<double> f;
+  for (std::size_t b = 0; b < c.intrinsics.size() / np; ++b)
+    f.push_back(one_focal ? c.intrinsics[np * b] : 0.5 * (c.intrinsics[np * b] + c.intrinsics[np * b + 1]));
+  std::nth_element(f.begin(), f.begin() + f.size() / 2, f.end());
+  return f[f.size() / 2];
+}
+
+// Empty when the capture is well formed, else what is wrong.
+std::string check(const Capture& c) {
+  const int np = jba::num_params(c.model);
+  if (np <= 0 || c.intrinsics.empty() || c.intrinsics.size() % static_cast<std::size_t>(np) != 0)
+    return "the intrinsics do not match the camera model";
+  const std::int32_t blocks = static_cast<std::int32_t>(c.intrinsics.size() / static_cast<std::size_t>(np));
+  if (!c.image_intrinsics.empty() && c.image_intrinsics.size() != c.num_images())
+    return "image_intrinsics needs one block per image";
+  for (std::int32_t b : c.image_intrinsics)
+    if (b < 0 || b >= blocks) return "an image names an intrinsics block that does not exist";
+  for (const Pair& p : c.pairs) {
+    if (p.ka.size() != p.kb.size()) return "a pair has more keypoints on one side than the other";
+    if (p.a < 0 || p.b < 0 || p.a == p.b || static_cast<std::size_t>(std::max(p.a, p.b)) >= c.num_images())
+      return "a pair names an image that does not exist";
+    const std::size_t na = c.keypoints[p.a].size() / 2, nb = c.keypoints[p.b].size() / 2;
+    for (std::size_t k = 0; k < p.ka.size(); ++k)
+      if (p.ka[k] < 0 || p.kb[k] < 0 || static_cast<std::size_t>(p.ka[k]) >= na || static_cast<std::size_t>(p.kb[k]) >= nb)
+        return "a match names a keypoint that does not exist";
   }
+  return {};
 }
 
 struct Map {
@@ -60,7 +86,9 @@ double reprojection_error(const Map& m, int image, const double* xy, const doubl
   double R[9], Y[3], u, v;
   quat_to_rotmat(pose, R);
   apply(R, pose + 4, X, Y);
-  if (!(Y[2] > 0.0) || !jba::project(m.cams.model, m.cams.intrinsics.data(), Y, &u, &v)) return -1.0;
+  const double* intr = &m.cams.intrinsics[static_cast<std::size_t>(jba::num_params(m.cams.model)) *
+                                          static_cast<std::size_t>(m.capture->block(static_cast<std::size_t>(image)))];
+  if (!(Y[2] > 0.0) || !jba::project(m.cams.model, intr, Y, &u, &v)) return -1.0;
   return std::hypot(u - xy[0], v - xy[1]);
 }
 
@@ -128,6 +156,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
       dense[i] = static_cast<int>(a.image_of.size());
       a.image_of.push_back(static_cast<std::int32_t>(i));
       p.poses.insert(p.poses.end(), &m.cams.poses[7 * i], &m.cams.poses[7 * i] + 7);
+      if (!m.capture->image_intrinsics.empty()) p.image_intrinsics.push_back(m.capture->image_intrinsics[i]);
     }
   std::vector<std::int64_t> obs_of;  // problem observation -> observation of the map
   for (std::size_t t = 0; t < m.tracks.size(); ++t) {
@@ -199,6 +228,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
   kept_problem.model = p.model;
   kept_problem.intrinsics = p.intrinsics;
   kept_problem.poses = p.poses;
+  kept_problem.image_intrinsics = p.image_intrinsics;
   std::vector<int> point_index(a.track_of.size(), -1);
   std::vector<std::int32_t> track_of;
   for (std::size_t k = 0; k < obs_of.size(); ++k) {
@@ -275,23 +305,19 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.capture = &c;
   const std::size_t n_img = c.num_images();
   m.registered.assign(n_img, 0);
-  if (static_cast<int>(c.intrinsics.size()) != jba::num_params(c.model)) {
-    run.error = "the intrinsics do not match the camera model";
-    return run;
-  }
-  const jpo_camera camera = to_jpo(c);
+  run.error = check(c);
+  if (!run.ok()) return run;
+  const std::vector<jpo_camera> cameras = to_jpo(c);
 
   // -- 1. Verify every pair: one call for the whole capture.
   auto t0 = Clock::now();
   std::vector<std::uint32_t>& offsets = run.pair_offsets;
   std::vector<double> xy_a, xy_b;
-  std::vector<std::uint32_t> cam_index(c.pairs.size(), 0);
+  std::vector<std::uint32_t> cam_a, cam_b;
   offsets.push_back(0);
   for (const Pair& p : c.pairs) {
-    if (p.ka.size() != p.kb.size()) {
-      run.error = "a pair has more keypoints on one side than the other";
-      return run;
-    }
+    cam_a.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(p.a))));
+    cam_b.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(p.b))));
     for (std::size_t k = 0; k < p.ka.size(); ++k) {
       xy_a.insert(xy_a.end(), &c.keypoints[p.a][2 * p.ka[k]], &c.keypoints[p.a][2 * p.ka[k]] + 2);
       xy_b.insert(xy_b.end(), &c.keypoints[p.b][2 * p.kb[k]], &c.keypoints[p.b][2 * p.kb[k]] + 2);
@@ -301,13 +327,13 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   jpo_pairs pairs;
   std::memset(&pairs, 0, sizeof(pairs));
   pairs.n_pairs = static_cast<std::uint32_t>(c.pairs.size());
-  pairs.n_cameras = 1;
+  pairs.n_cameras = static_cast<std::uint32_t>(cameras.size());
   pairs.offsets = offsets.data();
   pairs.xy_a = xy_a.data();
   pairs.xy_b = xy_b.data();
-  pairs.cameras = &camera;
-  pairs.camera_a = cam_index.data();
-  pairs.camera_b = cam_index.data();
+  pairs.cameras = cameras.data();
+  pairs.camera_a = cam_a.data();
+  pairs.camera_b = cam_b.data();
   run.pair_results.resize(c.pairs.size());
   run.pair_inliers.assign(offsets.back(), 0);
   jpo_ransac_options pair_ransac;
@@ -366,6 +392,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.obs_in.assign(n_obs, 0);
   m.cams.model = c.model;
   m.cams.intrinsics = c.intrinsics;
+  m.cams.image_intrinsics = c.image_intrinsics;
   m.cams.poses.assign(7 * n_img, 0.0);
   for (std::size_t i = 0; i < n_img; ++i) m.cams.poses[7 * i] = 1.0;
 
@@ -435,10 +462,11 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     while (n_cand < seen.size() && n_cand < o.pnp_batch && 2 * seen[n_cand].first >= seen[0].first) ++n_cand;
 
     t0 = Clock::now();
-    std::vector<std::uint32_t> off = {0}, cam(n_cand, 0);
+    std::vector<std::uint32_t> off = {0}, cam;
     std::vector<double> xy, xyz;
     for (std::size_t k = 0; k < n_cand; ++k) {
       const int image = seen[k].second;
+      cam.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(image))));
       for (std::int64_t ob : m.image_obs[image]) {
         const std::int32_t t = m.obs_track[ob];
         if (!m.has_point[t]) continue;
@@ -451,11 +479,11 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     jpo_resections res;
     std::memset(&res, 0, sizeof(res));
     res.n_images = static_cast<std::uint32_t>(n_cand);
-    res.n_cameras = 1;
+    res.n_cameras = static_cast<std::uint32_t>(cameras.size());
     res.offsets = off.data();
     res.xy = xy.data();
     res.xyz = xyz.data();
-    res.cameras = &camera;
+    res.cameras = cameras.data();
     res.camera = cam.data();
     std::vector<jpo_pose_result> out(n_cand);
     jpo_ransac_options pnp_ransac;

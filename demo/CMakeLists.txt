@@ -46,7 +46,8 @@ endif()
 add_subdirectory("${JBA_POSELIB_GPU_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/poselib-gpu" EXCLUDE_FROM_ALL)
 
 # The mapper, the generated scenes and the comparison with their ground truth.
-add_library(jba_demo_mapper STATIC src/mapper.cpp src/scenes.cpp src/evaluate.cpp)
+add_library(jba_demo_mapper STATIC src/mapper.cpp src/scenes.cpp src/evaluate.cpp src/align.cpp src/container.cpp
+                                   src/capture_io.cpp src/compare.cpp)
 target_include_directories(jba_demo_mapper PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(jba_demo_mapper PUBLIC jpo jba PRIVATE jba_warnings)
 
@@ -78,5 +79,13 @@ else()
   if(JBA_BUILD_TESTS)
     # The three generated scenes reconstruct within their thresholds (CPU).
     add_test(NAME demo_synth COMMAND jba_demo synth)
+    # The COLMAP path without COLMAP: scene -> database and text model -> capture file ->
+    # reconstruction against the truth (demo/tools/test_colmap_roundtrip.py).
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+      add_test(NAME demo_colmap_roundtrip
+               COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_colmap_roundtrip.py
+                       $<TARGET_FILE:jba_demo> ${CMAKE_CURRENT_BINARY_DIR}/colmap-roundtrip)
+    endif()
   endif()
 endif()

@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "capture_io.h"
 #include "mapper.h"
 
 namespace demo {
@@ -34,5 +35,9 @@ struct Scene {
 // "orbit", "wall" or "grid". Throws std::invalid_argument for another name.
 Scene make_scene(const std::string& name, const SceneOptions& options = {});
 const std::vector<std::string>& scene_names();
+
+// The scene as a capture file, its truth as the reference: every image registered, the
+// points seen by two images or more, every keypoint of such a point an observation.
+CaptureFile to_capture_file(const Scene& scene);
 
 }  // namespace demo
