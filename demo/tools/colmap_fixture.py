@@ -59,6 +59,7 @@ def main():
     np_ = s["intrinsics"][1][1]
     intr = s["intrinsics"][2]
     size = s["camera.size"][2] if "camera.size" in s else None
+    unknown = s["camera.focal_unknown"][2] if "camera.focal_unknown" in s else None
     kp_begin = s["keypoint.begin"][2]
     kp_xy = s["keypoint.xy"][2]
     n_img = len(kp_begin) - 1
@@ -87,8 +88,9 @@ def main():
     db.executescript(SCHEMA)
     for cid, b in sorted(camera_block.items()):
         w, h = (size[2 * b], size[2 * b + 1]) if size else (0, 0)
-        db.execute("INSERT INTO cameras VALUES (?, ?, ?, ?, ?, 0)",
-                   (cid, model, w, h, le(array.array("d", intr[np_ * b:np_ * b + np_]))))
+        prior = 0 if unknown and unknown[b] else 1
+        db.execute("INSERT INTO cameras VALUES (?, ?, ?, ?, ?, ?)",
+                   (cid, model, w, h, le(array.array("d", intr[np_ * b:np_ * b + np_])), prior))
     for i in range(n_img):
         db.execute("INSERT INTO images VALUES (?, ?, ?)", (image_id[i], names[i], camera_id[i]))
         rows = kp_begin[i + 1] - kp_begin[i]

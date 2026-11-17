@@ -20,6 +20,16 @@ def pct(a, b):
     return f"{100.0 * (a - b) / b:+.1f} %" if b else "-"
 
 
+def focal(d):
+    """Our refined focal length against COLMAP's, median over blocks, and where it started."""
+    f0, f1, fr = d.get("focal_given", 0), d.get("focal_ours", 0), d.get("focal_reference", 0)
+    if not fr:
+        return "-"
+    if abs(f1 - f0) < 1e-9 * max(f0, 1):  # kept fixed
+        return f"{f1:,.0f} px, fixed ({pct(f1, fr)})"
+    return f"{f1:,.0f} px ({pct(f1, fr)}), from {f0:,.0f}"
+
+
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
@@ -42,8 +52,9 @@ def main():
             os.remove(out)
 
     print("| Scene | Images | Registered, ours / COLMAP | Rotation median / max | Centre median / max | "
-          "Points | Observations | Track length | Reprojection, ours / COLMAP | COLMAP points split | Our run |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|")
+          "Points | Observations | Track length | Reprojection, ours / COLMAP | Focal, ours / COLMAP | "
+          "COLMAP points split | Our run |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for d in rows:
         o, c, p = d["ours"], d["reference"], d["ours_vs_reference"]
         print(f"| {d['scene']} | {d['images']} | {o['registered']} / {c['registered']} | "
@@ -53,6 +64,7 @@ def main():
               f"{o['observations']:,} ({pct(o['observations'], c['observations'])}) | "
               f"{o['track_length']:.2f} ({pct(o['track_length'], c['track_length'])}) | "
               f"{o['reprojection_px']:.3f} / {c['reprojection_px']:.3f} px | "
+              f"{focal(d)} | "
               f"{d['reference_points_split']:,} ({100.0 * d['reference_points_split'] / max(c['points'], 1):.1f} %) | "
               f"{d['seconds']:.1f} s |")
     truth = [d for d in rows if "ours_vs_truth" in d]

@@ -38,10 +38,13 @@ build/demo/demo/jba_demo synth
 
 Each generated scene is reconstructed and compared with its ground truth. Options:
 `--scene orbit|wall|grid|all`, `--seed n`, `--noise px`, `--wrong fraction`,
-`--false-pairs n`, `--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
-`--ba cpu|metal|cuda|webgpu` (the solver's), `--export dir` (COLMAP's text model per
-scene), `--write dir` (each scene as a capture file, its truth as the reference), `-v`
-(each step). With `JBA_BUILD_TESTS`, `ctest -R demo_` runs it and the COLMAP round trip.
+`--false-pairs n`, `--focal-error f` (the mapper is given focal lengths that much too
+large, 1.2 being 2.2 times the truth, marked as a guess: it searches for them and
+refines them), `--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
+`--ba cpu|metal|cuda|webgpu` (the solver's), `--refine none|focal|focal+distortion`
+(the intrinsics the adjustments refine; none by default here), `--export dir`
+(COLMAP's text model per scene), `--write dir` (each scene as a capture file, its truth
+as the reference), `-v` (each step). With `JBA_BUILD_TESTS`, `ctest -R demo_` runs it and the COLMAP round trip.
 
 ## Against COLMAP
 
@@ -71,7 +74,12 @@ one of the six models the library has.
 `jba_demo run` reconstructs the capture with COLMAP's mapper thresholds (RANSAC at 4 px
 for pairs and 12 px for PnP, 30 PnP inliers, filter at 4 px; `--thresholds demo` for
 the generated scenes' own) and the reference's refined intrinsics (`--intrinsics
-capture` for the database's), and prints both sides: images registered, points,
+capture` for the database's). As COLMAP's mapper, it refines focal length and
+distortion in every adjustment (`--refine` to change that), and a focal length the
+database marks as a guess (no `prior_focal_length`: no focal length in the image's
+metadata) is first searched for: the pairs with the most matches are verified under 61
+focal lengths from a quarter to four times the guess, in one poselib-gpu call, and the
+one with the lowest total MSAC score is the start (D142). It prints both sides: images registered, points,
 observations, mean track length, mean reprojection error; then, on the images both
 registered, rotation error after the best common rotation and camera-centre error
 after the best similarity, as a share of the extent of COLMAP's camera centres; then
@@ -102,6 +110,7 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 | `camera.model` | i32 | [1] | yes | COLMAP model id, 0 to 5 |
 | `intrinsics` | f64 | [B, P] | yes | One block per camera |
 | `camera.size` | i32 | [B, 2] | no | Width, height |
+| `camera.focal_unknown` | u8 | [B] | no | 1: the block's focal length is only a guess. Without the section, a focal length of exactly 1.2 times the larger side of `camera.size` (COLMAP's guess) counts as one |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Block of each image |
 | `image.names` | u8 | [bytes] | no | N names, separated by `\n` |
 | `keypoint.begin` | i64 | [N + 1] | yes | Image i owns keypoints begin[i] to begin[i + 1] - 1 |

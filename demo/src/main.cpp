@@ -1,8 +1,12 @@
 // jba_demo: the demo app's command line.
 //
 //   jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f] [--false-pairs n]
-//                  [--write dir] [common options]
+//                  [--focal-error f] [--write dir] [common options]
 //     Reconstructs the generated scenes and compares each with its ground truth.
+//     --focal-error: the mapper is given focal lengths that much too large (1.2: 2.2
+//     times the truth, as COLMAP's guess on ETH3D), marked as a guess, so it searches
+//     for them and refines them (--refine focal+distortion unless given). The truth
+//     keeps the true ones; --write writes the given ones.
 //     --write: also writes each scene as a capture file (<dir>/<scene>.jbc), truth as reference.
 //
 //   jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo] [--two-view-tracks]
@@ -12,7 +16,9 @@
 //     reference reconstruction, compares with it (document 05, level 3).
 //
 //   common options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]
-//                   [--export dir] [-v]
+//                   [--refine none|focal|focal+distortion] [--export dir] [-v]
+//     --refine: the intrinsics the adjustments refine. Default: focal+distortion with
+//     --thresholds colmap, as COLMAP's mapper; none otherwise.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -34,11 +40,11 @@ namespace {
 int usage() {
   std::fprintf(stderr,
                "usage: jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f]\n"
-               "                      [--false-pairs n] [--write dir] [options]\n"
+               "                      [--false-pairs n] [--focal-error f] [--write dir] [options]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
                "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
-               "         [--export dir] [-v]\n");
+               "         [--refine none|focal|focal+distortion] [--export dir] [-v]\n");
   return 2;
 }
 
@@ -56,7 +62,16 @@ struct Common {
   demo::MapperOptions mapper;
   std::string export_dir;
   bool verbose = false;
+  int refine = -1;  // jba::IntrinsicsGroup mask from --refine; -1: the command's default
 };
+
+bool refine_from_name(const std::string& s, int* mask) {
+  if (s == "none") *mask = 0;
+  else if (s == "focal") *mask = jba::kFocal;
+  else if (s == "focal+distortion") *mask = jba::kFocal | jba::kDistortion;
+  else return false;
+  return true;
+}
 
 // Parses the options both commands take; false for one it does not know.
 bool common_option(const std::vector<std::string>& args, std::size_t& i, Common& c, bool* bad) {
@@ -66,6 +81,7 @@ bool common_option(const std::vector<std::string>& args, std::size_t& i, Common&
   else if (a == "--threads" && has_value) c.mapper.threads = std::atoi(args[++i].c_str());
   else if (a == "--export" && has_value) c.export_dir = args[++i];
   else if (a == "--poses" && has_value) *bad = !pose_backend_from_name(args[++i], &c.mapper.pose_backend);
+  else if (a == "--refine" && has_value) *bad = !refine_from_name(args[++i], &c.refine);
   else if (a == "--ba" && has_value) {
     const auto b = jba::backend_from_name(args[++i]);
     *bad = !b;
@@ -85,9 +101,10 @@ demo::StepCallback printer(bool verbose) {
 }
 
 void print_times(const demo::Reconstruction& r) {
-  std::printf("  poses on %s; first pair %d-%d (%u inliers, %.1f°); s: verify %.3f, tracks %.3f, pnp %.3f, "
-              "triangulate %.3f, adjust %.3f, total %.3f\n",
-              r.pose_backend.c_str(), r.first_a, r.first_b, r.first_inliers, r.first_angle_deg, r.time.verify,
+  std::printf("  poses on %s; first pair %d-%d (%u inliers, %.1f°); s: focal search %.3f, verify %.3f, tracks %.3f, "
+              "pnp %.3f, triangulate %.3f, adjust %.3f, total %.3f\n",
+              r.pose_backend.c_str(), r.first_a, r.first_b, r.first_inliers, r.first_angle_deg, r.time.focal_search,
+              r.time.verify,
               r.time.tracks, r.time.pnp, r.time.triangulate, r.time.adjust, r.time.total);
 }
 
@@ -111,7 +128,7 @@ bool available(const demo::MapperOptions& mo) {
 // The comparison as JSON, for demo/tools/colmap_table.py.
 void write_json(const std::string& out, const std::string& capture, const demo::Reconstruction& r,
                 const demo::Comparison& c, std::size_t images, std::size_t truth_images, const demo::PoseAgreement& to,
-                const demo::PoseAgreement& tr) {
+                const demo::PoseAgreement& tr, double focal_given, double focal_reference) {
   std::FILE* f = std::fopen(out.c_str(), "w");
   if (!f) throw std::runtime_error("cannot write " + out);
   auto side = [&](const char* name, const demo::Side& s) {
@@ -139,6 +156,8 @@ void write_json(const std::string& out, const std::string& capture, const demo::
     poses("ours_vs_truth", to);
     poses("reference_vs_truth", tr);
   }
+  std::fprintf(f, "\"focal_given\": %.6g, \"focal_ours\": %.6g, \"focal_reference\": %.6g, ", focal_given,
+               r.ok() ? demo::median_focal(r.problem.model, r.problem.intrinsics) : 0.0, focal_reference);
   std::fprintf(f, "\"reference_points_split\": %zu, \"our_points_joined\": %zu, \"seconds\": %.6g}\n",
                c.reference_points_split, c.our_points_joined, r.time.total);
   std::fclose(f);
@@ -146,6 +165,7 @@ void write_json(const std::string& out, const std::string& capture, const demo::
 
 int synth(const std::vector<std::string>& args) {
   std::string scene_arg = "all", write_dir;
+  double focal_error = 0.0;
   demo::SceneOptions so;
   Common c;
   for (std::size_t i = 0; i < args.size(); ++i) {
@@ -159,12 +179,16 @@ int synth(const std::vector<std::string>& args) {
     else if (a == "--noise" && has_value) so.noise_px = std::atof(args[++i].c_str());
     else if (a == "--wrong" && has_value) so.wrong_fraction = std::atof(args[++i].c_str());
     else if (a == "--false-pairs" && has_value) so.false_pairs = std::atoi(args[++i].c_str());
+    else if (a == "--focal-error" && has_value) focal_error = std::atof(args[++i].c_str());
     else if (a == "--write" && has_value) write_dir = args[++i];
     else return usage();
   }
   demo::MapperOptions& mo = c.mapper;
   mo.seed = 7 + static_cast<std::uint32_t>(so.seed);
   demo::thresholds_for_noise(so.noise_px, mo);
+  if (c.refine < 0 && focal_error != 0.0) c.refine = jba::kFocal | jba::kDistortion;
+  mo.search_focal = focal_error != 0.0;
+  if (c.refine >= 0) mo.refine_intrinsics = static_cast<std::uint8_t>(c.refine);
   if (!available(mo)) return 2;
   const std::vector<std::string> names =
       scene_arg == "all" ? demo::scene_names() : std::vector<std::string>{scene_arg};
@@ -176,7 +200,13 @@ int synth(const std::vector<std::string>& args) {
   for (const std::string& name : names) {
     const demo::Scene scene = demo::make_scene(name, so);
     if (c.verbose) std::printf("%s\n", name.c_str());
-    const demo::Reconstruction r = mapper.run(scene.capture, printer(c.verbose));
+    demo::Capture start = scene.capture;  // what the mapper is given: focal lengths off by focal_error
+    const int n_focal = start.model == jba::CameraModel::Pinhole ? 2 : 1;
+    const std::size_t np = static_cast<std::size_t>(jba::num_params(start.model));
+    for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
+      for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_error;
+    if (focal_error != 0.0) start.focal_unknown.assign(start.intrinsics.size() / np, 1);
+    const demo::Reconstruction r = mapper.run(start, printer(c.verbose));
     const demo::Metrics mt = demo::evaluate(scene, r);
     if (!mt.pass) ++failed;
     char images[32];
@@ -186,7 +216,15 @@ int synth(const std::vector<std::string>& args) {
                 mt.centre_median_pct, mt.point_median_pct, 100.0 * mt.mask_precision, 100.0 * mt.mask_recall,
                 r.adjustments, r.time.total, mt.pass ? "PASS" : "FAIL", mt.why.empty() ? "" : ": ", mt.why.c_str());
     if (c.verbose) print_times(r);
-    const demo::CaptureFile file = demo::to_capture_file(scene);
+    if (focal_error != 0.0)
+      std::printf("       focal: true %.1f px, given %.1f, searched x%.3f, refined %.1f\n",
+                  demo::median_focal(scene.capture.model, scene.capture.intrinsics),
+                  demo::median_focal(start.model, start.intrinsics), r.focal_factor,
+                  r.ok() ? demo::median_focal(r.problem.model, r.problem.intrinsics) : 0.0);
+    demo::CaptureFile file = demo::to_capture_file(scene);
+    file.capture.intrinsics = start.intrinsics;
+    file.capture.focal_unknown = start.focal_unknown;
+    if (focal_error != 0.0) file.reference.intrinsics = scene.capture.intrinsics;  // the truth's
     if (!c.export_dir.empty())
       export_model((std::filesystem::path(c.export_dir) / name).string(), r, file.names, file.image_size);
     if (!write_dir.empty()) {
@@ -229,6 +267,7 @@ int run(const std::vector<std::string>& args) {
     return usage();
   demo::MapperOptions& mo = c.mapper;
   if (thresholds == "colmap") demo::colmap_thresholds(mo);
+  if (c.refine >= 0) mo.refine_intrinsics = static_cast<std::uint8_t>(c.refine);
   if (two_view) mo.ignore_two_view_tracks = false;
   if (tri_angle >= 0.0) mo.tri_max_angle_error_deg = tri_angle;
   if (!available(mo)) return 2;
@@ -236,15 +275,21 @@ int run(const std::vector<std::string>& args) {
   demo::CaptureFile file = demo::read_capture(path);
   const demo::Reference& ref = file.reference;
   // The reference's refined intrinsics, when it has them: both reconstructions then
-  // share one calibration, as the mapper keeps intrinsics fixed.
+  // start from one calibration (and keep it, with --refine none).
   const bool ref_intrinsics = intrinsics == "reference" && !ref.intrinsics.empty();
-  if (ref_intrinsics) file.capture.intrinsics = ref.intrinsics;
+  if (ref_intrinsics) {
+    file.capture.intrinsics = ref.intrinsics;
+    file.capture.focal_unknown.clear();  // the reference's focal lengths are not a guess
+  }
   std::size_t matches = 0;
   for (const demo::Pair& p : file.capture.pairs) matches += p.ka.size();
-  std::printf("%s: %zu images, %zu intrinsics blocks, %zu pairs, %zu matches; intrinsics from the %s\n", path.c_str(),
-              file.capture.num_images(),
+  const char* refined = mo.refine_intrinsics == 0                ? "kept fixed"
+                        : mo.refine_intrinsics == jba::kFocal ? "focal refined"
+                                                              : "focal and distortion refined";
+  std::printf("%s: %zu images, %zu intrinsics blocks, %zu pairs, %zu matches; intrinsics from the %s, %s\n",
+              path.c_str(), file.capture.num_images(),
               file.capture.intrinsics.size() / static_cast<std::size_t>(jba::num_params(file.capture.model)),
-              file.capture.pairs.size(), matches, ref_intrinsics ? "reference" : "capture");
+              file.capture.pairs.size(), matches, ref_intrinsics ? "reference" : "capture", refined);
 
   demo::Mapper mapper(mo);
   const demo::Reconstruction r = mapper.run(file.capture, printer(c.verbose));
@@ -257,6 +302,17 @@ int run(const std::vector<std::string>& args) {
   std::printf("  tracks: %zu built, %zu of them with two keypoints in one image; %zu after splitting\n",
               r.track_stats.components, r.track_stats.conflicted, r.all_tracks.size());
   if (!c.export_dir.empty()) export_model(c.export_dir, r, file.names, file.image_size);
+  if (r.ok() && mo.refine_intrinsics) {
+    const double f0 = demo::median_focal(file.capture.model, file.capture.intrinsics);
+    const double f1 = demo::median_focal(r.problem.model, r.problem.intrinsics);
+    std::printf("  focal (median over blocks): given %.1f px", f0);
+    if (r.focal_factor != 1.0) std::printf(", searched x%.3f", r.focal_factor);
+    std::printf(", refined %.1f", f1);
+    if (!ref.intrinsics.empty())
+      std::printf(", the reference's %.1f (ours %+.2f %%)", demo::median_focal(file.capture.model, ref.intrinsics),
+                  100.0 * (f1 / demo::median_focal(file.capture.model, ref.intrinsics) - 1.0));
+    std::printf("\n");
+  }
 
   const std::size_t n_img = file.capture.num_images();
   if (ref.empty()) {
@@ -307,7 +363,9 @@ int run(const std::vector<std::string>& args) {
   }
   std::size_t truth_images = 0;
   for (char g : file.truth_registered) truth_images += g != 0;
-  if (!json_path.empty()) write_json(json_path, path, r, cmp, n_img, truth_images, truth_ours, truth_ref);
+  if (!json_path.empty()) write_json(json_path, path, r, cmp, n_img, truth_images, truth_ours, truth_ref,
+                                     demo::median_focal(file.capture.model, file.capture.intrinsics),
+                                     ref.intrinsics.empty() ? 0.0 : demo::median_focal(file.capture.model, ref.intrinsics));
   if (!check) return r.ok() ? 0 : 1;
   // --check: the thresholds of the generated scenes, for tests.
   const bool pass = r.ok() && cmp.common == cmp.reference.registered && cmp.rot_median_deg < 0.5 &&

@@ -556,9 +556,10 @@ COLMAP's database and model (D136), checked by a round trip without COLMAP, and 
 compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D137), then brought
 to within 1.1 and 2.3 percent of COLMAP's point counts by how it handles tracks and
 its loss (D138, D139), then compared on six ETH3D scenes with ground truth (D140):
-equally accurate, given COLMAP's calibration. Left: refining intrinsics in the mapper,
-without which it fails on uncalibrated images (D141); the margins (proposed in D139);
-and publishing the demo (how the docs workflow gets the module is still open).
+equally accurate, given COLMAP's calibration (D141), and since D142 from the
+database's own intrinsics too: the mapper refines them and searches for guessed focal
+lengths. Left: the margins (proposed in D139); and publishing the demo (how the docs
+workflow gets the module is still open).
 
 ### First comparison with COLMAP (2026-11-16)
 
@@ -710,6 +711,48 @@ lengths come from the images' metadata and are 3 and 5 % off, it registers every
 image but the median rotation error against COLMAP grows to 0.33 and 1.0°. Parity
 without COLMAP's calibration needs the mapper to refine focal length and distortion,
 as COLMAP's does (D141).
+
+### From the database's intrinsics (2026-11-17, D142)
+
+The mapper now refines focal length and distortion in every adjustment, as COLMAP's,
+and a focal length the database marks as a guess is first searched for with
+poselib-gpu (D142). The same eight capture files, given the database's intrinsics
+(`--intrinsics capture`), our side on Metal:
+
+| Scene | Images | Registered, ours / COLMAP | Rotation median / max | Centre median / max | Points | Observations | Track length | Reprojection, ours / COLMAP | Focal, ours / COLMAP | COLMAP points split | Our run |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| south-building | 128 | 128 / 128 | 0.0089° / 0.031° | 0.0041 % / 0.014 % | 100,228 (-0.2 %) | 613,938 (-1.5 %) | 6.13 (-1.4 %) | 0.599 / 0.607 px | 2,559 px (+0.0 %), from 2,485 | 2,087 (2.1 %) | 17.4 s |
+| gerrard-hall | 100 | 100 / 100 | 0.0306° / 0.113° | 0.0099 % / 0.034 % | 65,866 (-1.8 %) | 388,039 (-2.1 %) | 5.89 (-0.2 %) | 1.126 / 1.133 px | 3,832 px (+0.0 %), from 3,637 | 3,040 (4.5 %) | 9.3 s |
+| pipes | 14 | 14 / 14 | 0.0254° / 0.067° | 0.0339 % / 0.069 % | 3,240 (-2.1 %) | 12,180 (-1.3 %) | 3.76 (+0.8 %) | 0.601 / 0.602 px | 3,424 px (-0.0 %), from 7,464 | 11 (0.3 %) | 0.5 s |
+| meadow | 15 | 14 / 14 | 0.0362° / 0.194° | 0.0310 % / 0.083 % | 733 (-0.8 %) | 2,548 (+1.9 %) | 3.48 (+2.8 %) | 0.859 / 0.789 px | 3,407 px (+0.0 %), from 7,441 | 1 (0.1 %) | 0.3 s |
+| office | 26 | 26 / 26 | 0.0229° / 0.071° | 0.0614 % / 0.253 % | 7,572 (-0.7 %) | 27,763 (-0.5 %) | 3.67 (+0.2 %) | 0.720 / 0.720 px | 3,431 px (-0.0 %), from 7,465 | 15 (0.2 %) | 0.8 s |
+| kicker | 31 | 30 / 30 | 0.0100° / 0.073° | 0.0117 % / 0.060 % | 12,623 (-1.9 %) | 55,709 (-1.9 %) | 4.41 (+0.1 %) | 0.867 / 0.856 px | 3,409 px (-0.0 %), from 7,453 | 286 (2.2 %) | 1.1 s |
+| courtyard | 38 | 38 / 38 | 0.0107° / 0.089° | 0.0171 % / 0.103 % | 24,930 (-3.1 %) | 121,704 (-1.9 %) | 4.88 (+1.3 %) | 0.696 / 0.695 px | 3,410 px (-0.0 %), from 7,446 | 226 (0.9 %) | 1.7 s |
+| delivery_area | 44 | 44 / 44 | 0.0125° / 0.037° | 0.0074 % / 0.054 % | 30,757 (-0.5 %) | 128,754 (-1.0 %) | 4.19 (-0.5 %) | 0.646 / 0.650 px | 3,405 px (+0.0 %), from 7,450 | 258 (0.8 %) | 2.1 s |
+
+| Scene | Truth images | Ours: registered, rotation median / max, centre median | COLMAP: registered, rotation median / max, centre median |
+|---|---|---|---|
+| pipes | 14 | 14, 0.166° / 0.297°, 5.0 mm (0.159 %) | 14, 0.127° / 0.271°, 4.9 mm (0.156 %) |
+| meadow | 15 | 14, 0.124° / 0.890°, 30.2 mm (0.130 %) | 14, 0.105° / 0.702°, 32.1 mm (0.138 %) |
+| office | 26 | 26, 0.140° / 0.660°, 10.2 mm (0.476 %) | 26, 0.133° / 0.711°, 10.6 mm (0.496 %) |
+| kicker | 31 | 30, 0.068° / 0.154°, 18.1 mm (0.222 %) | 30, 0.064° / 0.184°, 17.9 mm (0.220 %) |
+| courtyard | 38 | 38, 0.078° / 0.180°, 34.8 mm (0.232 %) | 38, 0.072° / 0.182°, 33.6 mm (0.224 %) |
+| delivery_area | 44 | 44, 0.090° / 0.196°, 28.4 mm (0.236 %) | 44, 0.091° / 0.202°, 28.4 mm (0.235 %) |
+
+The focal column is our refined focal length (median over blocks), its difference
+from COLMAP's, and where it started: the images' metadata on South Building and
+Gerrard Hall, COLMAP's guess on the six ETH3D scenes, which the search took to within a
+few percent before the adjustments. Every scene registers the images COLMAP's does,
+with points within 3.1 % and focal lengths within 0.1 % of COLMAP's; against the truth,
+median rotation 0.068 to 0.166° against COLMAP's 0.064 to 0.133°, median centre 5 to
+35 mm against 5 to 34 mm. Started from COLMAP's calibration instead (the default), the
+figures are the same to within a few thousandths of a degree, and the table of D140
+above stands for fixed intrinsics (`--refine none`).
+
+The price is time: with intrinsics free the adjustments take 2.3 times as long, on
+Metal (South Building 7.6 to 17.5 s, Gerrard Hall 4.2 to 9.5 s) as on the CPU (52 to
+118 s for South Building). The shared focal length couples every camera in the
+reduced system (document 03); why it costs this much was not looked into.
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.

@@ -3,8 +3,9 @@
 
     colmap_capture.py database.db -o capture.jbc [--model sparse/0] [--truth gt/] [--raw] [--min-matches 15]
 
-From the database: the cameras, the images, their keypoints and the matches of every
-pair. By default the verified matches (two_view_geometries), so both reconstructions
+From the database: the cameras (with whether their focal length is known,
+prior_focal_length, or only COLMAP's guess), the images, their keypoints and the matches
+of every pair. By default the verified matches (two_view_geometries), so both reconstructions
 start from the same matches (document 05, level 3); --raw takes the matcher's output
 (matches) instead, for the demo's own verification. With --model, COLMAP's
 reconstruction in its text format (cameras.txt, images.txt, points3D.txt) becomes the
@@ -47,9 +48,9 @@ def read_database(path, raw, min_matches):
         sys.exit(f"colmap_capture: no database at {path}")
     db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     cameras = {}
-    for camera_id, model, width, height, params in db.execute(
-            "SELECT camera_id, model, width, height, params FROM cameras ORDER BY camera_id"):
-        cameras[camera_id] = (model, width, height, list(blob(params, "d")))
+    for camera_id, model, width, height, params, prior in db.execute(
+            "SELECT camera_id, model, width, height, params, prior_focal_length FROM cameras ORDER BY camera_id"):
+        cameras[camera_id] = (model, width, height, list(blob(params, "d")), int(prior))
     images = list(db.execute("SELECT image_id, name, camera_id FROM images ORDER BY image_id"))
     if not images:
         sys.exit("colmap_capture: the database has no images")
@@ -166,6 +167,7 @@ def main():
         ("camera.model", jbc.I32, (1,), [model]),
         ("intrinsics", jbc.F64, (len(used), np_), intrinsics),
         ("camera.size", jbc.I32, (len(used), 2), [v for c in used for v in cameras[c][1:3]]),
+        ("camera.focal_unknown", jbc.U8, (len(used),), [0 if cameras[c][4] else 1 for c in used]),
         ("image.intrinsics", jbc.I32, (n_img,), [block[c] for _, _, c in images]),
         ("image.names", jbc.U8, (len(names),), names),
         ("keypoint.begin", jbc.I64, (n_img + 1,), kp_begin),

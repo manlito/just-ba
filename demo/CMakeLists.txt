@@ -79,6 +79,9 @@ else()
   if(JBA_BUILD_TESTS)
     # The three generated scenes reconstruct within their thresholds (CPU).
     add_test(NAME demo_synth COMMAND jba_demo synth)
+    # Focal lengths 2.2 times too large and marked as a guess, as COLMAP's on images
+    # without metadata: searched for, then refined (D142).
+    add_test(NAME demo_synth_focal COMMAND jba_demo synth --focal-error 1.2)
     # The COLMAP path without COLMAP: scene -> database and text model -> capture file ->
     # reconstruction against the truth (demo/tools/test_colmap_roundtrip.py).
     find_package(Python3 COMPONENTS Interpreter)

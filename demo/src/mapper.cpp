@@ -15,34 +15,36 @@
 #include "jba/triangulation.h"
 
 namespace demo {
+
+double median_focal(jba::CameraModel model, const std::vector<double>& intrinsics) {
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(model));
+  const bool one_focal = model == jba::CameraModel::SimplePinhole || model == jba::CameraModel::SimpleRadial ||
+                         model == jba::CameraModel::Radial;
+  std::vector<double> f;
+  for (std::size_t b = 0; b < intrinsics.size() / np; ++b)
+    f.push_back(one_focal ? intrinsics[np * b] : 0.5 * (intrinsics[np * b] + intrinsics[np * b + 1]));
+  if (f.empty()) return 0.0;
+  std::nth_element(f.begin(), f.begin() + f.size() / 2, f.end());
+  return f[f.size() / 2];
+}
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
 double seconds_since(Clock::time_point t0) { return std::chrono::duration<double>(Clock::now() - t0).count(); }
 
 // The same cameras for poselib-gpu: model ids and parameter order are COLMAP's in both.
-std::vector<jpo_camera> to_jpo(const Capture& c) {
-  const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
-  std::vector<jpo_camera> cams(c.intrinsics.size() / np);
+std::vector<jpo_camera> to_jpo(jba::CameraModel model, const std::vector<double>& intrinsics) {
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(model));
+  std::vector<jpo_camera> cams(intrinsics.size() / np);
   for (std::size_t b = 0; b < cams.size(); ++b) {
     std::memset(&cams[b], 0, sizeof(jpo_camera));
-    cams[b].model = static_cast<std::int32_t>(c.model);
-    std::copy(&c.intrinsics[np * b], &c.intrinsics[np * b] + np, cams[b].params);
+    cams[b].model = static_cast<std::int32_t>(model);
+    std::copy(&intrinsics[np * b], &intrinsics[np * b] + np, cams[b].params);
   }
   return cams;
 }
 
-// The median focal length over the intrinsics blocks, in pixels.
-double focal(const Capture& c) {
-  const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
-  const bool one_focal = c.model == jba::CameraModel::SimplePinhole || c.model == jba::CameraModel::SimpleRadial ||
-                         c.model == jba::CameraModel::Radial;
-  std::vector<double> f;
-  for (std::size_t b = 0; b < c.intrinsics.size() / np; ++b)
-    f.push_back(one_focal ? c.intrinsics[np * b] : 0.5 * (c.intrinsics[np * b] + c.intrinsics[np * b + 1]));
-  std::nth_element(f.begin(), f.begin() + f.size() / 2, f.end());
-  return f[f.size() / 2];
-}
 
 // Empty when the capture is well formed, else what is wrong.
 std::string check(const Capture& c) {
@@ -225,7 +227,7 @@ void update_points(Map& m, const MapperOptions& o, bool split) {
   // PnP and adjustment.
   tri.max_angle_error_deg = o.tri_max_angle_error_deg > 0.0
                                 ? o.tri_max_angle_error_deg
-                                : std::atan(o.max_reproj_px / focal(*m.capture)) * 180.0 / kPi;
+                                : std::atan(o.max_reproj_px / median_focal(m.cams.model, m.cams.intrinsics)) * 180.0 / kPi;
   const double max_angle_rad = tri.max_angle_error_deg * kPi / 180.0;
   tri.min_tri_angle_deg = o.min_tri_angle_deg;
   tri.min_views = 2;
@@ -315,7 +317,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
   Adjusted a;
   jba::Problem& p = a.problem;
   p.model = m.cams.model;
-  p.intrinsics = m.cams.intrinsics;  // calibrated: every intrinsic stays fixed
+  p.intrinsics = m.cams.intrinsics;
   std::vector<int> dense(m.n_images(), -1);
   for (std::size_t i = 0; i < m.n_images(); ++i)
     if (m.registered[i]) {
@@ -324,6 +326,15 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
       p.poses.insert(p.poses.end(), &m.cams.poses[7 * i], &m.cams.poses[7 * i] + 7);
       if (!m.capture->image_intrinsics.empty()) p.image_intrinsics.push_back(m.capture->image_intrinsics[i]);
     }
+  if (o.refine_intrinsics) {
+    // The groups asked for, in each block enough registered images use.
+    const std::size_t blocks = p.intrinsics.size() / static_cast<std::size_t>(jba::num_params(p.model));
+    std::vector<int> users(blocks, 0);
+    for (std::int32_t i : a.image_of) ++users[static_cast<std::size_t>(m.capture->block(static_cast<std::size_t>(i)))];
+    p.intrinsics_free.assign(blocks, 0);
+    for (std::size_t b = 0; b < blocks; ++b)
+      if (users[b] >= o.refine_min_images) p.intrinsics_free[b] = o.refine_intrinsics;
+  }
   std::vector<std::int64_t> obs_of;  // problem observation -> observation of the map
   for (std::size_t t = 0; t < m.tracks.size(); ++t) {
     if (!m.has_point[t]) continue;
@@ -359,6 +370,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
     std::copy(&p.poses[7 * k], &p.poses[7 * k] + 7, &m.cams.poses[7 * static_cast<std::size_t>(a.image_of[k])]);
   for (std::size_t j = 0; j < a.track_of.size(); ++j)
     std::copy(&p.points[3 * j], &p.points[3 * j] + 3, &m.X[3 * static_cast<std::size_t>(a.track_of[j])]);
+  m.cams.intrinsics = p.intrinsics;  // refined or as they were
 
   so.backend = jba::BackendKind::Cpu;  // the report is the host's
   const jba::ResidualReport rep = jba::evaluate(p, so);
@@ -394,6 +406,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
   jba::Problem kept_problem;
   kept_problem.model = p.model;
   kept_problem.intrinsics = p.intrinsics;
+  kept_problem.intrinsics_free = p.intrinsics_free;
   kept_problem.poses = p.poses;
   kept_problem.image_intrinsics = p.image_intrinsics;
   std::vector<int> point_index(a.track_of.size(), -1);
@@ -470,6 +483,90 @@ Mapper::Mapper(const MapperOptions& options) : options_(options) {
 
 Mapper::~Mapper() { jpo_destroy(ctx_); }
 
+namespace {
+
+// search_focal: the factor on the guessed focal lengths that best explains the pairs
+// with the most matches, by poselib-gpu's MSAC score summed over them. 1 when there is
+// nothing to search; -1 when poselib-gpu fails.
+double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o) {
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+  const std::size_t blocks = c.intrinsics.size() / np;
+  if (c.focal_unknown.size() != blocks ||
+      std::none_of(c.focal_unknown.begin(), c.focal_unknown.end(), [](std::uint8_t u) { return u != 0; }))
+    return 1.0;
+  constexpr std::size_t kPairs = 50, kSteps = 61;
+  constexpr double kLow = 0.25, kHigh = 4.0;
+  std::vector<std::size_t> order;
+  for (std::size_t i = 0; i < c.pairs.size(); ++i)
+    if (c.pairs[i].ka.size() >= std::max<std::size_t>(30, o.min_pair_inliers) &&
+        (c.focal_unknown[c.block(c.pairs[i].a)] || c.focal_unknown[c.block(c.pairs[i].b)]))
+      order.push_back(i);
+  if (order.empty()) return 1.0;
+  std::sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) {
+    return c.pairs[x].ka.size() != c.pairs[y].ka.size() ? c.pairs[x].ka.size() > c.pairs[y].ka.size() : x < y;
+  });
+  if (order.size() > kPairs) order.resize(kPairs);
+
+  std::vector<double> factor(kSteps);
+  for (std::size_t k = 0; k < kSteps; ++k)
+    factor[k] = kLow * std::pow(kHigh / kLow, static_cast<double>(k) / static_cast<double>(kSteps - 1));
+  std::vector<double> intr;
+  for (std::size_t k = 0; k < kSteps; ++k)
+    for (std::size_t b = 0; b < blocks; ++b)
+      for (std::size_t j = 0; j < np; ++j) {
+        const double v = c.intrinsics[np * b + j];
+        const bool scale = c.focal_unknown[b] && jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal;
+        intr.push_back(scale ? v * factor[k] : v);
+      }
+  const std::vector<jpo_camera> cameras = to_jpo(c.model, intr);
+  std::vector<std::uint32_t> offsets = {0}, cam_a, cam_b;
+  std::vector<double> xy_a, xy_b;
+  for (std::size_t k = 0; k < kSteps; ++k)
+    for (std::size_t i : order) {
+      const Pair& p = c.pairs[i];
+      cam_a.push_back(static_cast<std::uint32_t>(k * blocks + static_cast<std::size_t>(c.block(p.a))));
+      cam_b.push_back(static_cast<std::uint32_t>(k * blocks + static_cast<std::size_t>(c.block(p.b))));
+      for (std::size_t m = 0; m < p.ka.size(); ++m) {
+        xy_a.insert(xy_a.end(), &c.keypoints[p.a][2 * p.ka[m]], &c.keypoints[p.a][2 * p.ka[m]] + 2);
+        xy_b.insert(xy_b.end(), &c.keypoints[p.b][2 * p.kb[m]], &c.keypoints[p.b][2 * p.kb[m]] + 2);
+      }
+      offsets.push_back(static_cast<std::uint32_t>(xy_a.size() / 2));
+    }
+  jpo_pairs pairs;
+  std::memset(&pairs, 0, sizeof(pairs));
+  pairs.n_pairs = static_cast<std::uint32_t>(cam_a.size());
+  pairs.n_cameras = static_cast<std::uint32_t>(cameras.size());
+  pairs.offsets = offsets.data();
+  pairs.xy_a = xy_a.data();
+  pairs.xy_b = xy_b.data();
+  pairs.cameras = cameras.data();
+  pairs.camera_a = cam_a.data();
+  pairs.camera_b = cam_b.data();
+  std::vector<jpo_pose_result> results(cam_a.size());
+  jpo_ransac_options ransac;
+  jpo_ransac_options_init(&ransac);
+  ransac.max_error_px = o.pair_max_error_px;
+  if (jpo_relative_pose(ctx, &pairs, &ransac, results.data(), nullptr) != 0) return -1.0;
+  const double worst = o.pair_max_error_px * o.pair_max_error_px;  // MSAC's cap per match
+  std::size_t best = 0;
+  double best_score = 0.0;
+  for (std::size_t k = 0; k < kSteps; ++k) {
+    double score = 0.0;
+    for (std::size_t q = 0; q < order.size(); ++q) {
+      const jpo_pose_result& r = results[k * order.size() + q];
+      const double n = static_cast<double>(c.pairs[order[q]].ka.size());
+      score += r.status == JPO_OK || r.status == JPO_DEGENERATE ? r.score : n * worst;
+    }
+    if (k == 0 || score < best_score) {
+      best = k;
+      best_score = score;
+    }
+  }
+  return factor[best];
+}
+
+}  // namespace
+
 Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   const MapperOptions& o = options_;
   const auto t_start = Clock::now();
@@ -481,7 +578,24 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.registered.assign(n_img, 0);
   run.error = check(c);
   if (!run.ok()) return run;
-  const std::vector<jpo_camera> cameras = to_jpo(c);
+  // The starting intrinsics: the capture's, with the searched focal lengths. Pair
+  // verification uses them; PnP the map's, refined as it grows.
+  std::vector<double> start = c.intrinsics;
+  if (o.search_focal) {
+    const auto ts = Clock::now();
+    run.focal_factor = search_focal(ctx_, c, o);
+    if (run.focal_factor < 0.0) {
+      run.error = std::string("focal search: ") + jpo_last_error();
+      return run;
+    }
+    const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+    for (std::size_t b = 0; b < start.size() / np; ++b)
+      for (std::size_t j = 0; j < np; ++j)
+        if (!c.focal_unknown.empty() && c.focal_unknown[b] && jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal)
+          start[np * b + j] *= run.focal_factor;
+    run.time.focal_search = seconds_since(ts);
+  }
+  const std::vector<jpo_camera> cameras = to_jpo(c.model, start);
 
   // -- 1. Verify every pair: one call for the whole capture.
   auto t0 = Clock::now();
@@ -572,7 +686,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.obs_filtered.assign(n_obs, 0);
   m.split_tried.assign(m.tracks.size(), 0);
   m.cams.model = c.model;
-  m.cams.intrinsics = c.intrinsics;
+  m.cams.intrinsics = start;
   m.cams.image_intrinsics = c.image_intrinsics;
   m.cams.poses.assign(7 * n_img, 0.0);
   for (std::size_t i = 0; i < n_img; ++i) m.cams.poses[7 * i] = 1.0;
@@ -666,14 +780,15 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
         }
         off.push_back(static_cast<std::uint32_t>(xy.size() / 2));
       }
+      const std::vector<jpo_camera> map_cameras = to_jpo(m.cams.model, m.cams.intrinsics);
       jpo_resections res;
       std::memset(&res, 0, sizeof(res));
       res.n_images = static_cast<std::uint32_t>(n_cand);
-      res.n_cameras = static_cast<std::uint32_t>(cameras.size());
+      res.n_cameras = static_cast<std::uint32_t>(map_cameras.size());
       res.offsets = off.data();
       res.xy = xy.data();
       res.xyz = xyz.data();
-      res.cameras = cameras.data();
+      res.cameras = map_cameras.data();
       res.camera = cam.data();
       std::vector<jpo_pose_result> out(n_cand);
       jpo_ransac_options pnp_ransac;

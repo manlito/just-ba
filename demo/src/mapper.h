@@ -22,7 +22,8 @@ struct Pair {
   std::vector<std::int32_t> ka, kb;
 };
 
-// Calibrated cameras of one model (normally one for the whole capture), the keypoints
+// Cameras of one model (normally one for the whole capture; calibrated, or refined by
+// the mapper with refine_intrinsics), the keypoints
 // of every image and the matches of the pairs the caller's matcher tried.
 struct Capture {
   jba::CameraModel model = jba::CameraModel::Pinhole;
@@ -30,6 +31,9 @@ struct Capture {
   std::vector<std::int32_t> image_intrinsics;   // per image: its block; empty: block 0 for all
   std::vector<std::vector<double>> keypoints;  // per image: 2 per keypoint, pixels
   std::vector<Pair> pairs;
+  // Per block: 1 when its focal length is only a guess (COLMAP's database without a
+  // prior_focal_length); empty: all known.
+  std::vector<std::uint8_t> focal_unknown;
   std::size_t num_images() const { return keypoints.size(); }
   std::int32_t block(std::size_t image) const { return image_intrinsics.empty() ? 0 : image_intrinsics[image]; }
 };
@@ -69,7 +73,21 @@ struct MapperOptions {
   // filter accepts counts fully (D139). A smaller scale fits each point to the majority
   // of its keypoints and leaves valid ones, far from the image centre, to the filter.
   double loss_scale = 0.0;
+  // Intrinsics groups the adjustments refine (a jba::IntrinsicsGroup mask), as COLMAP's
+  // mapper refines focal length and distortion (Mapper.ba_refine_*); 0: all fixed, for
+  // a calibrated capture. A block is refined once at least refine_min_images registered
+  // images use it; the refined values then serve triangulation and PnP too.
+  std::uint8_t refine_intrinsics = 0;
+  int refine_min_images = 1;
+  // Before anything else, the focal lengths of the blocks marked focal_unknown are
+  // searched for: the pairs are verified under focal lengths from a quarter to four
+  // times the guess (61 steps of 4.7 %), all in one poselib-gpu call, and the factor
+  // with the lowest total MSAC score is applied. The adjustments then refine it.
+  bool search_focal = false;
 };
+
+// The median focal length over the intrinsics blocks, pixels (fx and fy averaged).
+double median_focal(jba::CameraModel model, const std::vector<double>& intrinsics);
 
 // Thresholds for keypoints whose noise is sigma pixels per coordinate. The defaults hold
 // up to half a pixel; above that the thresholds grow with it.
@@ -93,6 +111,10 @@ inline void colmap_thresholds(MapperOptions& o) {
   o.min_tri_angle_deg = 1.5;
   o.ignore_two_view_tracks = true;
   o.tri_max_angle_error_deg = 2.0;  // COLMAP's create_max_angle_error and continue_max_angle_error
+  o.refine_intrinsics = jba::kFocal | jba::kDistortion;  // principal point fixed, as COLMAP's
+  // Not COLMAP's: it estimates a guessed focal length from the fundamental matrix and
+  // in PnP, which poselib-gpu has no solver for (D142).
+  o.search_focal = true;
 }
 
 // The map after a step, for a caller that draws the reconstruction as it grows.
@@ -108,12 +130,13 @@ struct Snapshot {
 using StepCallback = std::function<void(const Snapshot&)>;
 
 struct Timings {
-  double verify = 0, tracks = 0, pnp = 0, triangulate = 0, adjust = 0, total = 0;  // seconds
+  double focal_search = 0, verify = 0, tracks = 0, pnp = 0, triangulate = 0, adjust = 0, total = 0;  // seconds
 };
 
 struct Reconstruction {
   std::string error;  // empty on success
   bool ok() const { return error.empty(); }
+  double focal_factor = 1.0;  // the search's factor (search_focal), 1 without one
 
   std::vector<double> poses;        // 7 per image of the capture
   std::vector<char> registered;

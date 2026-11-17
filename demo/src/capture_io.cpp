@@ -1,5 +1,7 @@
 #include "capture_io.h"
 
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <stdexcept>
 
@@ -72,6 +74,18 @@ CaptureFile read_capture(const std::string& path) {
     c.keypoints[i].assign(kp_xy.begin() + 2 * kp_begin[i], kp_xy.begin() + 2 * kp_begin[i + 1]);
   }
   c.image_intrinsics = get<std::int32_t>(s, path, "image.intrinsics", {n_img}, blocks > 1);
+  // Blocks whose focal length is only a guess. Files without the section: a focal length
+  // of exactly 1.2 times the larger image side is COLMAP's guess when an image has no
+  // focal length in its metadata.
+  if (find(s, "camera.focal_unknown")) {
+    c.focal_unknown = get<std::uint8_t>(s, path, "camera.focal_unknown", {blocks});
+  } else if (!f.image_size.empty()) {
+    c.focal_unknown.assign(static_cast<std::size_t>(blocks), 0);
+    for (std::int64_t b = 0; b < blocks; ++b) {
+      const double guess = 1.2 * std::max(f.image_size[2 * b], f.image_size[2 * b + 1]);
+      c.focal_unknown[b] = std::abs(c.intrinsics[np * b] - guess) < 1e-6 * guess;
+    }
+  }
 
   const auto names = get<std::uint8_t>(s, path, "image.names", {-1}, false);
   if (!names.empty()) {
@@ -141,6 +155,7 @@ void write_capture(const std::string& path, const CaptureFile& f) {
   s.emplace_back("intrinsics", make_section(c.intrinsics, {blocks, np}));
   if (!f.image_size.empty()) s.emplace_back("camera.size", make_section(f.image_size, {blocks, 2}));
   if (!c.image_intrinsics.empty()) s.emplace_back("image.intrinsics", make_section(c.image_intrinsics, {n_img}));
+  if (!c.focal_unknown.empty()) s.emplace_back("camera.focal_unknown", make_section(c.focal_unknown, {blocks}));
   if (!f.names.empty()) {
     std::vector<std::uint8_t> bytes;
     for (std::size_t i = 0; i < f.names.size(); ++i) {
