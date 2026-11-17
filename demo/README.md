@@ -15,6 +15,7 @@ not, and a default build does not look for it.
 | `src/compare.h`, `src/compare.cpp`, `src/align.*` | A reconstruction against another of the same capture: COLMAP's, or the truth (document 05, level 3). |
 | `src/main.cpp` | `jba_demo`, the command line. |
 | `tools/colmap_capture.py` | A COLMAP database, and its model, to a capture file. Standard library only. |
+| `tools/colmap_compare.sh` | One scene from its images: COLMAP, then the capture file, then `jba_demo run`. |
 | `tools/colmap_fixture.py`, `tools/test_colmap_roundtrip.py` | The COLMAP path tested without COLMAP. |
 | `web/demo_wasm.cpp`, `web/index.html` | The live demo: the WebAssembly entry points and the page. |
 
@@ -52,6 +53,14 @@ colmap model_converter --input_path sparse/0 --output_path sparse/0-txt --output
 python3 demo/tools/colmap_capture.py database.db --model sparse/0-txt -o scene.jbc
 build/demo/demo/jba_demo run scene.jbc
 ```
+
+Or all of it for one scene, from its images, with `demo/tools/colmap_compare.sh
+<images> <work_dir>` (`COLMAP=` and `JBA_DEMO=` name the executables): feature
+extraction with one SIMPLE_RADIAL camera, exhaustive matching (`MATCHER=sequential_matcher`
+for long sequences), the mapper, the conversion, the capture file and `jba_demo run`,
+whose output lands in `<work_dir>/compare.txt` and our model in `<work_dir>/ours`.
+COLMAP is a reference here, never a dependency: install it somewhere disposable and
+remove it afterwards, as for milestone 5 (`bench/competitors/README.md`).
 
 `colmap_capture.py` takes COLMAP's verified matches (`two_view_geometries`); `--raw`
 takes the matcher's output instead, for the demo's own verification. Pairs with fewer
