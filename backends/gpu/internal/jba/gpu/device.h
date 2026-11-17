@@ -58,6 +58,7 @@ enum class Kernel : int {
   TileFinish,
   ObsSchurE,
   ObsSchurG,
+  GatherFinish,
   Count,
 };
 
@@ -67,7 +68,7 @@ inline constexpr const char* kKernelNames[] = {
     "block_finish", "block_gather", "point_colnorm", "damping", "point_blocks", "schur_points",
     "factors_times", "rhs_points", "back_substitute", "factor_model", "reduce", "pcg_vectors_init",
     "pcg_init", "pcg_precondition", "pcg_rho", "pcg_direction", "pcg_alpha", "pcg_update", "pcg_reset",
-    "pcg_test", "schur_tiles", "tile_finish", "obs_schur_e", "obs_schur_g"};
+    "pcg_test", "schur_tiles", "tile_finish", "obs_schur_e", "obs_schur_g", "gather_finish"};
 static_assert(sizeof(kKernelNames) / sizeof(kKernelNames[0]) == static_cast<std::size_t>(Kernel::Count));
 
 // A device buffer and its host side: on Metal the same shared memory, on CUDA a host

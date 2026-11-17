@@ -96,8 +96,9 @@ const Library& library() {
         const auto* s = static_cast<const std::uint32_t*>(sizes.contents);
         const std::uint32_t want[] = {sizeof(jba_gpu::Args),      sizeof(jba_gpu::State),     sizeof(jba_gpu::Op),
                                       sizeof(jba_gpu::Factor),    sizeof(jba_gpu::Chunk),     sizeof(jba_gpu::FBlockDesc),
-                                      sizeof(jba_gpu::Tile),      sizeof(jba_gpu::TileEntry), sizeof(jba_gpu::TileChunk)};
-        for (int i = 0; i < 9; ++i)
+                                      sizeof(jba_gpu::Tile),      sizeof(jba_gpu::TileEntry), sizeof(jba_gpu::TileChunk),
+                                      sizeof(jba_gpu::GatherUnit), sizeof(jba_gpu::GatherSplit)};
+        for (int i = 0; i < 11; ++i)
           if (s[i] != want[i])
             fail("structure " + std::to_string(i) + " is " + std::to_string(s[i]) + " bytes in the kernels, " +
                      std::to_string(want[i]) + " on the host",

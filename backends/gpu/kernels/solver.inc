@@ -444,18 +444,61 @@ JBA_KERNEL(block_finish) {
   }
 }
 
-// Per camera-side block, one threadgroup of kGatherThreads: thread i takes the
-// block's observations i, i + T, ... in order, then a fixed tree adds the threads'
-// sums; thread 0 adds the factors. Deterministic, and it hides memory latency that
+// The end of a camera-side block's gather, from the sums over its observations
+// (block_gather, gather_finish): the factors, then the output of the mode.
+JBA_FUNC void gather_output(JBA_ARGS_REF a, int mode, JBA_DEVICE const float* x, JBA_DEVICE float* y, uint b,
+                            JBA_THREAD float* acc) {
+  const FBlockDesc fb = a.fblocks[b];
+  const int n = fb.size;
+  if (mode != 3) {
+    for (uint e = a.fb_fac_begin[b]; e < a.fb_fac_begin[b + 1]; ++e) {
+      const uint2 fs = a.fb_fac[e];
+      const Factor F = a.factors[fs.x];
+      const int base = F.base[fs.y];
+      JBA_DEVICE const float* J = a.fJ + F.joff;
+      for (int row = 0; row < F.rows; ++row) {
+        const float m = mode == 0 ? a.fr[F.roff + row] : a.fm[F.roff + row];
+        for (int c = 0; c < n; ++c) {
+          const float v = J[row * F.cols + base + c];
+          if (mode == 0) {
+            acc[c] += v * v;
+            acc[8 + c] += v * m;
+          } else {
+            acc[c] += v * m;
+          }
+        }
+      }
+    }
+  }
+  const int off = fb.offset;
+  if (mode == 0) {
+    for (int c = 0; c < n; ++c) {
+      a.diag_f[off + c] = acc[c];
+      a.g_f[off + c] = acc[8 + c];
+    }
+  } else if (mode == 1) {
+    for (int c = 0; c < n; ++c) y[off + c] = acc[c] + a.d2_f[off + c] * x[off + c];
+  } else {
+    for (int c = 0; c < n; ++c) a.b[off + c] = acc[c] - a.g_f[off + c];
+  }
+}
+
+// Per gather unit (a camera-side block's observations, or a run of at most
+// kGatherUnit of them where a block has more: a shared intrinsics block sees every
+// observation), one threadgroup of kGatherThreads: thread i takes the unit's
+// observations i, i + T, ... in order, then a fixed tree adds the threads' sums. A
+// block's only unit then finishes it (gather_output); the units of a split block
+// leave their sums for gather_finish. Deterministic, and it hides memory latency that
 // one thread per block cannot.
 // mode 0: diag_f and g_f (squared column norms, J^T r).
 // mode 1: y = J^T t + J_factor^T m + d2 x (the Schur product; skipped once done).
 // mode 3: b = J^T t - g_f (right-hand side; no factors).
 JBA_KERNEL(block_gather) {
-  const uint b = group;
   const uint i = lid;
   JBA_SHARED float buf[kGatherThreads * 16];
   if (op.mode == 1 && s.done) return;
+  const GatherUnit U = a.gunits[group];
+  const uint b = U.block;
   const FBlockDesc fb = a.fblocks[b];
   const int n = fb.size;
   const int width = op.mode == 0 ? 16 : 8;
@@ -464,7 +507,7 @@ JBA_KERNEL(block_gather) {
   const uint c0 = a.block_chunks[b], c1 = a.block_chunks[b + 1];
   if (c0 < c1) {
     const Chunk first = a.chunks[c0];
-    const uint q0 = first.q0, q1 = a.chunks[c1 - 1].q1;
+    const uint q0 = U.q0, q1 = U.q1;
     JBA_DEVICE const uint* list = first.list == 0 ? a.img_list : a.ib_list;
     const bool use_t = op.mode != 0;
     JBA_DEVICE const float* v2 = use_t ? a.t : a.r;
@@ -530,37 +573,24 @@ JBA_KERNEL(block_gather) {
   }
   if (i != 0) return;
   for (int c = 0; c < width; ++c) acc[c] = buf[c * kGatherThreads];
-  if (op.mode != 3) {
-    for (uint e = a.fb_fac_begin[b]; e < a.fb_fac_begin[b + 1]; ++e) {
-      const uint2 fs = a.fb_fac[e];
-      const Factor F = a.factors[fs.x];
-      const int base = F.base[fs.y];
-      JBA_DEVICE const float* J = a.fJ + F.joff;
-      for (int row = 0; row < F.rows; ++row) {
-        const float m = op.mode == 0 ? a.fr[F.roff + row] : a.fm[F.roff + row];
-        for (int c = 0; c < n; ++c) {
-          const float v = J[row * F.cols + base + c];
-          if (op.mode == 0) {
-            acc[c] += v * v;
-            acc[8 + c] += v * m;
-          } else {
-            acc[c] += v * m;
-          }
-        }
-      }
-    }
+  if (U.slot != kNoSlot) {
+    for (int c = 0; c < width; ++c) a.gpartial[16 * U.slot + c] = acc[c];
+    return;
   }
-  const int off = fb.offset;
-  if (op.mode == 0) {
-    for (int c = 0; c < n; ++c) {
-      a.diag_f[off + c] = acc[c];
-      a.g_f[off + c] = acc[8 + c];
-    }
-  } else if (op.mode == 1) {
-    for (int c = 0; c < n; ++c) op.y[off + c] = acc[c] + a.d2_f[off + c] * op.x[off + c];
-  } else {
-    for (int c = 0; c < n; ++c) a.b[off + c] = acc[c] - a.g_f[off + c];
-  }
+  gather_output(a, op.mode, op.x, op.y, b, acc);
+}
+
+// Per split block: its units' sums in order, then gather_output.
+JBA_KERNEL(gather_finish) {
+  const uint g = gid;
+  if (g >= a.ngsplits || (op.mode == 1 && s.done)) return;
+  const GatherSplit S = a.gsplits[g];
+  const int width = op.mode == 0 ? 16 : 8;
+  float acc[16];
+  for (int c = 0; c < 16; ++c) acc[c] = 0;
+  for (uint u = S.s0; u < S.s1; ++u)
+    for (int c = 0; c < width; ++c) acc[c] += a.gpartial[16 * u + c];
+  gather_output(a, op.mode, op.x, op.y, S.block, acc);
 }
 
 // Strategy B: where an observation's E and G for one role are, by its place p in the
@@ -582,17 +612,41 @@ JBA_FUNC void store_schur_e(JBA_ARGS_REF a, int kind, uint k, int n, JBA_DEVICE 
   for (int c = 0; c < 3 * n; ++c) out[c] = E[c];
 }
 
+// The intrinsics role: a point's observations in one intrinsics block are consecutive
+// in ib_list (point-major within the block), and the first of them stands for all
+// (tile_entries on the host): whether place p starts such a run.
+JBA_FUNC bool intr_run_start(JBA_ARGS_REF a, uint p) {
+  if (p == 0) return true;
+  const uint k = a.ib_list[p], kp = a.ib_list[p - 1];
+  return a.o_pt[kp] != a.o_pt[k] || a.o_intr[kp] != a.o_intr[k];
+}
+
 // Every observation's E, by place in img_list (pose, depth; threads 0 to nobs) and in
 // ib_list (intrinsics; threads nobs to 2 nobs); once per linearization, since E does
-// not depend on the damping.
+// not depend on the damping. For the intrinsics, the first observation of each run
+// (intr_run_start) holds the run's sum, added in order; the others are not used.
 JBA_KERNEL(obs_schur_e) {
   const bool intr = gid >= a.nobs;
   const uint p = intr ? gid - a.nobs : gid;
   if (p >= a.nobs || (intr && !a.has_intr)) return;
   const uint k = intr ? a.ib_list[p] : a.img_list[p];
-  if (a.point_off[a.o_pt[k]] < 0) return;
+  const int j = a.o_pt[k];
+  if (a.point_off[j] < 0) return;
   if (intr) {
-    if (a.o_intr[k] >= 0) store_schur_e(a, kIntrinsics, k, int(a.np), a.Eo + schur_e_offset(a, 1, p));
+    if (a.o_intr[k] < 0 || !intr_run_start(a, p)) return;
+    const int n = int(a.np);
+    float sum[kMaxParams * 3];
+    for (int c = 0; c < 3 * n; ++c) sum[c] = 0;
+    for (uint q = p; q < a.nobs; ++q) {
+      const uint kq = a.ib_list[q];
+      if (a.o_pt[kq] != j || a.o_intr[kq] != a.o_intr[k]) break;
+      const Rows o = rows_of(a, kIntrinsics, kq, false);
+      for (int row = 0; row < o.n; ++row)
+        for (int x = 0; x < n; ++x)
+          for (int c = 0; c < 3; ++c) sum[3 * x + c] += o.J[row][x] * o.X[row][c];
+    }
+    JBA_DEVICE float* out = a.Eo + schur_e_offset(a, 1, p);
+    for (int c = 0; c < 3 * n; ++c) out[c] = sum[c];
     return;
   }
   if (a.o_pose[k] >= 0) store_schur_e(a, kPose, k, 6, a.Eo + schur_e_offset(a, 0, p));
@@ -615,7 +669,7 @@ JBA_KERNEL(obs_schur_g) {
   if (a.point_off[j] < 0) return;
   JBA_DEVICE const float* Ci = a.Cinv + 9 * j;
   if (intr) {
-    if (a.o_intr[k] >= 0) {
+    if (a.o_intr[k] >= 0 && intr_run_start(a, p)) {  // G of the run's summed E
       const uint o = schur_e_offset(a, 1, p);
       store_schur_g(a.Eo + o, Ci, int(a.np), a.Go + o);
     }
@@ -664,7 +718,18 @@ JBA_FUNC void tile_sums(JBA_ARGS_REF a, TileChunk TC, uint i, int na_rt, int nb_
         for (int x = 0; x < na; ++x)
           for (int y = 0; y < nb; ++y) acc[x * nb + y] += oa.J[row][x] * ob.J[row][y];
     }
-    if (!((E.info >> 6) & 1)) continue;  // the point is not eliminated
+    if ((E.info >> 7) & 1) {  // the own terms of the intrinsics run that ka starts
+      const uint k0 = a.ib_list[E.ka];
+      for (uint q = E.ka; q < a.nobs; ++q) {
+        const uint k = a.ib_list[q];
+        if (a.o_pt[k] != a.o_pt[k0] || a.o_intr[k] != a.o_intr[k0]) break;
+        const Rows o = rows_of(a, kIntrinsics, k, false);
+        for (int row = 0; row < o.n; ++row)
+          for (int x = 0; x < na; ++x)
+            for (int y = 0; y < nb; ++y) acc[x * nb + y] += o.J[row][x] * o.J[row][y];
+      }
+    }
+    if (!((E.info >> 6) & 1)) continue;  // no elimination term
     // G_a = E_a C^-1 (na x 3, obs_schur_g), E_b (nb x 3, obs_schur_e); acc -= G_a E_b^T.
     JBA_DEVICE const float* G = a.Go + schur_e_offset(a, ra, E.ka);
     JBA_DEVICE const float* Eb = a.Eo + schur_e_offset(a, rb, E.kb);
@@ -685,6 +750,8 @@ JBA_KERNEL(schur_tiles) {
   const int na = A.size, nb = B.size, nv = na * nb;
   float acc[kChunkFloats];
   if (na == 6 && nb == 6) tile_sums<6, 6>(a, TC, i, na, nb, acc);
+  else if (na == 6 && nb == 4) tile_sums<6, 4>(a, TC, i, na, nb, acc);
+  else if (na == 4 && nb == 4) tile_sums<4, 4>(a, TC, i, na, nb, acc);
   else tile_sums<0, 0>(a, TC, i, na, nb, acc);
   for (int c = 0; c < nv; ++c) buf[c * kTileThreads + i] = acc[c];
   JBA_BARRIER();

@@ -85,7 +85,7 @@ struct GpuBackend::Impl {
 
   double centre[3] = {0, 0, 0};
   bool any_intr = false;
-  std::size_t nchunks = 0, nfac = 0, npts = 0;
+  std::size_t nchunks = 0, nfac = 0, npts = 0, ngunits = 0, ngsplits = 0;
   std::vector<std::size_t> set_joff, set_roff;  // per factor set, into fJ and fr
   double gmax = 0;
   // Whitened reprojection residuals in double rounded to float, at the current and
@@ -237,6 +237,39 @@ struct GpuBackend::Impl {
     buffer<Chunk>(chunks.size(), args.chunks, chunks.data());
     buffer<std::uint32_t>(block_chunks.size(), args.block_chunks, block_chunks.data());
 
+    // Gather units: a group of block_gather per block, or per run of at most
+    // kGatherUnit observations where a block has more (a shared intrinsics block sees
+    // every observation, and one group would take it alone); a split block's units
+    // are added in order by gather_finish.
+    std::vector<jba_gpu::GatherUnit> gunits;
+    std::vector<jba_gpu::GatherSplit> gsplits;
+    std::uint32_t nslots = 0;
+    for (std::size_t b = 0; b < sys.fblocks.size(); ++b) {
+      std::size_t q0, q1;
+      const std::vector<std::size_t>* list;
+      sys.obs_range(sys.fblocks[b], q0, q1, list);
+      const auto ub = static_cast<std::uint32_t>(b);
+      if (q1 - q0 <= jba_gpu::kGatherUnit) {
+        gunits.push_back({ub, static_cast<std::uint32_t>(q0), static_cast<std::uint32_t>(q1), jba_gpu::kNoSlot});
+        continue;
+      }
+      const std::uint32_t s0 = nslots;
+      for (std::size_t q = q0; q < q1; q += jba_gpu::kGatherUnit)
+        gunits.push_back({ub, static_cast<std::uint32_t>(q),
+                          static_cast<std::uint32_t>(std::min(q1, q + jba_gpu::kGatherUnit)), nslots++});
+      gsplits.push_back({ub, s0, nslots, 0});
+    }
+    ngunits = gunits.size();
+    ngsplits = gsplits.size();
+    buffer<jba_gpu::GatherUnit>(gunits.size(), args.gunits, gunits.data());
+    if (!gsplits.empty()) {
+      buffer<jba_gpu::GatherSplit>(gsplits.size(), args.gsplits, gsplits.data());
+      buffer<float>(16 * static_cast<std::size_t>(nslots), args.gpartial);
+    } else {
+      buffer<jba_gpu::GatherSplit>(1, args.gsplits);  // never read
+      buffer<float>(16, args.gpartial);
+    }
+
     // Factors, flattened over the sets, and each block's (factor, slot) list in the
     // sets' order.
     std::vector<Factor> facs;
@@ -341,6 +374,8 @@ struct GpuBackend::Impl {
     args.ne = static_cast<std::uint32_t>(sys.ne);
     args.nfb = static_cast<std::uint32_t>(sys.fblocks.size());
     args.nchunks = static_cast<std::uint32_t>(nchunks);
+    args.ngunits = static_cast<std::uint32_t>(ngunits);
+    args.ngsplits = static_cast<std::uint32_t>(ngsplits);
     args.nfac = static_cast<std::uint32_t>(nfac);
     args.np = static_cast<std::uint32_t>(np);
     args.ntiles = static_cast<std::uint32_t>(ntiles);
@@ -361,6 +396,10 @@ struct GpuBackend::Impl {
   struct DirectPlan {
     std::vector<std::array<int, 3>> obs_blocks;  // per observation: pose, intrinsics, depth block (-1: none)
     std::vector<std::uint32_t> pos_img, pos_ib;  // each observation's place in img_list and ib_list
+    // Per observation: whether it is the first of its point's observations in its
+    // intrinsics block. That one's E and G (obs_schur_e, obs_schur_g) hold the sums over
+    // all of them, since the block is shared.
+    std::vector<char> intr_first;
     std::vector<std::vector<std::uint32_t>> fac_of;  // per block, the factors touching it, increasing
     std::vector<std::vector<std::pair<int, std::size_t>>> tiles_of;  // per block A: (B, entries), increasing B
     std::size_t ntiles = 0, entries = 0, tile_chunks = 0, nvals = 0, nnz = 0;
@@ -373,7 +412,17 @@ struct GpuBackend::Impl {
   // that touches A, each observation kb of it (only ka itself when the point is not
   // eliminated) and each role of kb, then the factors touching A. emit(B, entry) for
   // every B >= A. This is the order of the former map of lists, so the sums, and the
-  // results, are unchanged.
+  // results, are unchanged where no intrinsics are free.
+  //
+  // An intrinsics role is shared by all of a point's observations in that block, so
+  // its elimination terms factor: sum over a, b of G_a E_b^T is G_a times the sum of
+  // the E_b, or the sum of the G_a times it. Those terms are taken once per point and
+  // block, by the block's first observation of the point (intr_first), whose E and G
+  // hold the sums. A pose-intrinsics entry then carries one observation's own J^T J
+  // term and its G times the summed E; an intrinsics-intrinsics entry the own terms of
+  // the whole run (bit 7) and the summed G times the summed E. Without this the pairs
+  // of a point's observations would each add an entry to those tiles: 4.6 times the
+  // entries on South Building with one shared block.
   template <typename Emit>
   void tile_entries(const DirectPlan& P, std::size_t A, Emit&& emit) const {
     std::size_t q0, q1;
@@ -393,13 +442,35 @@ struct GpuBackend::Impl {
           if (ba[r] == a) ra = r;
         if (ra == 3) continue;
         const std::uint32_t pa = ra == 1 ? P.pos_ib[ka] : P.pos_img[ka];
+        const bool a_sum = ra != 1 || P.intr_first[ka];  // ka may stand for its point's intrinsics term
         for (std::size_t kb = sys.pt_begin[j]; kb < sys.pt_begin[j + 1]; ++kb) {
-          if (!eliminated && ka != kb) continue;
           const auto& bb = P.obs_blocks[kb];
           for (std::uint32_t rb = 0; rb < 3; ++rb) {
             if (bb[rb] < a) continue;  // also -1
-            emit(bb[rb], TileEntry{pa, rb == 1 ? P.pos_ib[kb] : P.pos_img[kb],
-                                   ra | (rb << 2) | (ka == kb ? 32u : 0u) | (eliminated ? 64u : 0u)});
+            const std::uint32_t pb = rb == 1 ? P.pos_ib[kb] : P.pos_img[kb];
+            if (rb == 1) {
+              // kb's intrinsics block, once per point: by its first observation there.
+              if (!P.intr_first[kb]) continue;
+              if (ra == 1) {
+                // Intrinsics with intrinsics: the run's own J^T J terms (one block: ka
+                // and kb are then the same run), and the summed elimination term.
+                if (!P.intr_first[ka]) continue;
+                const bool own = ka == kb, elim = eliminated;
+                if (!own && !elim) continue;
+                emit(bb[rb], TileEntry{pa, pb, ra | (rb << 2) | (own ? 128u : 0u) | (elim ? 64u : 0u)});
+              } else {
+                // ka's role with the block: ka's own J^T J term when ka is in the block
+                // (bit 5 reads both roles from ka), and G_a times the run's summed E.
+                const bool own = ba[1] == bb[1], elim = eliminated;
+                if (!own && !elim) continue;
+                emit(bb[rb], TileEntry{pa, pb, ra | (rb << 2) | (own ? 32u : 0u) | (elim ? 64u : 0u)});
+              }
+              continue;
+            }
+            if (!eliminated && ka != kb) continue;
+            const bool elim = eliminated && a_sum;
+            if (ka != kb && !elim) continue;
+            emit(bb[rb], TileEntry{pa, pb, ra | (rb << 2) | (ka == kb ? 32u : 0u) | (elim ? 64u : 0u)});
           }
         }
       }
@@ -440,6 +511,17 @@ struct GpuBackend::Impl {
         P.pos_img[sys.img_list[k]] = static_cast<std::uint32_t>(k);
         P.pos_ib[sys.ib_list[k]] = static_cast<std::uint32_t>(k);
       }
+    });
+    P.intr_first.assign(nobs, 0);
+    sys.pool.parallel_for(sys.pt_begin.size() - 1, [&](std::size_t j0, std::size_t j1) {
+      for (std::size_t j = j0; j < j1; ++j)
+        for (std::size_t k = sys.pt_begin[j]; k < sys.pt_begin[j + 1]; ++k) {
+          const int c = P.obs_blocks[k][1];
+          if (c < 0) continue;
+          bool first = true;
+          for (std::size_t q = sys.pt_begin[j]; q < k && first; ++q) first = P.obs_blocks[q][1] != c;
+          P.intr_first[k] = first;
+        }
     });
     fac_index.clear();
     P.fac_of.assign(nfb, {});
@@ -668,16 +750,16 @@ struct GpuBackend::Impl {
     dev->dispatch_groups(Kernel::Reduce, 1, kReduceThreads, op);
   }
 
-  // One group per camera-side block.
+  // One group per gather unit, then the split blocks.
   void gather(int mode, const float* vx = nullptr, float* vy = nullptr, int iter = 0) {
-    const std::size_t nfb = sys.fblocks.size();
-    if (nfb == 0) return;
+    if (ngunits == 0) return;
     Op op{};
     op.x = vx;
     op.y = vy;
     op.mode = mode;
     op.iter = iter;
-    dev->dispatch_groups(Kernel::BlockGather, nfb, kGatherThreads, op);
+    dev->dispatch_groups(Kernel::BlockGather, ngunits, kGatherThreads, op);
+    run(Kernel::GatherFinish, ngsplits, op);
   }
 
   // One group per chunk of a tile's entries, then each tile's values.

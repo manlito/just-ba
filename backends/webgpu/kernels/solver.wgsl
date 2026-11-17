@@ -36,9 +36,10 @@ struct Args {
   d2_f: u32, d2_e: u32, Cinv: u32, Pinv: u32, t: u32, td: u32, partial: u32, vals: u32,
   b: u32, x: u32, res: u32, z: u32, p: u32, q: u32, dx_e: u32,
   tiles: u32, tile_chunks: u32, entries: u32, tile_partial: u32, tile_vals: u32, Eo: u32, Go: u32,
+  gunits: u32, gsplits: u32, gpartial: u32,
   // Sizes and options.
   nobs: u32, npts: u32, nf: u32, ne: u32, nfb: u32, nchunks: u32, nfac: u32, np: u32, ntiles: u32,
-  ntile_chunks: u32, eo_dep: u32, eo_intr: u32,
+  ntile_chunks: u32, eo_dep: u32, eo_intr: u32, ngunits: u32, ngsplits: u32,
   has_depth: i32, has_intr: i32, loss_type: i32,
   loss_scale: f32, pivot_floor: f32,
   // Not in layout.h: where the State is.
@@ -65,6 +66,7 @@ const kChunkFloats: u32 = 64u;
 const kGatherThreads: u32 = 256u;
 const kTileThreads: u32 = 64u;
 const kReduceThreads: u32 = 256u;
+const kNoSlot: u32 = 0xffffffffu;
 
 const kPose: i32 = 0;
 const kIntrinsics: i32 = 1;
@@ -544,9 +546,50 @@ fn gather_step(i: u32, w: u32, width: u32) {
   }
 }
 
-// Per camera-side block, one group of kGatherThreads (solver.inc's block_gather).
+// The end of a camera-side block's gather (solver.inc's gather_output).
+fn gather_output(b: u32, acc_in: array<f32, 16>) {
+  var acc = acc_in;
+  let fb = fblock(b);
+  let n = fb.size;
+  if (op.mode != 3) {
+    for (var e = ldu(a.fb_fac_begin + b); e < ldu(a.fb_fac_begin + b + 1u); e++) {
+      var F = factor(ldu(a.fb_fac + 2u * e));
+      let base = F.base[ldu(a.fb_fac + 2u * e + 1u)];
+      let J = at(a.fJ, F.joff);
+      for (var row = 0; row < F.rows; row++) {
+        let m = select(ld(at(a.fm, F.roff + row)), ld(at(a.fr, F.roff + row)), op.mode == 0);
+        for (var c = 0; c < n; c++) {
+          let v = ld(at(J, row * F.cols + base + c));
+          if (op.mode == 0) {
+            acc[c] += v * v;
+            acc[8 + c] += v * m;
+          } else {
+            acc[c] += v * m;
+          }
+        }
+      }
+    }
+  }
+  let off = fb.offset;
+  if (op.mode == 0) {
+    for (var c = 0; c < n; c++) {
+      st(at(a.diag_f, off + c), acc[c]);
+      st(at(a.g_f, off + c), acc[8 + c]);
+    }
+  } else if (op.mode == 1) {
+    for (var c = 0; c < n; c++) {
+      st(at(op.y, off + c), acc[c] + ld(at(a.d2_f, off + c)) * ld(at(op.x, off + c)));
+    }
+  } else {
+    for (var c = 0; c < n; c++) { st(at(a.b, off + c), acc[c] - ld(at(a.g_f, off + c))); }
+  }
+}
+
+// Per gather unit, one group of kGatherThreads (solver.inc's block_gather).
 fn block_gather_body(gid: u32, group: u32, lid: u32) {
-  let b = group;
+  let uw = a.gunits + 4u * group;
+  let b = ldu(uw);
+  let slot = ldu(uw + 3u);
   let i = lid;
   let skip = op.mode == 1 && done();
   let fb = fblock(b);
@@ -557,8 +600,8 @@ fn block_gather_body(gid: u32, group: u32, lid: u32) {
   let c1 = ldu(a.block_chunks + b + 1u);
   if (!skip && c0 < c1) {
     let first = chunk(c0);
-    let q0 = first.q0;
-    let q1 = chunk(c1 - 1u).q1;
+    let q0 = ldu(uw + 1u);
+    let q1 = ldu(uw + 2u);
     let list = select(a.ib_list, a.img_list, first.list == 0u);
     let use_t = op.mode != 0;
     let v2 = select(a.r, a.t, use_t);
@@ -630,38 +673,23 @@ fn block_gather_body(gid: u32, group: u32, lid: u32) {
   }
   if (i != 0u || skip) { return; }
   for (var c = 0u; c < width; c++) { acc[c] = gbuf[c * kGatherThreads]; }
-  if (op.mode != 3) {
-    for (var e = ldu(a.fb_fac_begin + b); e < ldu(a.fb_fac_begin + b + 1u); e++) {
-      var F = factor(ldu(a.fb_fac + 2u * e));
-      let base = F.base[ldu(a.fb_fac + 2u * e + 1u)];
-      let J = at(a.fJ, F.joff);
-      for (var row = 0; row < F.rows; row++) {
-        let m = select(ld(at(a.fm, F.roff + row)), ld(at(a.fr, F.roff + row)), op.mode == 0);
-        for (var c = 0; c < n; c++) {
-          let v = ld(at(J, row * F.cols + base + c));
-          if (op.mode == 0) {
-            acc[c] += v * v;
-            acc[8 + c] += v * m;
-          } else {
-            acc[c] += v * m;
-          }
-        }
-      }
-    }
+  if (slot != kNoSlot) {
+    for (var c = 0u; c < width; c++) { st(a.gpartial + 16u * slot + c, acc[c]); }
+    return;
   }
-  let off = fb.offset;
-  if (op.mode == 0) {
-    for (var c = 0; c < n; c++) {
-      st(at(a.diag_f, off + c), acc[c]);
-      st(at(a.g_f, off + c), acc[8 + c]);
-    }
-  } else if (op.mode == 1) {
-    for (var c = 0; c < n; c++) {
-      st(at(op.y, off + c), acc[c] + ld(at(a.d2_f, off + c)) * ld(at(op.x, off + c)));
-    }
-  } else {
-    for (var c = 0; c < n; c++) { st(at(a.b, off + c), acc[c] - ld(at(a.g_f, off + c))); }
+  gather_output(b, acc);
+}
+
+// Per split block: its units' sums in order (solver.inc's gather_finish).
+fn gather_finish_body(gid: u32, group: u32, lid: u32) {
+  if (gid >= a.ngsplits || (op.mode == 1 && done())) { return; }
+  let sw = a.gsplits + 4u * gid;
+  let width = select(8u, 16u, op.mode == 0);
+  var acc: array<f32, 16>;
+  for (var u = ldu(sw + 1u); u < ldu(sw + 2u); u++) {
+    for (var c = 0u; c < width; c++) { acc[c] += ld(a.gpartial + 16u * u + c); }
   }
+  gather_output(ldu(sw), acc);
 }
 
 // Strategy B: where an observation's E and G for one role are (Args::Eo).
@@ -683,14 +711,39 @@ fn store_schur_e(kind: i32, k: u32, n: i32, out: u32) {
   for (var c = 0; c < 3 * n; c++) { st(at(out, c), E[c]); }
 }
 
+// Whether place p of ib_list starts a point's run of observations in one intrinsics
+// block (solver.inc's intr_run_start).
+fn intr_run_start(p: u32) -> bool {
+  if (p == 0u) { return true; }
+  let k = ldu(a.ib_list + p);
+  let kp = ldu(a.ib_list + p - 1u);
+  return ldi(a.o_pt + kp) != ldi(a.o_pt + k) || ldi(a.o_intr + kp) != ldi(a.o_intr + k);
+}
+
 fn obs_schur_e_body(gid: u32, group: u32, lid: u32) {
   let intr = gid >= a.nobs;
   let p = select(gid, gid - a.nobs, intr);
   if (p >= a.nobs || (intr && a.has_intr == 0)) { return; }
   let k = select(ldu(a.img_list + p), ldu(a.ib_list + p), intr);
-  if (ldi(a.point_off + u32(ldi(a.o_pt + k))) < 0) { return; }
+  let j = ldi(a.o_pt + k);
+  if (ldi(a.point_off + u32(j)) < 0) { return; }
   if (intr) {
-    if (ldi(a.o_intr + k) >= 0) { store_schur_e(kIntrinsics, k, i32(a.np), a.Eo + schur_e_offset(1, p)); }
+    // The run's sum at its first place, added in order.
+    if (ldi(a.o_intr + k) < 0 || !intr_run_start(p)) { return; }
+    let n = i32(a.np);
+    var E: array<f32, 24>;
+    for (var q = p; q < a.nobs; q++) {
+      let kq = ldu(a.ib_list + q);
+      if (ldi(a.o_pt + kq) != j || ldi(a.o_intr + kq) != ldi(a.o_intr + k)) { break; }
+      var o = rows_of(kIntrinsics, kq, false);
+      for (var row = 0; row < o.n; row++) {
+        for (var x = 0; x < n; x++) {
+          for (var c = 0; c < 3; c++) { E[3 * x + c] += o.J[row][x] * o.X[row][c]; }
+        }
+      }
+    }
+    let out = a.Eo + schur_e_offset(1, p);
+    for (var c = 0; c < 3 * n; c++) { st(at(out, c), E[c]); }
     return;
   }
   if (ldi(a.o_pose + k) >= 0) { store_schur_e(kPose, k, 6, a.Eo + schur_e_offset(0, p)); }
@@ -715,7 +768,7 @@ fn obs_schur_g_body(gid: u32, group: u32, lid: u32) {
   if (ldi(a.point_off + u32(j)) < 0) { return; }
   let Ci = a.Cinv + 9u * u32(j);
   if (intr) {
-    if (ldi(a.o_intr + k) >= 0) {
+    if (ldi(a.o_intr + k) >= 0 && intr_run_start(p)) {  // G of the run's summed E
       let o = schur_e_offset(1, p);
       store_schur_g(a.Eo + o, Ci, a.np, a.Go + o);
     }
@@ -732,7 +785,8 @@ fn obs_schur_g_body(gid: u32, group: u32, lid: u32) {
 }
 
 // One thread's sums over a tile chunk's entries i, i + T, ... (solver.inc's
-// tile_sums, without the compile-time 6 x 6 specialization).
+// tile_sums, without its compile-time shapes: 6 x 6 is tile_sums66 below, 6 x 4 and
+// 4 x 4 take this one, with the same additions in the same order).
 fn tile_sums(e0: u32, e1: u32, i: u32, na: i32, nb: i32) -> array<f32, 64> {
   var acc: array<f32, 64>;
   for (var e = e0 + i; e < e1; e += kTileThreads) {
@@ -765,6 +819,19 @@ fn tile_sums(e0: u32, e1: u32, i: u32, na: i32, nb: i32) -> array<f32, 64> {
       for (var row = max(a0, b0); row < min(oa.n, ob.n); row++) {
         for (var x = 0; x < na; x++) {
           for (var y = 0; y < nb; y++) { acc[x * nb + y] += oa.J[row][x] * ob.J[row][y]; }
+        }
+      }
+    }
+    if (((info >> 7u) & 1u) != 0u) {  // the own terms of the intrinsics run that ka starts
+      let k0 = ldu(a.ib_list + ka);
+      for (var q = ka; q < a.nobs; q++) {
+        let k = ldu(a.ib_list + q);
+        if (ldi(a.o_pt + k) != ldi(a.o_pt + k0) || ldi(a.o_intr + k) != ldi(a.o_intr + k0)) { break; }
+        var o = rows_of(kIntrinsics, k, false);
+        for (var row = 0; row < o.n; row++) {
+          for (var x = 0; x < na; x++) {
+            for (var y = 0; y < nb; y++) { acc[x * nb + y] += o.J[row][x] * o.J[row][y]; }
+          }
         }
       }
     }

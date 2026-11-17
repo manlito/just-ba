@@ -43,6 +43,11 @@ jba_parity_case(sigma "--model SIMPLE_RADIAL --sigma 0.7" "--check-parameters")
 jba_parity_case(shared_focal "--model RADIAL --free-intrinsics 1" "--check-parameters")
 jba_parity_case(shared_all_intrinsics "--model PINHOLE --free-intrinsics 7" "--check-parameters")
 jba_parity_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --free-intrinsics 5" "")
+# One shared block with focal and distortion free seen by 40,000 observations: more
+# than one gather unit (16,384), so the CPU splits its sums and the GPU checks of the
+# same problem (gpu_cases.cmake) take the split gathers and summed intrinsics terms.
+jba_parity_case(shared_intrinsics_split "--model SIMPLE_RADIAL --free-intrinsics 5 --images 16 --points 2500"
+                "--check-parameters")
 jba_parity_case(huber "--model SIMPLE_RADIAL --outliers 0.05" "--loss huber:2 --check-parameters")
 jba_parity_case(cauchy "--model SIMPLE_RADIAL --outliers 0.05" "--loss cauchy:2 --check-parameters")
 jba_parity_case(geman_mcclure "--model SIMPLE_RADIAL --outliers 0.05" "--loss geman_mcclure:2 --check-parameters")

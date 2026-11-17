@@ -721,14 +721,14 @@ poselib-gpu (D142). The same eight capture files, given the database's intrinsic
 
 | Scene | Images | Registered, ours / COLMAP | Rotation median / max | Centre median / max | Points | Observations | Track length | Reprojection, ours / COLMAP | Focal, ours / COLMAP | COLMAP points split | Our run |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| south-building | 128 | 128 / 128 | 0.0089° / 0.031° | 0.0041 % / 0.014 % | 100,228 (-0.2 %) | 613,938 (-1.5 %) | 6.13 (-1.4 %) | 0.599 / 0.607 px | 2,559 px (+0.0 %), from 2,485 | 2,087 (2.1 %) | 17.4 s |
-| gerrard-hall | 100 | 100 / 100 | 0.0306° / 0.113° | 0.0099 % / 0.034 % | 65,866 (-1.8 %) | 388,039 (-2.1 %) | 5.89 (-0.2 %) | 1.126 / 1.133 px | 3,832 px (+0.0 %), from 3,637 | 3,040 (4.5 %) | 9.3 s |
+| south-building | 128 | 128 / 128 | 0.0089° / 0.031° | 0.0041 % / 0.014 % | 100,228 (-0.2 %) | 613,938 (-1.5 %) | 6.13 (-1.4 %) | 0.599 / 0.607 px | 2,559 px (+0.0 %), from 2,485 | 2,087 (2.1 %) | 9.3 s |
+| gerrard-hall | 100 | 100 / 100 | 0.0306° / 0.113° | 0.0099 % / 0.034 % | 65,866 (-1.8 %) | 388,039 (-2.1 %) | 5.89 (-0.2 %) | 1.126 / 1.133 px | 3,832 px (+0.0 %), from 3,637 | 3,040 (4.5 %) | 5.4 s |
 | pipes | 14 | 14 / 14 | 0.0254° / 0.067° | 0.0339 % / 0.069 % | 3,240 (-2.1 %) | 12,180 (-1.3 %) | 3.76 (+0.8 %) | 0.601 / 0.602 px | 3,424 px (-0.0 %), from 7,464 | 11 (0.3 %) | 0.5 s |
 | meadow | 15 | 14 / 14 | 0.0362° / 0.194° | 0.0310 % / 0.083 % | 733 (-0.8 %) | 2,548 (+1.9 %) | 3.48 (+2.8 %) | 0.859 / 0.789 px | 3,407 px (+0.0 %), from 7,441 | 1 (0.1 %) | 0.3 s |
 | office | 26 | 26 / 26 | 0.0229° / 0.071° | 0.0614 % / 0.253 % | 7,572 (-0.7 %) | 27,763 (-0.5 %) | 3.67 (+0.2 %) | 0.720 / 0.720 px | 3,431 px (-0.0 %), from 7,465 | 15 (0.2 %) | 0.8 s |
-| kicker | 31 | 30 / 30 | 0.0100° / 0.073° | 0.0117 % / 0.060 % | 12,623 (-1.9 %) | 55,709 (-1.9 %) | 4.41 (+0.1 %) | 0.867 / 0.856 px | 3,409 px (-0.0 %), from 7,453 | 286 (2.2 %) | 1.1 s |
-| courtyard | 38 | 38 / 38 | 0.0107° / 0.089° | 0.0171 % / 0.103 % | 24,930 (-3.1 %) | 121,704 (-1.9 %) | 4.88 (+1.3 %) | 0.696 / 0.695 px | 3,410 px (-0.0 %), from 7,446 | 226 (0.9 %) | 1.7 s |
-| delivery_area | 44 | 44 / 44 | 0.0125° / 0.037° | 0.0074 % / 0.054 % | 30,757 (-0.5 %) | 128,754 (-1.0 %) | 4.19 (-0.5 %) | 0.646 / 0.650 px | 3,405 px (+0.0 %), from 7,450 | 258 (0.8 %) | 2.1 s |
+| kicker | 31 | 30 / 30 | 0.0100° / 0.073° | 0.0117 % / 0.060 % | 12,623 (-1.9 %) | 55,709 (-1.9 %) | 4.41 (+0.1 %) | 0.867 / 0.856 px | 3,409 px (-0.0 %), from 7,453 | 286 (2.2 %) | 1.0 s |
+| courtyard | 38 | 38 / 38 | 0.0107° / 0.089° | 0.0171 % / 0.103 % | 24,930 (-3.1 %) | 121,704 (-1.9 %) | 4.88 (+1.3 %) | 0.696 / 0.695 px | 3,410 px (-0.0 %), from 7,446 | 226 (0.9 %) | 1.6 s |
+| delivery_area | 44 | 44 / 44 | 0.0125° / 0.037° | 0.0074 % / 0.054 % | 30,757 (-0.5 %) | 128,754 (-1.0 %) | 4.19 (-0.5 %) | 0.646 / 0.650 px | 3,405 px (+0.0 %), from 7,450 | 258 (0.8 %) | 1.7 s |
 
 | Scene | Truth images | Ours: registered, rotation median / max, centre median | COLMAP: registered, rotation median / max, centre median |
 |---|---|---|---|
@@ -749,7 +749,7 @@ median rotation 0.068 to 0.166° against COLMAP's 0.064 to 0.133°, median centr
 figures are the same to within a few thousandths of a degree, and the table of D140
 above stands for fixed intrinsics (`--refine none`).
 
-The price is time: with intrinsics free the adjustments take 2.3 times as long, on
+The price was time: with intrinsics free the adjustments took 2.3 times as long, on
 Metal (South Building 7.6 to 17.5 s, Gerrard Hall 4.2 to 9.5 s) as on the CPU (52 to
 118 s for South Building). Looked into on South Building's last problem (128 images,
 100,371 points, 614,669 observations), solved again by `just-ba solve` with the
@@ -789,7 +789,29 @@ both from one block shared by every observation:
   chunks of fixed size whose sums are added in a fixed order would keep the results
   deterministic and independent of the thread count.
 
-Neither is fixed yet.
+Both are fixed (D143): the gathers run in units of at most 16,384 observations, a
+split block's sums added in order, and `sparse_schur` takes the intrinsics terms once
+per point and block, with compile-time 6 x 4 and 4 x 4 tile shapes. The same problem,
+before and after:
+
+| Backend, linear solver | Fixed | Free, before | Free, after |
+|---|---|---|---|
+| Metal, `sparse_schur` (10 iterations) | 0.118 s | 0.321 s (2.7 times) | 0.165 s (1.4 times) |
+| Metal, `iterative_schur` (per step) | 0.59 ms | 3.53 ms (6.0 times) | 0.99 ms (1.7 times) |
+| CPU, 18 threads (per step) | 2.04 ms | 3.77 ms (1.8 times) | 2.54 ms (1.25 times) |
+
+The demo from the database's intrinsics, fixed against free:
+
+| Scene | Fixed | Free, before | Free, after |
+|---|---|---|---|
+| South Building, Metal | 7.8 s | 17.4 s | 9.4 s (1.21 times) |
+| South Building, CPU | 52.5 s | 118 s | 75.0 s (1.43 times) |
+| Gerrard Hall, Metal | 4.2 s | 9.3 s | 5.5 s (1.29 times) |
+| Gerrard Hall, CPU | 17.6 s | 40.1 s | 26.1 s (1.48 times) |
+
+The reconstructions are the same: every column of the table above but the run times
+agrees with the run before the change. What is left is the arithmetic of the free
+columns, and of the fixed ones, which are computed and masked.
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
