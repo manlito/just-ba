@@ -537,10 +537,16 @@ Windows CUDA wheel turns out broken, its file is deleted on PyPI and the fix shi
 
 ## Milestone 7: incremental pipeline and COLMAP parity
 
-- Minimal incremental reconstruction (document 04, part C).
-- Level 3 comparison with COLMAP 4.2.1.
+- Minimal incremental reconstruction (document 04, part C), in the demo app
+  (`demo/`, `JBA_BUILD_DEMO`, off by default). Relative pose, PnP and match
+  verification come from poselib-gpu, which only the demo links; the library, the
+  wheels and the CLI do not (D132).
+- Level 3 comparison with COLMAP 4.2.1, run by hand with the demo's native binary.
+- A live demo on the documentation site: the same mapper as a WebAssembly module on
+  WebGPU, reconstructing a small scene from its matches in the visitor's browser.
 
-Exit: within the agreed margins of COLMAP on the chosen scenes.
+Exit: within the agreed margins of COLMAP on the chosen scenes, and the live demo
+published.
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
