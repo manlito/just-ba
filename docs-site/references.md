@@ -35,7 +35,7 @@ CVPR 2016. <https://colmap.github.io>. BSD 3-Clause licence.
 - Undistortion iterates as COLMAP's `IterativeUndistortion` does.
 - When nothing else fixes the scale, the gauge holds one translation coordinate, as
   COLMAP does.
-- `export_colmap` writes COLMAP's text model format.
+- `export_colmap` writes COLMAP's text or binary model format.
 - COLMAP 4.2.1, and its Caspar GPU bundle adjustment backend, are references in the
   [benchmarks](_generated/benchmarks.md).
 

@@ -41,7 +41,8 @@ What to look at afterwards:
 - `result.report`: priors the robust losses down-weighted, which points at places
   where the tracker jumped.
 - `jba.covariance(result.problem)`: pose uncertainties.
-- `jba.export_colmap(result.problem, "model/")` writes a COLMAP text model;
+- `jba.export_colmap(result.problem, "model/")` writes a COLMAP text model
+  (`binary=True`: the binary one);
   `jba.write_result` writes the problem file with the results.
 
 The priors' weights come from `SolverOptions.prior_defaults` unless the problem gives

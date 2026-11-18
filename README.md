@@ -62,7 +62,7 @@ ARKit or ARCore camera-to-world matrices to the library's poses. Optional inputs
 gravity priors (`grav_image`, `grav_dir`), line segments for the Manhattan prior
 (`line_image`, `line_xy`, with `RefineOptions.use_manhattan`), and a depth reading per
 keypoint (`refine(..., keypoint_depth=...)`). `just_ba.covariance(problem)` gives pose
-and point covariances; `export_colmap` and `write_result` write the result.
+and point covariances; `export_colmap` (COLMAP's text or binary model) and `write_result` write the result.
 
 ## Reference solver (test-only)
 

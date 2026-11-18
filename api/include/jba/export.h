@@ -11,8 +11,8 @@
 
 namespace jba {
 
-// Export of a solved problem (document 01, outputs; D89): COLMAP's text model for
-// interchange, and the library's own problem file with result sections for what
+// Export of a solved problem (document 01, outputs; D89, D149): COLMAP's text or
+// binary model for interchange, and the library's own problem file with result sections for what
 // COLMAP's format cannot hold.
 
 struct ColmapExportOptions {
@@ -30,10 +30,13 @@ struct ColmapExportOptions {
   const Keypoints* keypoints = nullptr;
   std::vector<std::int32_t> obs_keypoint;
   std::vector<std::uint8_t> point_color;  // 3 per point; empty: grey
+  // COLMAP's binary model (cameras.bin, images.bin, points3D.bin) in place of the
+  // text one. Same content, values as they are (no decimal rounding).
+  bool binary = false;
 };
 
-// Writes cameras.txt, images.txt and points3D.txt into `directory` (which must
-// exist). IDs are indices plus one: camera = intrinsics block, image, point. A point
+// Writes cameras.txt, images.txt and points3D.txt (or, with `binary`, the .bin files)
+// into `directory` (which must exist). IDs are indices plus one: camera = intrinsics block, image, point. A point
 // is written when it has an observation in an exported image; its ERROR is the mean
 // reprojection error there. Throws std::runtime_error.
 void export_colmap(const Problem& problem, const std::string& directory, const ColmapExportOptions& options = {});

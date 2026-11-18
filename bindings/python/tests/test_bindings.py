@@ -352,6 +352,11 @@ def test_export(tmp_path):
     assert lines[0].split()[-1] == "a.jpg" and len(lines) == 6
     lines3d = [l for l in (tmp_path / "points3D.txt").read_text().splitlines() if not l.startswith("#")]
     assert len(lines3d) == 8 and float(lines3d[0].split()[7]) < 1e-9
+    (tmp_path / "bin").mkdir()
+    jba.export_colmap(p, str(tmp_path / "bin"), image_names=["a.jpg", "b.jpg", "c.jpg"], binary=True)
+    images_bin = (tmp_path / "bin" / "images.bin").read_bytes()
+    assert int.from_bytes(images_bin[:8], "little") == 3 and b"a.jpg\0" in images_bin
+    assert int.from_bytes((tmp_path / "bin" / "points3D.bin").read_bytes()[:8], "little") == 8
     jba.write_result(str(tmp_path / "r.jba"), p, covariance=jba.covariance(p), report=jba.evaluate(p))
     d = read_jba(str(tmp_path / "r.jba"))
     assert d["result.pose_covariance"].shape == (3, 6, 6)
