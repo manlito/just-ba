@@ -312,8 +312,9 @@ struct Adjusted {
 // Bundle adjustment of everything registered, then the usual filter: observations
 // with a large reprojection error or behind the camera are dropped, and points left
 // with fewer than two views or a small triangulation angle are removed (their tracks
-// can be triangulated again later).
-Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
+// can be triangulated again later). `on_iteration` goes to the solver; when it stops the
+// solve, the map is left as it was.
+Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::IterationCallback& on_iteration) {
   Adjusted a;
   jba::Problem& p = a.problem;
   p.model = m.cams.model;
@@ -364,7 +365,8 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations) {
   so.max_iterations = max_iterations;
   // The gauge is free (no priors): GaugeMode::Auto holds one pose and one translation
   // coordinate, so the frame and scale set by the first pair carry through.
-  jba::solve(p, so);
+  // Stopped by the callback: the run ends, so nothing more is needed.
+  if (jba::solve(p, so, on_iteration).termination == jba::Termination::Cancelled) return a;
 
   for (std::size_t k = 0; k < a.image_of.size(); ++k)
     std::copy(&p.poses[7 * k], &p.poses[7 * k] + 7, &m.cams.poses[7 * static_cast<std::size_t>(a.image_of[k])]);
@@ -567,7 +569,7 @@ double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o) {
 
 }  // namespace
 
-Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
+Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const ProgressCallback& on_progress) {
   const MapperOptions& o = options_;
   const auto t_start = Clock::now();
   Reconstruction run;
@@ -578,6 +580,33 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.registered.assign(n_img, 0);
   run.error = check(c);
   if (!run.ok()) return run;
+
+  // Live progress (D146). Once the callback returns false it is not called again, and
+  // every stage checks `stopped` on its way out.
+  bool stopped = false;
+  int model_index = -1;
+  auto progress = [&](const char* stage, const Snapshot* live, int iteration = -1, double cost = 0.0) {
+    if (!on_progress || stopped) return !stopped;
+    Progress p;
+    p.stage = stage;
+    p.model = model_index;
+    p.registered = static_cast<int>(std::count(m.registered.begin(), m.registered.end(), 1));
+    p.images = static_cast<int>(n_img);
+    p.adjustments = run.adjustments;
+    p.iteration = iteration;
+    p.cost = cost;
+    p.live = live;
+    stopped = !on_progress(p);
+    return !stopped;
+  };
+  jba::IterationCallback on_iteration;  // empty without a progress callback, as before
+  if (on_progress)
+    on_iteration = [&](const jba::IterationSummary& s) { return progress("adjust", nullptr, s.iteration, s.cost); };
+  auto cancel = [&] {
+    run.cancelled = true;
+    run.error = "cancelled";
+    run.time.total = seconds_since(t_start);
+  };
   // The starting intrinsics: the capture's, with the searched focal lengths. Pair
   // verification uses them; PnP the map's, refined as it grows.
   std::vector<double> start = c.intrinsics;
@@ -594,6 +623,10 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
         if (!c.focal_unknown.empty() && c.focal_unknown[b] && jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal)
           start[np * b + j] *= run.focal_factor;
     run.time.focal_search = seconds_since(ts);
+    if (!progress("focal search", nullptr)) {
+      cancel();
+      return run;
+    }
   }
   const std::vector<jpo_camera> cameras = to_jpo(c.model, start);
 
@@ -632,6 +665,10 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     return run;
   }
   run.time.verify = seconds_since(t0);
+  if (!progress("verify", nullptr)) {
+    cancel();
+    return run;
+  }
 
   // The matches that go on to track building: the inliers of every pair with enough of
   // them. A DEGENERATE pair (no observable baseline) is kept too: its inliers are good
@@ -690,6 +727,10 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   m.cams.image_intrinsics = c.image_intrinsics;
   m.cams.poses.assign(7 * n_img, 0.0);
   for (std::size_t i = 0; i < n_img; ++i) m.cams.poses[7 * i] = 1.0;
+  if (!progress("tracks", nullptr)) {
+    cancel();
+    return run;
+  }
 
   const Map fresh = m;  // the map before any model: tracks built, nothing registered
 
@@ -711,7 +752,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   };
   auto timed_adjust = [&](int iterations) {
     const auto t = Clock::now();
-    Adjusted a = adjust(m, o, iterations);
+    Adjusted a = adjust(m, o, iterations, on_iteration);
     ++run.adjustments;
     run.time.adjust += seconds_since(t);
     return a;
@@ -729,8 +770,24 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
   };
 
   // One model from the first pair `first`: steps 3 to 5. Leaves its map in `m` and its
-  // last adjustment in `last`; false when poselib-gpu fails (run.error says why).
+  // last adjustment in `last`; false when poselib-gpu fails (run.error says why) or the
+  // run is stopped (`stopped`).
   Adjusted last;
+  // A step done: kept for on_step, shown to on_progress. False when the run is stopped.
+  auto step = [&](std::vector<Step>* steps, const char* stage, const std::vector<std::int32_t>& added) {
+    if (stopped) return false;
+    report(steps, stage, added, m, last);
+    if (!on_progress) return true;
+    Snapshot s;
+    s.stage = stage;
+    s.added = added;
+    s.poses = &m.cams.poses;
+    s.registered = &m.registered;
+    s.points = last.problem.points;
+    s.point_track = last.track_of;
+    s.mean_error_px = last.mean_error_px;
+    return progress(stage, &s);
+  };
   auto grow = [&](int first, std::vector<Step>* steps) -> bool {
     // -- 3. First pair, first points, first adjustment. The first image is the origin;
     // the second is the relative pose as returned (camera a to camera b is then world to
@@ -743,7 +800,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     m.registered[fa] = m.registered[fb] = 1;
     timed_points(false);
     last = timed_adjust(o.local_iterations);
-    report(steps, "first pair", {fa, fb}, m, last);
+    if (!step(steps, "first pair", {fa, fb})) return false;
 
     // -- 4. Register the remaining images. Those that see the most triangulated points go
     // first; up to pnp_batch are resected in one call, all against the same map.
@@ -820,15 +877,15 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
       if (added.empty()) continue;  // the rejected images wait until the map grows; others get their turn
       timed_points(false);
       last = timed_adjust(o.local_iterations);
-      report(steps, "register", added, m, last);
+      if (!step(steps, "register", added)) return false;
     }
 
     // -- 5. Final adjustment: complete the tracks, adjust, filter, and adjust what is left.
     timed_points(true);
     last = timed_adjust(o.final_iterations);
+    if (stopped) return false;
     last = timed_adjust(o.final_iterations);
-    report(steps, "final", {}, m, last);
-    return true;
+    return step(steps, "final", {});
   };
 
   // Models, as COLMAP makes them: when a model stops growing with images left over, a
@@ -845,8 +902,13 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step) {
     const int first = choose_first_pair(c, run, o, in_a_model);
     if (first < 0) break;
     if (model > 0) m = fresh;
+    model_index = model;
     std::vector<Step> steps;
     if (!grow(first, on_step ? &steps : nullptr)) {
+      if (stopped) {
+        cancel();
+        return run;
+      }
       finish(m, std::move(last));
       return run;
     }

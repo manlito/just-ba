@@ -82,6 +82,10 @@ else()
     # Focal lengths 2.2 times too large and marked as a guess, as COLMAP's on images
     # without metadata: searched for, then refined (D144).
     add_test(NAME demo_synth_focal COMMAND jba_demo synth --focal-error 1.2)
+    # The progress callback (D146): continuing changes nothing, returning false cancels.
+    add_executable(test_demo_cancel tests/test_cancel.cpp)
+    target_link_libraries(test_demo_cancel PRIVATE jba_demo_mapper jba_warnings)
+    add_test(NAME demo_cancel COMMAND test_demo_cancel)
     # The COLMAP path without COLMAP: scene -> database and text model -> capture file ->
     # reconstruction against the truth (demo/tools/test_colmap_roundtrip.py).
     find_package(Python3 COMPONENTS Interpreter)
