@@ -1,9 +1,9 @@
 # Free hosted runners only (decision D39). No schedules, no GPU runners.
 #
-# Manual trigger only while the repository is private (decision D49): on private
-# repositories hosted minutes count against a quota, macOS at 10x and Windows at 2x.
-# When the repository goes public (after milestone 2), uncomment push and
-# pull_request.
+# Runs on every push to main, a merge included, in quick mode, and by hand (D148,
+# replacing D49's manual trigger). Not on pull requests: hosted minutes count against
+# the plan's quota, macOS at 10x and Windows at 2x. Pushes that change only the
+# planning notes in docs/ are skipped.
 #
 # Two modes (decision D61):
 #   quick (default): Linux and Windows build and test, Ceres parity without the
@@ -24,9 +24,9 @@ on:
         description: "Full run: add macOS (10x minutes) and slow tests"
         type: boolean
         default: false
-  # push:
-  #   branches: [main]
-  # pull_request:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**"]
 
 concurrency:
   group: ci-${{ github.ref }}

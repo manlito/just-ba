@@ -21,8 +21,9 @@ PYTHONPATH=build/dev/bindings/python docs-site/.venv/bin/sphinx-build -W -b doct
 
 With `JBA_DEMO_WEB` set to a WebAssembly build of the demo app (its `web/` folder,
 see `demo/README.md`; a relative path is from the repository root), the live demo is copied to `demo/` and shown on its page;
-without it the page says the demo is not in this build. The `docs` workflow takes
-the demo from the release `demo-web`, which `demo/tools/publish_web.sh` uploads (D148).
+without it the page says the demo is not in this build. The `docs` workflow builds
+the demo from poselib-gpu's sources and includes it (D148).
 
-The second runs every `>>>` example in the docstrings. CI's `docs` workflow (started
-by hand) does both and, with `deploy=true`, publishes to Cloudflare Pages.
+The second runs every `>>>` example in the docstrings. CI's `docs` workflow does both on
+every push to main and publishes to Cloudflare Pages; started by hand, it publishes
+only with `deploy=true` (D148).

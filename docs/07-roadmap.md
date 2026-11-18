@@ -559,9 +559,8 @@ its loss (D140, D141), then compared on six ETH3D scenes with ground truth (D142
 equally accurate, given COLMAP's calibration (D143), and since D144 from the
 database's own intrinsics too: the mapper refines them and searches for guessed focal
 lengths. The margins are agreed (D147, 2026-11-17) and all eight scenes meet them,
-with intrinsics fixed and refined. Left: publishing the demo, whose route is set
-(D148): `demo/tools/publish_web.sh` uploads the build to the release `demo-web`, and
-the docs workflow takes it from there.
+with intrinsics fixed and refined. Left: publishing the demo, which the docs
+workflow now builds from poselib-gpu's sources and deploys on every push to main (D148).
 
 ### First comparison with COLMAP (2026-11-16)
 
