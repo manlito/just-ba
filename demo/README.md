@@ -161,6 +161,10 @@ cmake --build build/demo-wasm
 `jba_demo.wasm`, ready for any static server. The documentation site includes them
 when built with `JBA_DEMO_WEB=build/demo-wasm/demo/web` (`docs-site/README.md`).
 
+To put a new build on the live site (D148), run `demo/tools/publish_web.sh` (it
+configures `build/demo-wasm` if needed, rebuilds it and uploads the files to the
+release `demo-web`), then `gh workflow run docs -f deploy=true`.
+
 ## What it checks
 
 A scene passes when every image is registered, the median rotation error is below

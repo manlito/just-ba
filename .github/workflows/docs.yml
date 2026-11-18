@@ -2,6 +2,11 @@
 #
 #   gh workflow run docs                    # build, run the docstring examples
 #   gh workflow run docs -f deploy=true     # the same, then publish to Cloudflare Pages
+#   gh workflow run docs -f demo=false      # without the live demo
+#
+# The live demo is not built here: it needs poselib-gpu, a separate private
+# repository. demo/tools/publish_web.sh builds it by hand and uploads it to the
+# release demo-web, which this workflow downloads with its own token (D148).
 #
 # Free hosted runner (D39). Deploying needs the repository secrets
 # CLOUDFLARE_API_TOKEN (permission "Cloudflare Pages: Edit") and
@@ -16,6 +21,10 @@ on:
         description: "Publish to Cloudflare Pages"
         type: boolean
         default: false
+      demo:
+        description: "Include the live demo from the release demo-web"
+        type: boolean
+        default: true
 
 concurrency:
   group: docs
@@ -30,6 +39,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # The files the site serves, and the record of the commits they were built from,
+      # which is printed and not published (docs-site/conf.py copies the three only).
+      - name: Fetch the live demo
+        if: inputs.demo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download demo-web --repo "$GITHUB_REPOSITORY" --dir demo-web \
+            --pattern index.html --pattern jba_demo.js --pattern jba_demo.wasm --pattern demo-web.json
+          cat demo-web/demo-web.json
+          echo "JBA_DEMO_WEB=demo-web" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         id: py
         with:

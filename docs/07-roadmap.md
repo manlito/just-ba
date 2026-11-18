@@ -559,8 +559,9 @@ its loss (D140, D141), then compared on six ETH3D scenes with ground truth (D142
 equally accurate, given COLMAP's calibration (D143), and since D144 from the
 database's own intrinsics too: the mapper refines them and searches for guessed focal
 lengths. The margins are agreed (D147, 2026-11-17) and all eight scenes meet them,
-with intrinsics fixed and refined. Left: publishing the demo (how the docs workflow
-gets the module is still open).
+with intrinsics fixed and refined. Left: publishing the demo, whose route is set
+(D148): `demo/tools/publish_web.sh` uploads the build to the release `demo-web`, and
+the docs workflow takes it from there.
 
 ### First comparison with COLMAP (2026-11-16)
 
