@@ -48,6 +48,22 @@ jba_parity_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --fr
 # same problem (gpu_cases.cmake) take the split gathers and summed intrinsics terms.
 jba_parity_case(shared_intrinsics_split "--model SIMPLE_RADIAL --free-intrinsics 5 --images 16 --points 2500"
                 "--check-parameters")
+# More split blocks (review of D143, finding 2): fixed images and points in the split
+# block, so its tile entries mix own terms without elimination; pose blocks of 20,000
+# observations, with the intrinsics fixed and free; eight intrinsics parameters
+# through the generic tiles; an intrinsics block per image, each split; depth
+# measurements beside free intrinsics.
+jba_parity_case(split_fixed_blocks
+                "--model SIMPLE_RADIAL --free-intrinsics 5 --images 16 --points 2500 --fix-images 2 --fix-points 200"
+                "--check-parameters")
+jba_parity_case(split_pose_blocks "--model RADIAL --images 3 --points 20000" "--check-parameters")
+jba_parity_case(split_pose_blocks_free "--model RADIAL --free-intrinsics 5 --images 3 --points 20000"
+                "--check-parameters")
+jba_parity_case(split_opencv "--model OPENCV --free-intrinsics 5 --images 16 --points 2500" "--check-parameters")
+jba_parity_case(split_per_image "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --images 3 --points 20000"
+                "")
+jba_parity_case(split_depth "--model RADIAL --free-intrinsics 5 --images 16 --points 2500 --depth 0.5 --depth-free 1"
+                "--check-parameters")
 jba_parity_case(huber "--model SIMPLE_RADIAL --outliers 0.05" "--loss huber:2 --check-parameters")
 jba_parity_case(cauchy "--model SIMPLE_RADIAL --outliers 0.05" "--loss cauchy:2 --check-parameters")
 jba_parity_case(geman_mcclure "--model SIMPLE_RADIAL --outliers 0.05" "--loss geman_mcclure:2 --check-parameters")

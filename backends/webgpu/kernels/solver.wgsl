@@ -848,7 +848,7 @@ fn tile_sums(e0: u32, e1: u32, i: u32, na: i32, nb: i32) -> array<f32, 64> {
   return acc;
 }
 
-// The pose by pose case with its 6 x 6 shape fixed, as solver.inc's tile_sums<6, 6>:
+// The 6 x 6 case (pose by pose) with its shape fixed, as solver.inc's tile_sums<6, 6>:
 // constant loop bounds, so the sums can stay in registers. The same additions in the
 // same order as tile_sums.
 fn tile_sums66(e0: u32, e1: u32, i: u32) -> array<f32, 36> {
@@ -883,6 +883,21 @@ fn tile_sums66(e0: u32, e1: u32, i: u32) -> array<f32, 36> {
       for (var row = max(a0, b0); row < min(oa.n, ob.n); row++) {
         for (var x = 0; x < 6; x++) {
           for (var y = 0; y < 6; y++) { acc[x * 6 + y] += oa.J[row][x] * ob.J[row][y]; }
+        }
+      }
+    }
+    // No camera model has 6 parameters today, so a 6 x 6 tile is pose by pose and
+    // this never runs; it keeps the shape complete, as solver.inc's template is.
+    if (((info >> 7u) & 1u) != 0u) {  // the own terms of the intrinsics run that ka starts
+      let k0 = ldu(a.ib_list + ka);
+      for (var q = ka; q < a.nobs; q++) {
+        let k = ldu(a.ib_list + q);
+        if (ldi(a.o_pt + k) != ldi(a.o_pt + k0) || ldi(a.o_intr + k) != ldi(a.o_intr + k0)) { break; }
+        var o = rows_of(kIntrinsics, k, false);
+        for (var row = 0; row < o.n; row++) {
+          for (var x = 0; x < 6; x++) {
+            for (var y = 0; y < 6; y++) { acc[x * 6 + y] += o.J[row][x] * o.J[row][y]; }
+          }
         }
       }
     }

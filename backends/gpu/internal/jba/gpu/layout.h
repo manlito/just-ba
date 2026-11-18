@@ -37,7 +37,7 @@ struct uint_pair {
 
 JBA_CONSTANT_DATA int kMaxParams = 8;
 JBA_CONSTANT_DATA int kChunkFloats = 64;    // partial sums per camera chunk (an 8 x 8 block at most)
-JBA_CONSTANT_DATA uint kGatherThreads = 256;  // block_gather: threads per camera-side block
+JBA_CONSTANT_DATA uint kGatherThreads = 256;  // block_gather: threads per gather unit
 JBA_CONSTANT_DATA uint kTileThreads = 64;     // schur_tiles: threads per chunk of tile entries
 JBA_CONSTANT_DATA uint kReduceThreads = 256;  // reduce: threads of its one group
 JBA_CONSTANT_DATA uint kGatherUnit = 16384;   // block_gather: observations per group at most
