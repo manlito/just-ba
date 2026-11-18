@@ -27,7 +27,8 @@ app could use WebGPU alone, or at least good enough for a browser-only demo?
   (D59, D93). It is not a defect of this code: it reproduces in a small Metal program
   without Dawn or the library, which points to Apple's shader compiler or GPU. A
   reordered loop in one kernel avoids it at no measurable cost (below); every
-  problem tried now repeats.
+  problem tried now repeats, and a check of every kernel dispatch by dispatch finds
+  the fault in no other kernel (D133).
 - **For the desktop app:** WebGPU is good enough on Apple GPUs to be the only GPU
   path on a Mac if the determinism defect is fixed, at a cost of up to 40 percent
   with the iterative solver and 20 to 120 percent with sparse_schur (40 at
@@ -144,9 +145,18 @@ once. Cost: none measurable. Time per conjugate-gradients iteration moved by 0.9
 never runs the changed loop and moved by 1.01, the size of the noise.
 
 It sidesteps the trigger without explaining it. `jf_times`, `rows_of` and
-`scale_observations` have loops of the same shape and were not tested on their own;
-every problem tried repeats, but a new problem shape could meet the fault elsewhere.
-The reproduction (the Metal program, the kernels, the buffer snapshot and the
+`scale_observations` have loops of the same shape, so every kernel was then checked
+on its own (2026-11-16, D133). `JBA_WEBGPU_REPEAT=n` runs each dispatch once from a
+copy of the heap and n more times from the same copy, compares the whole heap with
+the first run on the device, and prints per kernel and mode how many dispatches
+differed. With the reordering undone it finds the fault where it was: on ladybug-49
+`block_gather` mode 1 in 107 of 3,767 dispatches (and mode 3, the same loop, in 1 of
+48), on final-93 in 120 of 3,322, every other kernel 0. With the reordering, with
+n = 3 and both linear solvers, on the 58 synthetic GPU test problems and the five BAL
+problems (126 solves, 264,231 dispatches, every kernel the solves use, these three
+functions' callers among them): no dispatch differed. So on this Mac no other kernel
+meets the fault; a problem shape not among these could still, and the switch is how to
+look. The reproduction (the Metal program, the kernels, the buffer snapshot and the
 reordered kernel) was saved under `build/metal-repro` in the exploration's worktree,
 for a report to Apple. Still to try: a later Dawn release, and the same build on
 Vulkan and Direct3D 12 on the laptop. `bench/run.py --allow-nondeterministic` stays,
@@ -271,8 +281,9 @@ started from another solve's iteration callback no longer waits on itself), and 
 whole test suite with and without WebGPU. Left for later:
 
 1. The Metal fault behind the non-repeatable solves (above) is worked around in
-   the one kernel where it showed. Check the other kernels with the same loop shape,
-   and report it to Apple with the saved reproduction.
+   the one kernel where it showed. The other kernels were checked with
+   `JBA_WEBGPU_REPEAT` (D133): none meets it. Still to do: report it to Apple with
+   the saved reproduction (the owner's), and run the same check on the laptop.
 2. Measure on the laptop: Dawn on Direct3D 12 and Vulkan against CUDA, on Windows
    and Linux. This decides whether the desktop app can use WebGPU alone on Windows,
    and covers the Intel and AMD machines document 09 worries about.
@@ -281,9 +292,9 @@ whole test suite with and without WebGPU. Left for later:
    browser demo.
 4. A host-side factorization for the browser (strategy B), if the demo should match
    Metal's default.
-5. CI: a compile check of the WGSL (Tint's command-line tool from the same release)
-   would catch a kernel that no longer compiles at no cost. The GPU tests stay
-   manual (D40).
+5. CI: a compile check of the WGSL. Done (D132): `webgpu_wgsl_compiles` runs Tint's
+   command-line tool from the same release on the whole module, in the
+   `webgpu-native` job. The GPU tests stay manual (D40).
 6. Keep two kernel sources in step: every change to `solver.inc` now needs the same
    change in `solver.wgsl`. D96 avoided exactly this for Metal and CUDA; WGSL cannot
    be produced by their preludes, since it has no pointers. A generator that writes

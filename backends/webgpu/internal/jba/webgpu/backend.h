@@ -15,6 +15,10 @@ bool available();
 // The adapter's description, for reports, or an empty string.
 std::string device_name();
 
+// The whole WGSL module the kernels are compiled from, as handed to the device, for
+// checking it without one (tests/wgsl_module.cpp, Tint's command-line tool).
+std::string wgsl_module();
+
 // WebGPU backend (exploration): the shared GPU host logic (jba/gpu/backend.h, D96) on
 // a WebGPU device, natively through Dawn (Metal, Vulkan or Direct3D underneath) or in
 // the browser through Emscripten's WebGPU port. The kernels are a WGSL port of the
@@ -25,8 +29,11 @@ std::string device_name();
 // host has a factorization (Accelerate on Apple, natively); elsewhere iterative_schur.
 //
 // Environment, native only: JBA_WEBGPU_TOGGLES, a comma-separated list of Dawn toggles
-// to enable (for example disable_robustness), and JBA_WEBGPU_NO_DIRECT=1 to leave
-// strategy B out.
+// to enable (for example disable_robustness), JBA_WEBGPU_NO_DIRECT=1 to leave
+// strategy B out, and two experiments, slow: JBA_WEBGPU_SYNC=1 waits after every
+// dispatch, and JBA_WEBGPU_REPEAT=n runs every dispatch n more times on the memory it
+// started from, then prints per kernel and mode how many dispatches gave different
+// results (document 16).
 class WebGpuBackend final : public gpu::GpuBackend {
  public:
   WebGpuBackend(const Problem& problem, const SolverOptions& options, const Gauge& gauge);
