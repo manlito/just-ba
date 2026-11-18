@@ -48,7 +48,7 @@ jba_parity_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --fr
 # same problem (gpu_cases.cmake) take the split gathers and summed intrinsics terms.
 jba_parity_case(shared_intrinsics_split "--model SIMPLE_RADIAL --free-intrinsics 5 --images 16 --points 2500"
                 "--check-parameters")
-# More split blocks (review of D143, finding 2): fixed images and points in the split
+# More split blocks (review of D145, finding 2): fixed images and points in the split
 # block, so its tile entries mix own terms without elimination; pose blocks of 20,000
 # observations, with the intrinsics fixed and free; eight intrinsics parameters
 # through the generic tiles; an intrinsics block per image, each split; depth

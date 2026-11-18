@@ -3,12 +3,12 @@
 A minimal incremental reconstruction (document 04, part C): poselib-gpu verifies the
 matches of every pair, gives the first two poses and registers each further image by
 PnP; this library builds the tracks, triangulates and adjusts. It is the only part of
-this repository that links poselib-gpu (D132): the library, the wheels and the CLI do
+this repository that links poselib-gpu (D134): the library, the wheels and the CLI do
 not, and a default build does not look for it.
 
 | File | What it is |
 |---|---|
-| `src/mapper.h`, `src/mapper.cpp` | The mapper: pair verification, tracks (connected components of the verified matches, split by triangulation where a wrong match joined two points; D138), first pair, registration, triangulation, adjustment and filtering. Ported from poselib-gpu's incremental test, using only its public header `jpo.h`. |
+| `src/mapper.h`, `src/mapper.cpp` | The mapper: pair verification, tracks (connected components of the verified matches, split by triangulation where a wrong match joined two points; D140), first pair, registration, triangulation, adjustment and filtering. Ported from poselib-gpu's incremental test, using only its public header `jpo.h`. |
 | `src/scenes.h`, `src/scenes.cpp` | Generated captures with ground truth: orbit (16 images), wall walk (14), camera grid (13), with keypoint noise, wrong matches and pairs that do not overlap. |
 | `src/evaluate.h`, `src/evaluate.cpp` | A reconstruction against its ground truth. |
 | `src/capture_io.h`, `src/capture_io.cpp`, `src/container.*` | The capture file (below), in the container of document 11. |
@@ -79,7 +79,7 @@ distortion in every adjustment (`--refine` to change that), and a focal length t
 database marks as a guess (no `prior_focal_length`: no focal length in the image's
 metadata) is first searched for: the pairs with the most matches are verified under 61
 focal lengths from a quarter to four times the guess, in one poselib-gpu call, and the
-one with the lowest total MSAC score is the start (D142). It prints both sides: images registered, points,
+one with the lowest total MSAC score is the start (D144). It prints both sides: images registered, points,
 observations, mean track length, mean reprojection error; then, on the images both
 registered, rotation error after the best common rotation and camera-centre error
 after the best similarity, as a share of the extent of COLMAP's camera centres; then

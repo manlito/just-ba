@@ -90,7 +90,7 @@ struct Map {
 // in a fixed order. A component with two keypoints in one image (a wrong match joined
 // two points, or a repeated pattern) is kept, unlike the library's build_tracks with
 // ConflictPolicy::Drop, which has no poses to split it with here: triangulation takes
-// at most one keypoint per image (update_points), so the wrong ones stay out (D138).
+// at most one keypoint per image (update_points), so the wrong ones stay out (D140).
 jba::Tracks components(const jba::Keypoints& kp, const std::vector<std::int32_t>& matches, jba::TrackStats& st) {
   const std::size_t n = static_cast<std::size_t>(kp.begin.back());
   std::vector<std::int64_t> parent(n);
@@ -163,7 +163,7 @@ double reprojection_error(const Map& m, int image, const double* xy, const doubl
 // hold a second point (two points joined by a wrong match, or a repeated pattern):
 // those keypoints are triangulated on their own and, if they make a point, move to a
 // new track, as the library's ConflictPolicy::Repair splits tracks once poses exist.
-// Three images, so stray wrong matches do not become points (D138).
+// Three images, so stray wrong matches do not become points (D140).
 void split_leftovers(Map& m, std::size_t t, const jba::TriangulationOptions& tri) {
   const std::int64_t b = m.tracks.begin[t], e = m.tracks.begin[t + 1];
   std::vector<jba::Ray> rays;

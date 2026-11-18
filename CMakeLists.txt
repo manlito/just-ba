@@ -23,7 +23,7 @@ option(JBA_BUILD_TESTS "Build the tests" ON)
 option(JBA_BUILD_CLI "Build the sample command-line binary" ON)
 option(JBA_WITH_CERES "Build the Ceres reference harness (test-only; see third_party/ceres)" OFF)
 option(JBA_BUILD_PYTHON "Build the Python bindings (needs nanobind; see README)" OFF)
-# The demo app (D132): the incremental reconstruction, natively and in the browser. It
+# The demo app (D134): the incremental reconstruction, natively and in the browser. It
 # alone links poselib-gpu, from its sources next to this repository; nothing else does.
 option(JBA_BUILD_DEMO "Build the demo app (needs poselib-gpu's sources, JBA_POSELIB_GPU_DIR)" OFF)
 if(JBA_BUILD_PYTHON)

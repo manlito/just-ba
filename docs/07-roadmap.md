@@ -540,7 +540,7 @@ Windows CUDA wheel turns out broken, its file is deleted on PyPI and the fix shi
 - Minimal incremental reconstruction (document 04, part C), in the demo app
   (`demo/`, `JBA_BUILD_DEMO`, off by default). Relative pose, PnP and match
   verification come from poselib-gpu, which only the demo links; the library, the
-  wheels and the CLI do not (D132).
+  wheels and the CLI do not (D134).
 - Level 3 comparison with COLMAP 4.2.1, run by hand with the demo's native binary.
 - A live demo on the documentation site: the same mapper as a WebAssembly module on
   WebGPU, reconstructing a small scene from its matches in the visitor's browser.
@@ -548,17 +548,17 @@ Windows CUDA wheel turns out broken, its file is deleted on PyPI and the fix shi
 Exit: within the agreed margins of COLMAP on the chosen scenes, and the live demo
 published.
 
-Started 2026-11-16: the demo app builds natively and as WebAssembly (D133 to D135).
+Started 2026-11-16: the demo app builds natively and as WebAssembly (D135 to D137).
 Its mapper reconstructs the three generated scenes within their thresholds at seeds 0
 to 8, on the CPU and with Metal for both libraries, and in the browser on WebGPU and
 the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. It reads
-COLMAP's database and model (D136), checked by a round trip without COLMAP, and was
-compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D137), then brought
+COLMAP's database and model (D138), checked by a round trip without COLMAP, and was
+compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D139), then brought
 to within 1.1 and 2.3 percent of COLMAP's point counts by how it handles tracks and
-its loss (D138, D139), then compared on six ETH3D scenes with ground truth (D140):
-equally accurate, given COLMAP's calibration (D141), and since D142 from the
+its loss (D140, D141), then compared on six ETH3D scenes with ground truth (D142):
+equally accurate, given COLMAP's calibration (D143), and since D144 from the
 database's own intrinsics too: the mapper refines them and searches for guessed focal
-lengths. Left: the margins (proposed in D139); and publishing the demo (how the docs
+lengths. Left: the margins (proposed in D141); and publishing the demo (how the docs
 workflow gets the module is still open).
 
 ### First comparison with COLMAP (2026-11-16)
@@ -568,7 +568,7 @@ conda-forge's CPU build in a temporary environment, removed afterwards. COLMAP:
 `demo/tools/colmap_compare.sh` (one SIMPLE_RADIAL camera per scene, SIFT on 4 threads
 at most 3,200 px, exhaustive matching, its mapper). Ours: the same verified matches
 from COLMAP's database and COLMAP's refined intrinsics, COLMAP's mapper thresholds,
-poses on CUDA. Poses after aligning the two reconstructions (D134's measures; centre
+poses on CUDA. Poses after aligning the two reconstructions (D136's measures; centre
 error over the extent of COLMAP's camera centres). Figures from the run with the
 adjustment on the CPU; on CUDA they agree to the third digit.
 
@@ -595,7 +595,7 @@ not yet checked. The lower reprojection error follows from the shorter tracks. T
 times are not a speed comparison: COLMAP ran on the CPU, and our mapper adjusts every
 registered image and point after each step.
 
-### Tracks as COLMAP handles them (2026-11-16, D138)
+### Tracks as COLMAP handles them (2026-11-16, D140)
 
 A diagnostic of which keypoints each side groups into which point (`jba_demo run`
 prints it) showed the gap was not missing track merging: our points were almost never
@@ -631,11 +631,11 @@ between points, and 4,782 of COLMAP's points have no observation in ours; splitt
 from two images instead of three gained 757 points and split more of COLMAP's, so it
 was not kept. The generated scenes pass as before (seeds 0 to 8, the noise sweep).
 
-### Gerrard Hall investigated (2026-11-16, D139)
+### Gerrard Hall investigated (2026-11-16, D141)
 
 Investigated by Fable 5.2 and checked here (its numbers reproduce). Two causes left:
 
-- D138's 2° rule let a keypoint the 4 px filter had dropped rejoin its point at every
+- D140's 2° rule let a keypoint the 4 px filter had dropped rejoin its point at every
   round, to be dropped again after the adjustment. It never became a leftover, so the
   second point it belonged to was never made. A dropped keypoint now rejoins only
   within the filter's 4 px, as COLMAP's track completion does; others keep 2°.
@@ -662,7 +662,7 @@ mostly two-view, 1,437 of them in tracks that span two images in ours, which sug
 correspondence COLMAP keeps and we drop. Why COLMAP keeps whole the points we split
 could not be determined without running COLMAP's own mapper step by step.
 
-### Eight scenes, six with ground truth (2026-11-17, D140)
+### Eight scenes, six with ground truth (2026-11-17, D142)
 
 Six scenes of the ETH3D high-resolution multi-view benchmark (training set,
 undistorted DSLR images of about 6200 x 4130, ground-truth poses from its laser-scan
@@ -702,7 +702,7 @@ ETH3D scenes: median rotation 0.066 to 0.164° against 0.064 to 0.133°, median 
 5 to 34 mm against 5 to 34 mm.
 
 These hold with COLMAP's calibration. Our mapper keeps intrinsics fixed and uses the
-reference's, refined by COLMAP's own reconstruction (D136). Given the database's
+reference's, refined by COLMAP's own reconstruction (D138). Given the database's
 initial intrinsics instead (`--intrinsics capture`), it fails on every ETH3D scene (6
 to 37 of 14 to 44 images, median rotation 10 to 75°): their images carry no focal
 length, so the initial guess is COLMAP's default, 2.2 times the true one, which COLMAP
@@ -710,13 +710,13 @@ corrects as it reconstructs. On South Building and Gerrard Hall, whose initial f
 lengths come from the images' metadata and are 3 and 5 % off, it registers every
 image but the median rotation error against COLMAP grows to 0.33 and 1.0°. Parity
 without COLMAP's calibration needs the mapper to refine focal length and distortion,
-as COLMAP's does (D141).
+as COLMAP's does (D143).
 
-### From the database's intrinsics (2026-11-17, D142)
+### From the database's intrinsics (2026-11-17, D144)
 
 The mapper now refines focal length and distortion in every adjustment, as COLMAP's,
 and a focal length the database marks as a guess is first searched for with
-poselib-gpu (D142). The same eight capture files, given the database's intrinsics
+poselib-gpu (D144). The same eight capture files, given the database's intrinsics
 (`--intrinsics capture`), our side on Metal:
 
 | Scene | Images | Registered, ours / COLMAP | Rotation median / max | Centre median / max | Points | Observations | Track length | Reprojection, ours / COLMAP | Focal, ours / COLMAP | COLMAP points split | Our run |
@@ -746,7 +746,7 @@ few percent before the adjustments. Every scene registers the images COLMAP's do
 with points within 3.1 % and focal lengths within 0.1 % of COLMAP's; against the truth,
 median rotation 0.068 to 0.166° against COLMAP's 0.064 to 0.133°, median centre 5 to
 35 mm against 5 to 34 mm. Started from COLMAP's calibration instead (the default), the
-figures are the same to within a few thousandths of a degree, and the table of D140
+figures are the same to within a few thousandths of a degree, and the table of D142
 above stands for fixed intrinsics (`--refine none`).
 
 The price was time: with intrinsics free the adjustments took 2.3 times as long, on
@@ -789,7 +789,7 @@ both from one block shared by every observation:
   chunks of fixed size whose sums are added in a fixed order would keep the results
   deterministic and independent of the thread count.
 
-Both are fixed (D143): the gathers run in units of at most 16,384 observations, a
+Both are fixed (D145): the gathers run in units of at most 16,384 observations, a
 split block's sums added in order, and `sparse_schur` takes the intrinsics terms once
 per point and block, with compile-time 6 x 4 and 4 x 4 tile shapes. The same problem,
 before and after:
@@ -833,7 +833,7 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 - Plane and 3D line constraints.
 - Stronger preconditioners.
 - Track merging by geometry (points close in space with no match between them). The
-  demo's mapper splits and completes tracks (D138); nothing merges them.
+  demo's mapper splits and completes tracks (D140); nothing merges them.
 - WebAssembly and WebGPU backend.
 
 ## Decisions needed from the owner

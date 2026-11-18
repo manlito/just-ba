@@ -70,9 +70,9 @@ are still consecutive, which the preconditioner uses.
 A block with far more observations than the others, as a shared intrinsics block,
 which sees all of them, is gathered in units of at most 16,384 observations (on the
 CPU, extended to the end of a point's observations) that run in parallel, and its
-units' sums are added in order (D143). The explicit reduced camera system takes a
+units' sums are added in order (D145). The explicit reduced camera system takes a
 shared intrinsics block's elimination terms once per point: all of a point's
-observations in the block share it, so the sums over their pairs factor (D143).
+observations in the block share it, so the sums over their pairs factor (D145).
 
 Any block can be marked fixed. Fixed blocks are removed from the system at setup, not
 masked at run time. As built: single fixed coordinates inside a free block (the

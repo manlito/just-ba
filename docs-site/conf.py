@@ -28,7 +28,7 @@ autodoc_typehints = "signature"
 # The docstring examples run with `sphinx-build -b doctest` (document 08).
 doctest_global_setup = "import numpy as np\nimport just_ba\njba = just_ba"
 
-# The live demo (D132): its built page and module, from a WebAssembly build of the
+# The live demo (D134): its built page and module, from a WebAssembly build of the
 # demo app, copied to demo/ when JBA_DEMO_WEB names their folder. Without it the
 # demo page says the demo is not in this build. A relative path is from the repository root.
 DEMO_WEB = os.environ.get("JBA_DEMO_WEB", "")

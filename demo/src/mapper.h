@@ -1,4 +1,4 @@
-// A minimal incremental reconstruction (document 04, part C; D132). poselib-gpu
+// A minimal incremental reconstruction (document 04, part C; D134). poselib-gpu
 // verifies the matches of every pair, gives the first two poses and registers each
 // further image by PnP; this library builds the tracks, triangulates and adjusts.
 // Part of the demo app, not of the library: only the demo links poselib-gpu.
@@ -70,7 +70,7 @@ struct MapperOptions {
   int max_models = 10;                     // models tried, each from images in no earlier model
   int final_iterations = 50;
   // Cauchy scale of the adjustments, pixels; 0: max_reproj_px, so every observation the
-  // filter accepts counts fully (D139). A smaller scale fits each point to the majority
+  // filter accepts counts fully (D141). A smaller scale fits each point to the majority
   // of its keypoints and leaves valid ones, far from the image centre, to the filter.
   double loss_scale = 0.0;
   // Intrinsics groups the adjustments refine (a jba::IntrinsicsGroup mask), as COLMAP's
@@ -113,7 +113,7 @@ inline void colmap_thresholds(MapperOptions& o) {
   o.tri_max_angle_error_deg = 2.0;  // COLMAP's create_max_angle_error and continue_max_angle_error
   o.refine_intrinsics = jba::kFocal | jba::kDistortion;  // principal point fixed, as COLMAP's
   // Not COLMAP's: it estimates a guessed focal length from the fundamental matrix and
-  // in PnP, which poselib-gpu has no solver for (D142).
+  // in PnP, which poselib-gpu has no solver for (D144).
   o.search_focal = true;
 }
 

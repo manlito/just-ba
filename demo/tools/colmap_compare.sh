@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The comparison with COLMAP (document 05, level 3; D136) for one scene, run by hand on a
+# The comparison with COLMAP (document 05, level 3; D138) for one scene, run by hand on a
 # machine that has COLMAP. COLMAP is a reference here, not a dependency: install it
 # anywhere disposable (a temporary prefix, a conda environment) and remove it afterwards.
 #

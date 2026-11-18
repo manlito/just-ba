@@ -145,7 +145,7 @@ For `sparse_schur` on CUDA, add `-DJBA_WITH_CUDSS=ON -Dcudss_DIR=<cuDSS>/lib/cma
 
 `demo/` is a minimal incremental reconstruction, natively and as the live demo of the
 documentation site. It alone links poselib-gpu, from its sources next to this
-repository, and is built only with `-DJBA_BUILD_DEMO=ON` (D132); see `demo/README.md`.
+repository, and is built only with `-DJBA_BUILD_DEMO=ON` (D134); see `demo/README.md`.
 
 ## Parity with Ceres
 

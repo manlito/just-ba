@@ -140,6 +140,6 @@ from features. Metrics are in document 05.
 Relative pose and PnP estimation are a sizeable amount of code that is not our core.
 They come from poselib-gpu, the owner's sibling library, which only the demo app
 links (`demo/`, built with `JBA_BUILD_DEMO`). The library and its wheels never depend
-on it (D132). The mapper of steps 1 to 5 lives in the demo too: a native binary for
+on it (D134). The mapper of steps 1 to 5 lives in the demo too: a native binary for
 the COLMAP comparison and a WebAssembly module for the live demo on the documentation
 site.

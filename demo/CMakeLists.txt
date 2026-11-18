@@ -1,4 +1,4 @@
-# The demo app (D132): a minimal incremental reconstruction (document 04, part C) with
+# The demo app (D134): a minimal incremental reconstruction (document 04, part C) with
 # poselib-gpu's relative pose and PnP and this library's tracks, triangulation and
 # solver. Natively, a command-line binary (generated scenes against their ground
 # truth, and the comparison with COLMAP); under Emscripten, a WebAssembly module and
@@ -80,7 +80,7 @@ else()
     # The three generated scenes reconstruct within their thresholds (CPU).
     add_test(NAME demo_synth COMMAND jba_demo synth)
     # Focal lengths 2.2 times too large and marked as a guess, as COLMAP's on images
-    # without metadata: searched for, then refined (D142).
+    # without metadata: searched for, then refined (D144).
     add_test(NAME demo_synth_focal COMMAND jba_demo synth --focal-error 1.2)
     # The COLMAP path without COLMAP: scene -> database and text model -> capture file ->
     # reconstruction against the truth (demo/tools/test_colmap_roundtrip.py).
