@@ -11,7 +11,7 @@
 
 namespace jba {
 
-// Export of a solved problem (document 01, outputs; D89, D147): COLMAP's text or
+// Export of a solved problem (document 01, outputs; D89, D149): COLMAP's text or
 // binary model for interchange, and the library's own problem file with result sections for what
 // COLMAP's format cannot hold.
 

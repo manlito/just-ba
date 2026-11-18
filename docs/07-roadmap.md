@@ -545,8 +545,8 @@ Windows CUDA wheel turns out broken, its file is deleted on PyPI and the fix shi
 - A live demo on the documentation site: the same mapper as a WebAssembly module on
   WebGPU, reconstructing a small scene from its matches in the visitor's browser.
 
-Exit: within the agreed margins of COLMAP on the chosen scenes, and the live demo
-published.
+Exit: within the agreed margins of COLMAP on the chosen scenes (D147), and the live
+demo published.
 
 Started 2026-11-16: the demo app builds natively and as WebAssembly (D135 to D137).
 Its mapper reconstructs the three generated scenes within their thresholds at seeds 0
@@ -558,8 +558,9 @@ to within 1.1 and 2.3 percent of COLMAP's point counts by how it handles tracks 
 its loss (D140, D141), then compared on six ETH3D scenes with ground truth (D142):
 equally accurate, given COLMAP's calibration (D143), and since D144 from the
 database's own intrinsics too: the mapper refines them and searches for guessed focal
-lengths. Left: the margins (proposed in D141); and publishing the demo (how the docs
-workflow gets the module is still open).
+lengths. The margins are agreed (D147, 2026-11-17) and all eight scenes meet them,
+with intrinsics fixed and refined. Left: publishing the demo, which the docs
+workflow now builds from poselib-gpu's sources and deploys on every push to main (D148).
 
 ### First comparison with COLMAP (2026-11-16)
 

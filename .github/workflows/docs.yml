@@ -1,7 +1,14 @@
-# The documentation site (document 08, D119). Started by hand only (D110), like CI:
+# The documentation site (document 08, D119), with the live demo (D148). Runs on
+# every push to main, which builds the site and deploys it, and by hand:
 #
 #   gh workflow run docs                    # build, run the docstring examples
 #   gh workflow run docs -f deploy=true     # the same, then publish to Cloudflare Pages
+#   gh workflow run docs -f demo=false      # without the live demo
+#   gh workflow run docs -f poselib_ref=<branch, tag or commit>
+#
+# The live demo is the demo app built as WebAssembly. It needs poselib-gpu's sources,
+# a public repository checked out next to this one (main unless poselib_ref says
+# otherwise), and Emscripten and emdawnwebgpu as in ci.yml's WebAssembly job.
 #
 # Free hosted runner (D39). Deploying needs the repository secrets
 # CLOUDFLARE_API_TOKEN (permission "Cloudflare Pages: Edit") and
@@ -10,12 +17,23 @@
 name: docs
 
 on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**"]
   workflow_dispatch:
     inputs:
       deploy:
         description: "Publish to Cloudflare Pages"
         type: boolean
         default: false
+      demo:
+        description: "Build and include the live demo"
+        type: boolean
+        default: true
+      poselib_ref:
+        description: "poselib-gpu branch, tag or commit for the demo"
+        type: string
+        default: main
 
 concurrency:
   group: docs
@@ -28,8 +46,47 @@ jobs:
   docs:
     name: build (and deploy) the site
     runs-on: ubuntu-24.04
+    env:
+      # A push takes the defaults: the demo from poselib-gpu's main, and a deploy.
+      DEMO: ${{ github.event_name == 'push' || inputs.demo }}
+      DEPLOY: ${{ github.event_name == 'push' || inputs.deploy }}
+      EMSDK_VERSION: "7.0.0"
+      DAWN_RELEASE: v20261113.214538
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        if: env.DEMO == 'true'
+        with:
+          repository: manlito/poselib-gpu
+          ref: ${{ inputs.poselib_ref || 'main' }}
+          path: poselib-gpu
+      - name: Cache Emscripten
+        if: env.DEMO == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ env.EMSDK_VERSION }}
+      - name: Install Emscripten, Ninja and emdawnwebgpu
+        if: env.DEMO == 'true'
+        run: |
+          [ -d ~/emsdk ] || git clone --depth 1 https://github.com/emscripten-core/emsdk.git ~/emsdk
+          ~/emsdk/emsdk install ${EMSDK_VERSION}
+          ~/emsdk/emsdk activate ${EMSDK_VERSION}
+          sudo apt-get install -y -q ninja-build
+          mkdir -p third_party/webgpu/emdawnwebgpu
+          curl -sSfL -o emdawnwebgpu.zip \
+            "https://github.com/google/dawn/releases/download/${DAWN_RELEASE}/emdawnwebgpu_pkg-${DAWN_RELEASE}.zip"
+          unzip -q emdawnwebgpu.zip -d third_party/webgpu/emdawnwebgpu
+      - name: Build the live demo
+        if: env.DEMO == 'true'
+        run: |
+          echo "just-ba $(git rev-parse HEAD), poselib-gpu $(git -C poselib-gpu rev-parse HEAD)"
+          source ~/emsdk/emsdk_env.sh
+          emcmake cmake -S . -B build-demo -G Ninja -DCMAKE_BUILD_TYPE=Release -DJBA_BUILD_DEMO=ON \
+            -DJBA_WITH_WEBGPU=ON -DJBA_POSELIB_GPU_DIR="$GITHUB_WORKSPACE/poselib-gpu"
+          cmake --build build-demo --target jba_demo_wasm
+          ls -l build-demo/demo/web
+          echo "JBA_DEMO_WEB=build-demo/demo/web" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v5
         id: py
         with:
@@ -55,7 +112,7 @@ jobs:
           name: docs-html
           path: docs-site/_build/html
       - name: Deploy to Cloudflare Pages
-        if: inputs.deploy
+        if: env.DEPLOY == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

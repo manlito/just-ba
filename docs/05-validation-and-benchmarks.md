@@ -150,8 +150,11 @@ Applies to the incremental path.
 - For datasets with ground-truth poses, report the standard pose accuracy curves
   against truth for both systems.
 
-Pass condition: within a few percent of COLMAP on each metric for the chosen scenes.
-The exact margins are set after the first measurements.
+Pass condition (D147, set after the first measurements): the same images registered;
+median rotation error below 0.1°; median camera-centre error below 0.1 % of the extent
+of COLMAP's centres; points, observations and mean track length within 5 % of
+COLMAP's. Reprojection error is reported, not held to a margin. The chosen scenes are
+South Building, Gerrard Hall and six ETH3D scenes (D142).
 
 COLMAP's own pose-prior adjustment uses position-only absolute priors with a
 covariance weight and an optional Cauchy loss. Our global prior in position-only

@@ -66,10 +66,10 @@ Open points:
 
 ## Documentation
 
-Built by `docs-site/` (Sphinx, D119) and the `docs` workflow, started by hand like CI
-(D110): it builds the site with warnings as errors, runs the docstring examples, and
-with `deploy=true` publishes to Cloudflare Pages (D112). No previews on pull requests
-while CI is manual.
+Built by `docs-site/` (Sphinx, D119) and the `docs` workflow, which runs on every push
+to main and by hand (D148): it builds the live demo from poselib-gpu's sources, builds
+the site with warnings as errors, runs the docstring examples, and publishes to
+Cloudflare Pages (D112; by hand only with `deploy=true`). No previews on pull requests.
 
 | Part | Content | Source |
 |---|---|---|
@@ -113,7 +113,8 @@ step that cannot fail the run. That sits between the table below (hosted macOS "
 it proves reliable") and the decision at the end of this document (by hand, never
 in CI). D110 settles it: the step is removed and the Metal tests are run by hand.
 CI stays manual and light through milestone 6, and the release workflow is started
-by hand too (D111). The table below is the plan for the public repository.
+by hand too (D111). Since D148 (2026-11-17) CI's quick mode and the docs workflow run
+on every push to main as well, never on pull requests. The table below is the plan for the public repository.
 
 | Job | Runner | When | Cost |
 |---|---|---|---|

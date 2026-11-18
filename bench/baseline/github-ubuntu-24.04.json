@@ -1,7 +1,7 @@
 {
- "commit": "9524cb8",
- "commit_full": "9524cb80513d066331801b93b898af3cb49bba79",
- "date": "2026-11-15T21:07:13+00:00",
+ "commit": "a00090a",
+ "commit_full": "a00090af81e80896483647ecf73887bb5fabc8f5",
+ "date": "2026-11-18T06:15:02+00:00",
  "build": {
   "build_type": "Release",
   "compiler": "GNU 13.3.0"
@@ -11,7 +11,7 @@
   "release": "7.0.0-1017-azure",
   "machine": "x86_64",
   "cpus": 2,
-  "cpu": "AMD EPYC 7763 64-Core Processor"
+  "cpu": "AMD EPYC 9V45 96-Core Processor"
  },
  "backend": "cpu",
  "linear_solver": "iterative_schur",
@@ -32,10 +32,10 @@
    "accepted_steps": 31,
    "linear_iterations": 2039,
    "termination": "convergence",
-   "time_seconds": 2.1955,
-   "setup_seconds": 0.0039,
-   "cold_time_seconds": 2.2917,
-   "time_per_iteration": 0.0708225806451613
+   "time_seconds": 1.2384,
+   "setup_seconds": 0.004,
+   "cold_time_seconds": 1.2907,
+   "time_per_iteration": 0.039948387096774195
   },
   "problem-21-11315-pre": {
    "images": 21,
@@ -50,10 +50,10 @@
    "accepted_steps": 10,
    "linear_iterations": 915,
    "termination": "convergence",
-   "time_seconds": 1.052,
-   "setup_seconds": 0.0065,
-   "cold_time_seconds": 1.0617,
-   "time_per_iteration": 0.1052
+   "time_seconds": 0.6287,
+   "setup_seconds": 0.0041,
+   "cold_time_seconds": 0.6669,
+   "time_per_iteration": 0.06287000000000001
   },
   "problem-16-22106-pre": {
    "images": 16,
@@ -68,10 +68,10 @@
    "accepted_steps": 14,
    "linear_iterations": 685,
    "termination": "convergence",
-   "time_seconds": 2.0225,
-   "setup_seconds": 0.0175,
-   "cold_time_seconds": 2.0137,
-   "time_per_iteration": 0.1444642857142857
+   "time_seconds": 1.2626,
+   "setup_seconds": 0.0111,
+   "cold_time_seconds": 1.3645,
+   "time_per_iteration": 0.09018571428571429
   },
   "problem-93-61203-pre": {
    "images": 93,
@@ -86,10 +86,10 @@
    "accepted_steps": 17,
    "linear_iterations": 1415,
    "termination": "convergence",
-   "time_seconds": 23.2364,
-   "setup_seconds": 0.0588,
-   "cold_time_seconds": 23.4644,
-   "time_per_iteration": 1.3668470588235293
+   "time_seconds": 20.628,
+   "setup_seconds": 0.022,
+   "cold_time_seconds": 20.9012,
+   "time_per_iteration": 1.2134117647058824
   },
   "synthetic-pinhole-50": {
    "images": 50,
@@ -104,10 +104,10 @@
    "accepted_steps": 6,
    "linear_iterations": 48,
    "termination": "convergence",
-   "time_seconds": 0.4335,
-   "setup_seconds": 0.0265,
-   "cold_time_seconds": 0.445,
-   "time_per_iteration": 0.07225
+   "time_seconds": 0.272,
+   "setup_seconds": 0.018,
+   "cold_time_seconds": 0.2944,
+   "time_per_iteration": 0.04533333333333334
   },
   "synthetic-radial-free-30": {
    "images": 30,
@@ -116,16 +116,16 @@
    "relative_priors": 0,
    "global_priors": 0,
    "initial_cost": 1742174.1227471442,
-   "final_cost": 21290.414916099875,
+   "final_cost": 21289.76121757167,
    "linear_solver": "iterative_schur",
-   "iterations": 30,
-   "accepted_steps": 21,
-   "linear_iterations": 748,
+   "iterations": 36,
+   "accepted_steps": 26,
+   "linear_iterations": 880,
    "termination": "convergence",
-   "time_seconds": 2.142,
-   "setup_seconds": 0.0129,
-   "cold_time_seconds": 2.1823,
-   "time_per_iteration": 0.07139999999999999
+   "time_seconds": 1.5129,
+   "setup_seconds": 0.0078,
+   "cold_time_seconds": 1.7437,
+   "time_per_iteration": 0.042025
   },
   "synthetic-relative-priors-50": {
    "images": 50,
@@ -140,10 +140,10 @@
    "accepted_steps": 4,
    "linear_iterations": 22,
    "termination": "convergence",
-   "time_seconds": 0.2772,
-   "setup_seconds": 0.0272,
-   "cold_time_seconds": 0.2934,
-   "time_per_iteration": 0.0693
+   "time_seconds": 0.1762,
+   "setup_seconds": 0.0173,
+   "cold_time_seconds": 0.1791,
+   "time_per_iteration": 0.04405
   },
   "synthetic-global-similarity-50": {
    "images": 50,
@@ -158,10 +158,10 @@
    "accepted_steps": 4,
    "linear_iterations": 27,
    "termination": "convergence",
-   "time_seconds": 0.2947,
-   "setup_seconds": 0.0269,
-   "cold_time_seconds": 0.304,
-   "time_per_iteration": 0.073675
+   "time_seconds": 0.1799,
+   "setup_seconds": 0.0167,
+   "cold_time_seconds": 0.1891,
+   "time_per_iteration": 0.044975
   },
   "synthetic-opencv-30": {
    "images": 30,
@@ -176,10 +176,10 @@
    "accepted_steps": 4,
    "linear_iterations": 35,
    "termination": "convergence",
-   "time_seconds": 0.1568,
-   "setup_seconds": 0.0148,
-   "cold_time_seconds": 0.1649,
-   "time_per_iteration": 0.0392
+   "time_seconds": 0.0927,
+   "setup_seconds": 0.0097,
+   "cold_time_seconds": 0.0921,
+   "time_per_iteration": 0.023175
   }
  }
 }

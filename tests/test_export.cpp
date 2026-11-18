@@ -256,7 +256,7 @@ int main() {
   jba::export_colmap(p, dir.string(), o);
   check_model(p, dir, true);
 
-  // Binary (D147): the same model, observations only and every keypoint, with names,
+  // Binary (D149): the same model, observations only and every keypoint, with names,
   // colours and a subset of the images.
   check_binary(p, dir / "b1", {});
   std::vector<std::uint8_t> color(3 * p.num_points());
