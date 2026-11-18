@@ -161,6 +161,9 @@ cmake --build build/demo-wasm
 `jba_demo.wasm`, ready for any static server. The documentation site includes them
 when built with `JBA_DEMO_WEB=build/demo-wasm/demo/web` (`docs-site/README.md`).
 
+The `docs` workflow builds the same way, from poselib-gpu's `main`, and deploys the
+site with the demo on every push to main (D148).
+
 ## What it checks
 
 A scene passes when every image is registered, the median rotation error is below
