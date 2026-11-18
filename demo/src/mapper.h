@@ -129,6 +129,26 @@ struct Snapshot {
 };
 using StepCallback = std::function<void(const Snapshot&)>;
 
+// Where a run is, reported as it happens (D146), for a caller that shows live progress
+// and offers to stop. Stages, in order: "focal search" (only with search_focal),
+// "verify", "tracks"; then per model "first pair", "register" (after each registration's
+// adjustment) and "final", each with `live`; and "adjust" after every solver iteration
+// of every adjustment, with `iteration` and `cost`. Unlike on_step's snapshots, which
+// come after the run and only for the model kept, live snapshots are of the model being
+// grown, which may not be the one returned.
+struct Progress {
+  std::string stage;
+  int model = -1;        // the model being grown, from 0; -1 before the first
+  int registered = 0;    // images registered in it
+  int images = 0;        // in the capture
+  int adjustments = 0;   // finished so far, every model
+  int iteration = -1;    // "adjust": the solver's iteration, from 0; -1 otherwise
+  double cost = 0.0;     // "adjust": the cost after it
+  const Snapshot* live = nullptr;  // "first pair", "register", "final"; valid during the call only
+};
+// Return false to stop: the run ends as soon as it can, with Reconstruction::cancelled.
+using ProgressCallback = std::function<bool(const Progress&)>;
+
 struct Timings {
   double focal_search = 0, verify = 0, tracks = 0, pnp = 0, triangulate = 0, adjust = 0, total = 0;  // seconds
 };
@@ -136,6 +156,9 @@ struct Timings {
 struct Reconstruction {
   std::string error;  // empty on success
   bool ok() const { return error.empty(); }
+  // The progress callback returned false; error is then "cancelled" and the rest of
+  // the result is incomplete.
+  bool cancelled = false;
   double focal_factor = 1.0;  // the search's factor (search_focal), 1 without one
 
   std::vector<double> poses;        // 7 per image of the capture
@@ -177,7 +200,10 @@ class Mapper {
   Mapper(const Mapper&) = delete;
   Mapper& operator=(const Mapper&) = delete;
 
-  Reconstruction run(const Capture& capture, const StepCallback& on_step = {});
+  // on_step: the kept model's steps, after the run. on_progress: live, and can stop it.
+  // Neither changes the result.
+  Reconstruction run(const Capture& capture, const StepCallback& on_step = {},
+                     const ProgressCallback& on_progress = {});
   const MapperOptions& options() const { return options_; }
   // Options for the next runs. The context keeps the pose backend, seed and threads it
   // was created with; everything else, the solver's backend included, can change.

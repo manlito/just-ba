@@ -14,6 +14,7 @@ not, and a default build does not look for it.
 | `src/capture_io.h`, `src/capture_io.cpp`, `src/container.*` | The capture file (below), in the container of document 11. |
 | `src/compare.h`, `src/compare.cpp`, `src/align.*` | A reconstruction against another of the same capture: COLMAP's, or the truth (document 05, level 3). |
 | `src/main.cpp` | `jba_demo`, the command line. |
+| `tests/test_cancel.cpp` | `demo_cancel`: the mapper's progress callback (below). |
 | `tools/colmap_capture.py` | A COLMAP database, and its model, to a capture file. Standard library only. |
 | `tools/colmap_compare.sh` | One scene from its images: COLMAP, then the capture file, then `jba_demo run`. |
 | `tools/colmap_table.py` | The comparison over several capture files, as Markdown tables. |
@@ -44,7 +45,26 @@ refines them), `--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
 `--ba cpu|metal|cuda|webgpu` (the solver's), `--refine none|focal|focal+distortion`
 (the intrinsics the adjustments refine; none by default here), `--export dir`
 (COLMAP's text model per scene), `--write dir` (each scene as a capture file, its truth
-as the reference), `-v` (each step). With `JBA_BUILD_TESTS`, `ctest -R demo_` runs it and the COLMAP round trip.
+as the reference), `-v` (each step). With `JBA_BUILD_TESTS`, `ctest -R demo_` runs it, the COLMAP round trip
+and the progress callback's test.
+
+## Calling the mapper
+
+`demo::Mapper::run(capture, on_step, on_progress)`; both callbacks are optional and
+neither changes the result.
+
+- `on_step(const Snapshot&)` gets the kept model's steps (first pair, each
+  registration, final) after the run, for drawing the reconstruction as it grew.
+- `on_progress(const Progress&) -> bool` is called live, as the run goes (D146):
+  after the focal search, pair verification and track building, after each step of
+  every model with a `Snapshot` of it in `live` (valid during the call only; the
+  model being grown, which may not be the one kept), and after every solver
+  iteration of every adjustment (`stage` "adjust", with `iteration` and `cost`).
+  `Progress` also carries the model's index, its registered images, the capture's
+  images and the adjustments so far. Returning false stops the run as soon as it
+  can, within one solver iteration: `Reconstruction::cancelled` is then true,
+  `error` is "cancelled", the rest of the result is incomplete, and `on_step` is not
+  called. This is what a desktop app needs for live progress and a Stop button.
 
 ## Against COLMAP
 
