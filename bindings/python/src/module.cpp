@@ -724,8 +724,9 @@ NB_MODULE(_core, m) {
       "export_colmap",
       [keypoints_of](const jba::Problem& p, const std::string& directory, std::optional<std::vector<std::string>> names,
                      nb::handle image_size, nb::handle images, nb::handle keypoints, nb::handle obs_keypoint,
-                     nb::handle point_color) {
+                     nb::handle point_color, bool binary) {
         jba::ColmapExportOptions o;
+        o.binary = binary;
         if (names) o.image_names = *names;
         if (!image_size.is_none())
           o.image_size = from_numpy(as_array<std::int32_t>(image_size, "image_size"), {2}, "image_size");
@@ -745,9 +746,10 @@ NB_MODULE(_core, m) {
         jba::export_colmap(p, directory, o);
       },
       "problem"_a, "directory"_a, "image_names"_a = nb::none(), "image_size"_a = nb::none(), "images"_a = nb::none(),
-      "keypoints"_a = nb::none(), "obs_keypoint"_a = nb::none(), "point_color"_a = nb::none(),
-      "Writes COLMAP's text model (cameras.txt, images.txt, points3D.txt) into an existing directory. With "
-      "keypoints (one array per image) and obs_keypoint, POINTS2D lists every keypoint.");
+      "keypoints"_a = nb::none(), "obs_keypoint"_a = nb::none(), "point_color"_a = nb::none(), "binary"_a = false,
+      "Writes COLMAP's text model (cameras.txt, images.txt, points3D.txt) into an existing directory, or with "
+      "binary=True its binary model (cameras.bin, images.bin, points3D.bin). With keypoints (one array per "
+      "image) and obs_keypoint, POINTS2D lists every keypoint.");
   m.def(
       "write_result",
       [](const std::string& path, const jba::Problem& p, std::optional<const jba::Covariance*> cov,
