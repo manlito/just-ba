@@ -20,6 +20,10 @@ namespace {
 constexpr double kMinDiagonal = 1e-6;  // Ceres's LM diagonal clamp
 constexpr double kMaxDiagonal = 1e32;
 constexpr int kResidualResetPeriod = 10;  // Ceres's conjugate gradients default
+// Observations per gather unit (see Impl::units). A pose block rarely has this many, so
+// it stays one unit; a shared intrinsics block, which sees every observation, does not.
+constexpr std::size_t kGatherUnit = 16384;
+constexpr int kUnitFloats = kMaxParams * kMaxParams;  // the widest per-block sum: a preconditioner block
 
 // In-place inverse of a symmetric positive definite n x n matrix (row-major) by
 // Cholesky. Returns false if it is not positive definite.
@@ -72,8 +76,39 @@ struct CpuBackend::Impl : System {
   // Step.
   std::vector<double> d2_f, d2_e, Cinv, Pinv, t, dx_f, dx_e;
 
+  // Gather units: each camera-side block's observations in runs of at least
+  // kGatherUnit, extended to the end of a point's observations (the preconditioner
+  // sums per point). The per-block sums run in parallel over the units, so a block with
+  // far more observations than the others (a shared intrinsics block sees all of them)
+  // is no longer one thread's work. A block of one unit is summed exactly as before;
+  // the units of a larger one are added in order, so the results do not depend on the
+  // number of threads.
+  struct Unit {
+    std::size_t block, q0, q1;
+  };
+  std::vector<Unit> units;
+  std::vector<std::size_t> block_units;  // per block, its first unit; one past the end last
+  std::vector<std::size_t> split_blocks;  // the blocks of more than one unit
+  std::vector<double> unit_partial;       // kUnitFloats per unit of a split block
+
   Impl(const Problem& p, const SolverOptions& o, const Gauge& gauge) : System(p, o, gauge) {
     Pinv.assign(pinv_size, 0.0);
+    block_units.push_back(0);
+    for (std::size_t b = 0; b < fblocks.size(); ++b) {
+      std::size_t q0, q1;
+      const std::vector<std::size_t>* list;
+      obs_range(fblocks[b], q0, q1, list);
+      std::size_t q = q0;
+      do {
+        std::size_t end = std::min(q1, q + kGatherUnit);
+        while (end < q1 && o_pt[(*list)[end]] == o_pt[(*list)[end - 1]]) ++end;
+        units.push_back({b, q, end});
+        q = end;
+      } while (q < q1);
+      block_units.push_back(units.size());
+      if (block_units[b + 1] - block_units[b] > 1) split_blocks.push_back(b);
+    }
+    unit_partial.assign(kUnitFloats * units.size(), 0.0);
     if (has_depth) {
       dr.assign(nobs, 0);
       dJp.assign(6 * nobs, 0);
@@ -225,18 +260,52 @@ struct CpuBackend::Impl : System {
     }
   }
 
+  // Per camera-side block, a sum over its observations, then the rest: unit(u, acc)
+  // adds unit u's observations (u.q0 to u.q1 of the block's list) to acc, kUnitFloats
+  // values starting at zero; finish(b, acc) takes block b's total.
+  template <typename UnitFn, typename FinishFn>
+  void gather(UnitFn&& unit, FinishFn&& finish) {
+    pool.parallel_for(
+        units.size(),
+        [&](std::size_t u0, std::size_t u1) {
+          for (std::size_t u = u0; u < u1; ++u) {
+            const Unit& un = units[u];
+            double acc[kUnitFloats] = {};
+            unit(un, acc);
+            if (block_units[un.block + 1] - block_units[un.block] == 1) finish(un.block, acc);
+            else std::copy(acc, acc + kUnitFloats, &unit_partial[kUnitFloats * u]);
+          }
+        },
+        1);
+    if (split_blocks.empty()) return;
+    pool.parallel_for(
+        split_blocks.size(),
+        [&](std::size_t s0, std::size_t s1) {
+          for (std::size_t s = s0; s < s1; ++s) {
+            const std::size_t b = split_blocks[s];
+            double acc[kUnitFloats] = {};
+            for (std::size_t u = block_units[b]; u < block_units[b + 1]; ++u)
+              for (int c = 0; c < kUnitFloats; ++c) acc[c] += unit_partial[kUnitFloats * u + c];
+            finish(b, acc);
+          }
+        },
+        1);
+  }
+
   // diag = squared column norms of J; g = J^T r when `gradient` is set.
   void column_norms_and_gradient(bool gradient) {
-    pool.parallel_for(
-        fblocks.size(),
-        [&](std::size_t b0, std::size_t b1) {
-          for (std::size_t b = b0; b < b1; ++b) {
-            const FBlock& fb = fblocks[b];
-            double d[kMaxParams] = {}, g[kMaxParams] = {};
-            const int n = fb.size;
-            std::size_t q0, q1;
-            const std::vector<std::size_t>* list;
-            obs_range(fb, q0, q1, list);
+    gather(
+        [&](const Unit& un, double* acc) {
+          const FBlock& fb = fblocks[un.block];
+          double* d = acc;
+          double* g = acc + kMaxParams;
+          const int n = fb.size;
+          std::size_t q0, q1;
+          const std::vector<std::size_t>* list;
+          obs_range(fb, q0, q1, list);
+          q0 = un.q0;
+          q1 = un.q1;
+          {
             if (fb.kind != BlockKind::Depth) {
               for (std::size_t q = q0; q < q1; ++q) {
                 const std::size_t k = (*list)[q];
@@ -258,6 +327,14 @@ struct CpuBackend::Impl : System {
                 }
               }
             }
+          }
+        },
+        [&](std::size_t b, double* acc) {
+          const FBlock& fb = fblocks[b];
+          double* d = acc;
+          double* g = acc + kMaxParams;
+          const int n = fb.size;
+          {
             for (const FactorSet& fs : fsets) {
               for (std::size_t q = fs.begin[b]; q < fs.begin[b + 1]; ++q) {
                 const auto [f, slot] = fs.list[q];
@@ -277,8 +354,7 @@ struct CpuBackend::Impl : System {
               if (gradient) g_f[fb.offset + c] = g[c];
             }
           }
-        },
-        1);
+        });
     pool.parallel_for(point_off.size(), [&](std::size_t j0, std::size_t j1) {
       const bool depth = has_depth;
       for (std::size_t j = j0; j < j1; ++j) {
@@ -351,16 +427,16 @@ struct CpuBackend::Impl : System {
   // y = J_f^T t (gathered per camera-side block); with `factors_too`, plus
   // J_factor^T m.
   void jft_times_t(double* y, bool factors_too) {
-    pool.parallel_for(
-        fblocks.size(),
-        [&](std::size_t b0, std::size_t b1) {
-          for (std::size_t b = b0; b < b1; ++b) {
-            const FBlock& fb = fblocks[b];
-            double acc[kMaxParams] = {};
-            const int n = fb.size;
-            std::size_t q0, q1;
-            const std::vector<std::size_t>* list;
-            obs_range(fb, q0, q1, list);
+    gather(
+        [&](const Unit& un, double* acc) {
+          const FBlock& fb = fblocks[un.block];
+          const int n = fb.size;
+          std::size_t q0, q1;
+          const std::vector<std::size_t>* list;
+          obs_range(fb, q0, q1, list);
+          q0 = un.q0;
+          q1 = un.q1;
+          {
             if (fb.kind != BlockKind::Depth) {
               for (std::size_t q = q0; q < q1; ++q) {
                 const std::size_t k = (*list)[q];
@@ -375,6 +451,12 @@ struct CpuBackend::Impl : System {
                   for (int c = 0; c < n; ++c) acc[c] += Jd[c] * td[k];
               }
             }
+          }
+        },
+        [&](std::size_t b, double* acc) {
+          const FBlock& fb = fblocks[b];
+          const int n = fb.size;
+          {
             if (factors_too) {
               for (const FactorSet& fs : fsets) {
                 for (std::size_t q = fs.begin[b]; q < fs.begin[b + 1]; ++q) {
@@ -389,8 +471,7 @@ struct CpuBackend::Impl : System {
             }
             for (int c = 0; c < n; ++c) y[fb.offset + c] = acc[c];
           }
-        },
-        1);
+        });
   }
 
   // y = S x, S = J_f^T J_f + D_f^2 - J_f^T J_e (J_e^T J_e + D_e^2)^-1 J_e^T J_f.
@@ -482,17 +563,17 @@ struct CpuBackend::Impl : System {
     // Preconditioner: camera-side diagonal blocks of the Schur complement,
     // P_b = B_bb + D_b^2 - sum_j E_bj C_j^-1 E_bj^T, inverted. The observations of
     // a block are in point-major order, so those of one point are consecutive.
-    pool.parallel_for(
-        fblocks.size(),
-        [&](std::size_t b0, std::size_t b1) {
-          for (std::size_t b = b0; b < b1; ++b) {
-            const FBlock& fb = fblocks[b];
-            const int n = fb.size;
-            const bool depth_here = has_depth && fb.kind != BlockKind::Intrinsics;
-            double P[kMaxParams * kMaxParams] = {};
-            std::size_t q, qend;
-            const std::vector<std::size_t>* lp;
-            obs_range(fb, q, qend, lp);
+    gather(
+        [&](const Unit& un, double* P) {
+          const FBlock& fb = fblocks[un.block];
+          const int n = fb.size;
+          const bool depth_here = has_depth && fb.kind != BlockKind::Intrinsics;
+          std::size_t q, qend;
+          const std::vector<std::size_t>* lp;
+          obs_range(fb, q, qend, lp);
+          q = un.q0;
+          qend = un.q1;
+          {
             while (q < qend) {
               const auto& list = *lp;
               const std::int32_t j = o_pt[list[q]];
@@ -526,6 +607,12 @@ struct CpuBackend::Impl : System {
                 for (int c = 0; c < n; ++c)
                   P[a * n + c] -= EC[3 * a] * E[3 * c] + EC[3 * a + 1] * E[3 * c + 1] + EC[3 * a + 2] * E[3 * c + 2];
             }
+          }
+        },
+        [&](std::size_t b, double* P) {
+          const FBlock& fb = fblocks[b];
+          const int n = fb.size;
+          {
             for (const FactorSet& fs : fsets) {
               for (std::size_t qf = fs.begin[b]; qf < fs.begin[b + 1]; ++qf) {
                 const auto [f, slot] = fs.list[qf];
@@ -540,8 +627,7 @@ struct CpuBackend::Impl : System {
             if (!spd_inverse(P, n)) ok = false;
             std::copy(P, P + n * n, &Pinv[static_cast<std::size_t>(fb.pinv_offset)]);
           }
-        },
-        1);
+        });
     return ok;
   }
 

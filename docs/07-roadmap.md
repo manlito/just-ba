@@ -537,10 +537,281 @@ Windows CUDA wheel turns out broken, its file is deleted on PyPI and the fix shi
 
 ## Milestone 7: incremental pipeline and COLMAP parity
 
-- Minimal incremental reconstruction (document 04, part C).
-- Level 3 comparison with COLMAP 4.2.1.
+- Minimal incremental reconstruction (document 04, part C), in the demo app
+  (`demo/`, `JBA_BUILD_DEMO`, off by default). Relative pose, PnP and match
+  verification come from poselib-gpu, which only the demo links; the library, the
+  wheels and the CLI do not (D134).
+- Level 3 comparison with COLMAP 4.2.1, run by hand with the demo's native binary.
+- A live demo on the documentation site: the same mapper as a WebAssembly module on
+  WebGPU, reconstructing a small scene from its matches in the visitor's browser.
 
-Exit: within the agreed margins of COLMAP on the chosen scenes.
+Exit: within the agreed margins of COLMAP on the chosen scenes, and the live demo
+published.
+
+Started 2026-11-16: the demo app builds natively and as WebAssembly (D135 to D137).
+Its mapper reconstructs the three generated scenes within their thresholds at seeds 0
+to 8, on the CPU and with Metal for both libraries, and in the browser on WebGPU and
+the CPU; the documentation site shows it when built with `JBA_DEMO_WEB`. It reads
+COLMAP's database and model (D138), checked by a round trip without COLMAP, and was
+compared with COLMAP 4.2.1 on two of COLMAP's own scenes (below, D139), then brought
+to within 1.1 and 2.3 percent of COLMAP's point counts by how it handles tracks and
+its loss (D140, D141), then compared on six ETH3D scenes with ground truth (D142):
+equally accurate, given COLMAP's calibration (D143), and since D144 from the
+database's own intrinsics too: the mapper refines them and searches for guessed focal
+lengths. Left: the margins (proposed in D141); and publishing the demo (how the docs
+workflow gets the module is still open).
+
+### First comparison with COLMAP (2026-11-16)
+
+On the owner's laptop (i7-9750H, RTX 2070 Max-Q, CachyOS), COLMAP 4.2.1 from
+conda-forge's CPU build in a temporary environment, removed afterwards. COLMAP:
+`demo/tools/colmap_compare.sh` (one SIMPLE_RADIAL camera per scene, SIFT on 4 threads
+at most 3,200 px, exhaustive matching, its mapper). Ours: the same verified matches
+from COLMAP's database and COLMAP's refined intrinsics, COLMAP's mapper thresholds,
+poses on CUDA. Poses after aligning the two reconstructions (D136's measures; centre
+error over the extent of COLMAP's camera centres). Figures from the run with the
+adjustment on the CPU; on CUDA they agree to the third digit.
+
+| | South Building | Gerrard Hall |
+|---|---|---|
+| Images | 128 | 100 (5616 x 3744) |
+| Verified pairs (15 matches or more), matches | 2,600, 1.88 million | 1,331, 1.19 million |
+| Registered, ours / COLMAP | 128 / 128 | 100 / 100 |
+| Rotation error, median / max | 0.0094° / 0.037° | 0.046° / 0.133° |
+| Camera centre error, median / max | 0.0048 % / 0.016 % | 0.018 % / 0.050 % |
+| Points, ours / COLMAP | 153,040 / 100,374 (+52 %) | 87,882 / 67,126 (+31 %) |
+| Observations, ours / COLMAP | 664,905 / 623,421 (+7 %) | 370,866 / 396,194 (-6 %) |
+| Mean track length, ours / COLMAP | 4.34 / 6.21 | 4.22 / 5.90 |
+| Mean reprojection error, ours / COLMAP | 0.509 / 0.606 px | 0.924 / 1.131 px |
+| COLMAP: features and matching / mapper (CPU) | 1,140 s / 205 s | 627 s / 194 s |
+| Ours, adjustment on the CPU / on CUDA | 246 s / 58 s | 97 s / 26 s |
+
+Both register every image and agree on the poses to a few hundredths of a degree and
+a few hundredths of a percent of the scene. The points do not agree within a few
+percent: about the same observations go into a third to a half more points, with
+tracks about 30 % shorter. Most likely because our mapper neither completes nor
+merges tracks (on this roadmap's "Later" list) and COLMAP's triangulator does both;
+not yet checked. The lower reprojection error follows from the shorter tracks. The
+times are not a speed comparison: COLMAP ran on the CPU, and our mapper adjusts every
+registered image and point after each step.
+
+### Tracks as COLMAP handles them (2026-11-16, D140)
+
+A diagnostic of which keypoints each side groups into which point (`jba_demo run`
+prints it) showed the gap was not missing track merging: our points were almost never
+split versions of COLMAP's (0.1 to 0.2 %). It had three causes, fixed in the mapper:
+
+- Tracks seen in only two images: COLMAP does not triangulate them by default; ours
+  were 60,000 of South Building's 153,000 points. Now ignored with COLMAP's thresholds.
+- Match groups with two keypoints in one image (4,470 and 3,656, holding 67,600 and
+  48,000 keypoints) were dropped whole. Now kept: triangulation takes at most one
+  keypoint per image, and leftovers spanning three images or more become a point of
+  their own after an adjustment.
+- Keypoints joined a point only within the 4 px threshold before the adjustment;
+  COLMAP accepts within 2° and filters at 4 px after. Now the same with COLMAP's
+  thresholds.
+
+Pair-gate and re-verification changes were tried and made no difference. Measured on
+capture files from a second COLMAP run (COLMAP does not repeat exactly: 100,410
+points against 100,374), adjustment on Metal:
+
+| | South Building, ours / COLMAP | Gerrard Hall, ours / COLMAP |
+|---|---|---|
+| Registered | 128 / 128 | 100 / 100 |
+| Rotation error, median / max | 0.0093° / 0.030° | 0.029° / 0.150° |
+| Camera centre error, median / max | 0.0049 % / 0.011 % | 0.0095 % / 0.043 % |
+| Points | 97,975 / 100,410 (-2.4 %) | 61,247 / 67,099 (-8.7 %) |
+| Observations | 609,603 / 623,589 (-2.2 %) | 374,940 / 396,206 (-5.4 %) |
+| Mean track length | 6.22 / 6.21 (+0.2 %) | 6.12 / 5.90 (+3.7 %) |
+| Mean reprojection error | 0.585 / 0.607 px | 1.069 / 1.133 px |
+| Our run on the Mac (Metal) | 7.5 s | 4.5 s |
+
+On Gerrard Hall 3.5 % of our points still hold observations that COLMAP divides
+between points, and 4,782 of COLMAP's points have no observation in ours; splitting
+from two images instead of three gained 757 points and split more of COLMAP's, so it
+was not kept. The generated scenes pass as before (seeds 0 to 8, the noise sweep).
+
+### Gerrard Hall investigated (2026-11-16, D141)
+
+Investigated by Fable 5.2 and checked here (its numbers reproduce). Two causes left:
+
+- D140's 2° rule let a keypoint the 4 px filter had dropped rejoin its point at every
+  round, to be dropped again after the adjustment. It never became a leftover, so the
+  second point it belonged to was never made. A dropped keypoint now rejoins only
+  within the filter's 4 px, as COLMAP's track completion does; others keep 2°.
+- The adjustments' Cauchy loss at 2 px fitted each point to the majority of its
+  keypoints and left valid ones, further from the image centre, to the filter: refitted
+  by plain least squares under our poses, 96 % of COLMAP's points that we only partly
+  had fit within 4 px. The loss scale is now the filter's threshold (4 px).
+
+| | South Building, ours / COLMAP | Gerrard Hall, ours / COLMAP |
+|---|---|---|
+| Registered | 128 / 128 | 100 / 100 |
+| Rotation error, median / max | 0.0053° / 0.026° | 0.022° / 0.108° |
+| Camera centre error, median / max | 0.0022 % / 0.0087 % | 0.0098 % / 0.033 % |
+| Points | 99,276 / 100,410 (-1.1 %) | 65,569 / 67,099 (-2.3 %) |
+| Observations | 614,302 / 623,589 (-1.5 %) | 389,700 / 396,206 (-1.6 %) |
+| Mean track length | 6.19 / 6.21 (-0.3 %) | 5.94 / 5.90 (+0.7 %) |
+| Mean reprojection error | 0.601 / 0.607 px | 1.133 / 1.133 px |
+| COLMAP points split over several of ours | 1,689 (1.7 %) | 2,842 (4.4 %) |
+
+Keeping the 2 px loss with a last adjustment without one reaches -0.7 % of Gerrard
+Hall's points, but by splitting more of COLMAP's points (3,502) with worse poses and
+track length, so it was not kept. Still not reproduced: about 2,700 of COLMAP's points,
+mostly two-view, 1,437 of them in tracks that span two images in ours, which suggests a
+correspondence COLMAP keeps and we drop. Why COLMAP keeps whole the points we split
+could not be determined without running COLMAP's own mapper step by step.
+
+### Eight scenes, six with ground truth (2026-11-17, D142)
+
+Six scenes of the ETH3D high-resolution multi-view benchmark (training set,
+undistorted DSLR images of about 6200 x 4130, ground-truth poses from its laser-scan
+registration) were added: courtyard, delivery_area, kicker, meadow, office, pipes. COLMAP
+4.2.1 as before (CPU build, temporary environment, removed), one camera per scene except
+courtyard (four calibrations: a camera per image). Two failures they showed were fixed:
+meadow registered 10 of 15 images (our pair gate wanted 30 inliers where COLMAP's
+verification keeps 15) and office 7 of 26 (our first model got stuck where COLMAP's
+did, and COLMAP then grew a second model of all 26; the mapper now does the same).
+COLMAP was run on office a second time (2026-11-17) to get its 26-image model, which
+`colmap_compare.sh` had passed over for the 7-image first one. Our side on Metal, all
+eight scenes with the same build:
+
+| Scene | Images | Registered, ours / COLMAP | Rotation median / max | Centre median / max | Points | Observations | Track length | Reprojection, ours / COLMAP | COLMAP points split | Our run |
+|---|---|---|---|---|---|---|---|---|---|---|
+| south-building | 128 | 128 / 128 | 0.0057° / 0.026° | 0.0023 % / 0.009 % | 100,366 (-0.0 %) | 614,721 (-1.4 %) | 6.12 (-1.4 %) | 0.599 / 0.607 px | 2,073 (2.1 %) | 7.5 s |
+| gerrard-hall | 100 | 100 / 100 | 0.0197° / 0.097° | 0.0087 % / 0.029 % | 65,714 (-2.1 %) | 389,979 (-1.6 %) | 5.93 (+0.5 %) | 1.133 / 1.133 px | 2,869 (4.3 %) | 4.1 s |
+| pipes | 14 | 14 / 14 | 0.0208° / 0.067° | 0.0344 % / 0.073 % | 3,240 (-2.1 %) | 12,182 (-1.3 %) | 3.76 (+0.9 %) | 0.603 / 0.602 px | 11 (0.3 %) | 0.2 s |
+| meadow | 15 | 14 / 14 | 0.0382° / 0.413° | 0.0405 % / 0.116 % | 736 (-0.4 %) | 2,561 (+2.4 %) | 3.48 (+2.9 %) | 0.883 / 0.789 px | 0 (0.0 %) | 0.1 s |
+| office | 26 | 26 / 26 | 0.0231° / 0.074° | 0.0613 % / 0.256 % | 7,580 (-0.6 %) | 27,793 (-0.4 %) | 3.67 (+0.2 %) | 0.723 / 0.720 px | 16 (0.2 %) | 0.4 s |
+| kicker | 31 | 30 / 30 | 0.0083° / 0.061° | 0.0122 % / 0.045 % | 12,618 (-2.0 %) | 55,710 (-1.9 %) | 4.42 (+0.1 %) | 0.867 / 0.856 px | 285 (2.2 %) | 0.5 s |
+| courtyard | 38 | 38 / 38 | 0.0082° / 0.084° | 0.0099 % / 0.095 % | 24,922 (-3.1 %) | 121,711 (-1.9 %) | 4.88 (+1.3 %) | 0.697 / 0.695 px | 230 (0.9 %) | 0.9 s |
+| delivery_area | 44 | 44 / 44 | 0.0121° / 0.039° | 0.0067 % / 0.059 % | 30,738 (-0.5 %) | 128,719 (-1.0 %) | 4.19 (-0.5 %) | 0.647 / 0.650 px | 261 (0.8 %) | 1.0 s |
+
+| Scene | Truth images | Ours: registered, rotation median / max, centre median | COLMAP: registered, rotation median / max, centre median |
+|---|---|---|---|
+| pipes | 14 | 14, 0.164° / 0.283°, 5.0 mm (0.161 %) | 14, 0.127° / 0.271°, 4.9 mm (0.156 %) |
+| meadow | 15 | 14, 0.128° / 1.106°, 31.7 mm (0.136 %) | 14, 0.105° / 0.702°, 32.1 mm (0.138 %) |
+| office | 26 | 26, 0.135° / 0.662°, 10.0 mm (0.469 %) | 26, 0.133° / 0.711°, 10.6 mm (0.496 %) |
+| kicker | 31 | 30, 0.066° / 0.163°, 18.2 mm (0.223 %) | 30, 0.064° / 0.184°, 17.9 mm (0.220 %) |
+| courtyard | 38 | 38, 0.076° / 0.182°, 33.7 mm (0.225 %) | 38, 0.072° / 0.182°, 33.6 mm (0.224 %) |
+| delivery_area | 44 | 44, 0.092° / 0.198°, 28.6 mm (0.238 %) | 44, 0.091° / 0.202°, 28.4 mm (0.235 %) |
+
+Points, observations and track length are ours, with our difference from COLMAP's.
+Against the ground truth (metres) the two systems are equally accurate on all six
+ETH3D scenes: median rotation 0.066 to 0.164° against 0.064 to 0.133°, median centre
+5 to 34 mm against 5 to 34 mm.
+
+These hold with COLMAP's calibration. Our mapper keeps intrinsics fixed and uses the
+reference's, refined by COLMAP's own reconstruction (D138). Given the database's
+initial intrinsics instead (`--intrinsics capture`), it fails on every ETH3D scene (6
+to 37 of 14 to 44 images, median rotation 10 to 75°): their images carry no focal
+length, so the initial guess is COLMAP's default, 2.2 times the true one, which COLMAP
+corrects as it reconstructs. On South Building and Gerrard Hall, whose initial focal
+lengths come from the images' metadata and are 3 and 5 % off, it registers every
+image but the median rotation error against COLMAP grows to 0.33 and 1.0°. Parity
+without COLMAP's calibration needs the mapper to refine focal length and distortion,
+as COLMAP's does (D143).
+
+### From the database's intrinsics (2026-11-17, D144)
+
+The mapper now refines focal length and distortion in every adjustment, as COLMAP's,
+and a focal length the database marks as a guess is first searched for with
+poselib-gpu (D144). The same eight capture files, given the database's intrinsics
+(`--intrinsics capture`), our side on Metal:
+
+| Scene | Images | Registered, ours / COLMAP | Rotation median / max | Centre median / max | Points | Observations | Track length | Reprojection, ours / COLMAP | Focal, ours / COLMAP | COLMAP points split | Our run |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| south-building | 128 | 128 / 128 | 0.0089° / 0.031° | 0.0041 % / 0.014 % | 100,228 (-0.2 %) | 613,938 (-1.5 %) | 6.13 (-1.4 %) | 0.599 / 0.607 px | 2,559 px (+0.0 %), from 2,485 | 2,087 (2.1 %) | 9.3 s |
+| gerrard-hall | 100 | 100 / 100 | 0.0306° / 0.113° | 0.0099 % / 0.034 % | 65,866 (-1.8 %) | 388,039 (-2.1 %) | 5.89 (-0.2 %) | 1.126 / 1.133 px | 3,832 px (+0.0 %), from 3,637 | 3,040 (4.5 %) | 5.4 s |
+| pipes | 14 | 14 / 14 | 0.0254° / 0.067° | 0.0339 % / 0.069 % | 3,240 (-2.1 %) | 12,180 (-1.3 %) | 3.76 (+0.8 %) | 0.601 / 0.602 px | 3,424 px (-0.0 %), from 7,464 | 11 (0.3 %) | 0.5 s |
+| meadow | 15 | 14 / 14 | 0.0362° / 0.194° | 0.0310 % / 0.083 % | 733 (-0.8 %) | 2,548 (+1.9 %) | 3.48 (+2.8 %) | 0.859 / 0.789 px | 3,407 px (+0.0 %), from 7,441 | 1 (0.1 %) | 0.3 s |
+| office | 26 | 26 / 26 | 0.0229° / 0.071° | 0.0614 % / 0.253 % | 7,572 (-0.7 %) | 27,763 (-0.5 %) | 3.67 (+0.2 %) | 0.720 / 0.720 px | 3,431 px (-0.0 %), from 7,465 | 15 (0.2 %) | 0.8 s |
+| kicker | 31 | 30 / 30 | 0.0100° / 0.073° | 0.0117 % / 0.060 % | 12,623 (-1.9 %) | 55,709 (-1.9 %) | 4.41 (+0.1 %) | 0.867 / 0.856 px | 3,409 px (-0.0 %), from 7,453 | 286 (2.2 %) | 1.0 s |
+| courtyard | 38 | 38 / 38 | 0.0107° / 0.089° | 0.0171 % / 0.103 % | 24,930 (-3.1 %) | 121,704 (-1.9 %) | 4.88 (+1.3 %) | 0.696 / 0.695 px | 3,410 px (-0.0 %), from 7,446 | 226 (0.9 %) | 1.6 s |
+| delivery_area | 44 | 44 / 44 | 0.0125° / 0.037° | 0.0074 % / 0.054 % | 30,757 (-0.5 %) | 128,754 (-1.0 %) | 4.19 (-0.5 %) | 0.646 / 0.650 px | 3,405 px (+0.0 %), from 7,450 | 258 (0.8 %) | 1.7 s |
+
+| Scene | Truth images | Ours: registered, rotation median / max, centre median | COLMAP: registered, rotation median / max, centre median |
+|---|---|---|---|
+| pipes | 14 | 14, 0.166° / 0.297°, 5.0 mm (0.159 %) | 14, 0.127° / 0.271°, 4.9 mm (0.156 %) |
+| meadow | 15 | 14, 0.124° / 0.890°, 30.2 mm (0.130 %) | 14, 0.105° / 0.702°, 32.1 mm (0.138 %) |
+| office | 26 | 26, 0.140° / 0.660°, 10.2 mm (0.476 %) | 26, 0.133° / 0.711°, 10.6 mm (0.496 %) |
+| kicker | 31 | 30, 0.068° / 0.154°, 18.1 mm (0.222 %) | 30, 0.064° / 0.184°, 17.9 mm (0.220 %) |
+| courtyard | 38 | 38, 0.078° / 0.180°, 34.8 mm (0.232 %) | 38, 0.072° / 0.182°, 33.6 mm (0.224 %) |
+| delivery_area | 44 | 44, 0.090° / 0.196°, 28.4 mm (0.236 %) | 44, 0.091° / 0.202°, 28.4 mm (0.235 %) |
+
+The focal column is our refined focal length (median over blocks), its difference
+from COLMAP's, and where it started: the images' metadata on South Building and
+Gerrard Hall, COLMAP's guess on the six ETH3D scenes, which the search took to within a
+few percent before the adjustments. Every scene registers the images COLMAP's does,
+with points within 3.1 % and focal lengths within 0.1 % of COLMAP's; against the truth,
+median rotation 0.068 to 0.166° against COLMAP's 0.064 to 0.133°, median centre 5 to
+35 mm against 5 to 34 mm. Started from COLMAP's calibration instead (the default), the
+figures are the same to within a few thousandths of a degree, and the table of D142
+above stands for fixed intrinsics (`--refine none`).
+
+The price was time: with intrinsics free the adjustments took 2.3 times as long, on
+Metal (South Building 7.6 to 17.5 s, Gerrard Hall 4.2 to 9.5 s) as on the CPU (52 to
+118 s for South Building). Looked into on South Building's last problem (128 images,
+100,371 points, 614,669 observations), solved again by `just-ba solve` with the
+intrinsics fixed and free; the iterations and conjugate-gradient steps are the same,
+each one costs more:
+
+| Backend, linear solver | Fixed | Free | Per step |
+|---|---|---|---|
+| Metal, `sparse_schur` (the default) | 0.119 s | 0.324 s | 2.7 times |
+| Metal, `iterative_schur` | 0.59 ms | 3.53 ms | 6.0 times |
+| CPU, `iterative_schur`, 18 threads | 2.14 ms | 3.77 ms | 1.8 times |
+| CPU, `iterative_schur`, 1 thread | 11.8 ms | 14.1 ms | 1.2 times |
+
+Ten iterations for `sparse_schur`; per conjugate-gradient step for the others. Freeing
+only the focal length costs the same as freeing all four parameters: the block is
+`num_params` wide whatever the mask, its fixed columns computed and masked. Two causes,
+both from one block shared by every observation:
+
+- **The explicit reduced system's tile entries.** `sparse_schur` builds each tile from
+  every pair of observations of each point. A shared intrinsics block takes part in
+  every observation, so the pose-intrinsics tiles get one entry per pair (5.57 million)
+  and the intrinsics-intrinsics tile as many again, all in one tile, against 3.09
+  million pose-pose entries: 4.6 times the entries, and on the shapes (4 x 6, 4 x 4)
+  that take the run-time path instead of the registers of the 6 x 6 one. Since all the
+  observations of a point share the block, the sums factor: the elimination term of
+  pose a with the intrinsics is G_a times the sum of the point's E_b, and that of the
+  intrinsics with themselves the sum of its G times the sum of its E. Summed per point
+  and block first, the entries would be one per observation and one per point, about
+  1.4 times the fixed case's in all.
+- **The gather of J^T t per block.** Both iterative solvers gather each camera-side
+  block's products over its observations in one unit of work: a thread on the CPU
+  (`jft_times_t`, `column_norms_and_gradient`), a threadgroup on the GPU
+  (`block_gather`). A pose block has about 4,800 observations; the intrinsics block
+  has all 614,669, so one thread or group works through them while the rest wait. On
+  one CPU thread the cost is 1.2 times, the arithmetic; with 18 it is 1.8 times, the
+  extra 1.6 ms barely shorter than the 2.4 ms on one. Splitting a large block into
+  chunks of fixed size whose sums are added in a fixed order would keep the results
+  deterministic and independent of the thread count.
+
+Both are fixed (D145): the gathers run in units of at most 16,384 observations, a
+split block's sums added in order, and `sparse_schur` takes the intrinsics terms once
+per point and block, with compile-time 6 x 4 and 4 x 4 tile shapes. The same problem,
+before and after:
+
+| Backend, linear solver | Fixed | Free, before | Free, after |
+|---|---|---|---|
+| Metal, `sparse_schur` (10 iterations) | 0.118 s | 0.321 s (2.7 times) | 0.165 s (1.4 times) |
+| Metal, `iterative_schur` (per step) | 0.59 ms | 3.53 ms (6.0 times) | 0.99 ms (1.7 times) |
+| CPU, 18 threads (per step) | 2.04 ms | 3.77 ms (1.8 times) | 2.54 ms (1.25 times) |
+
+The demo from the database's intrinsics, fixed against free:
+
+| Scene | Fixed | Free, before | Free, after |
+|---|---|---|---|
+| South Building, Metal | 7.8 s | 17.4 s | 9.4 s (1.21 times) |
+| South Building, CPU | 52.5 s | 118 s | 75.0 s (1.43 times) |
+| Gerrard Hall, Metal | 4.2 s | 9.3 s | 5.5 s (1.29 times) |
+| Gerrard Hall, CPU | 17.6 s | 40.1 s | 26.1 s (1.48 times) |
+
+The reconstructions are the same: every column of the table above but the run times
+agrees with the run before the change. What is left is the arithmetic of the free
+columns, and of the fixed ones, which are computed and masked.
 
 This sits late on purpose. It is a validation tool, and the solver it validates must
 exist first. It can be pulled earlier if parity evidence is needed sooner.
@@ -561,7 +832,8 @@ exist first. It can be pulled earlier if parity evidence is needed sooner.
 - Several Manhattan headings sharing one vertical, for buildings with angled wings.
 - Plane and 3D line constraints.
 - Stronger preconditioners.
-- Track completion and merging.
+- Track merging by geometry (points close in space with no match between them). The
+  demo's mapper splits and completes tracks (D140); nothing merges them.
 - WebAssembly and WebGPU backend.
 
 ## Decisions needed from the owner

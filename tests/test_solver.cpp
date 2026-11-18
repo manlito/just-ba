@@ -1,10 +1,12 @@
 // Solver behaviour that needs no reference solver: convergence on exact data,
-// cancellation, determinism across thread counts, gauge and fixed blocks honoured,
-// fixed intrinsics groups untouched, robust loss down-weights outliers.
+// cancellation, determinism across thread counts (split gathers too), gauge and
+// fixed blocks honoured, fixed intrinsics groups untouched, robust loss down-weights
+// outliers.
 
 #include <cmath>
 #include <cstdio>
 #include <random>
+#include <tuple>
 #include <vector>
 
 #include "check.h"
@@ -87,6 +89,38 @@ int main() {
         first_cost = s.final_cost;
       } else {
         EXPECT(p.points == first);
+        EXPECT(s.final_cost == first_cost);
+      }
+    }
+  }
+
+  // The same with blocks over a gather unit (16,384 observations), whose sums are
+  // split and added in order: the shared intrinsics block with focal and distortion
+  // free (16 x 2500 observations), and pose blocks (3 images x 20,000 points).
+  for (const auto& [images, points, free] : {std::tuple{16, 2500, jba::kFocal | jba::kDistortion},
+                                             std::tuple{3, 20000, 0}}) {
+    const auto base = [&] {
+      auto p = jba_test::random_problem(CameraModel::Radial, images, points, 41);
+      perturb(p, 42);
+      p.intrinsics_free = {static_cast<std::uint8_t>(free)};
+      p.intrinsics[0] *= 1.01;
+      return p;
+    }();
+    jba::Problem first;
+    double first_cost = 0;
+    for (int threads : {1, 3, 8}) {
+      auto p = base;
+      jba::SolverOptions o;
+      o.num_threads = threads;
+      o.max_iterations = 10;
+      const auto s = jba::solve(p, o);
+      if (threads == 1) {
+        first = p;
+        first_cost = s.final_cost;
+      } else {
+        EXPECT(p.points == first.points);
+        EXPECT(p.poses == first.poses);
+        EXPECT(p.intrinsics == first.intrinsics);
         EXPECT(s.final_cost == first_cost);
       }
     }

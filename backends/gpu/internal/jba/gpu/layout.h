@@ -37,9 +37,11 @@ struct uint_pair {
 
 JBA_CONSTANT_DATA int kMaxParams = 8;
 JBA_CONSTANT_DATA int kChunkFloats = 64;    // partial sums per camera chunk (an 8 x 8 block at most)
-JBA_CONSTANT_DATA uint kGatherThreads = 256;  // block_gather: threads per camera-side block
+JBA_CONSTANT_DATA uint kGatherThreads = 256;  // block_gather: threads per gather unit
 JBA_CONSTANT_DATA uint kTileThreads = 64;     // schur_tiles: threads per chunk of tile entries
 JBA_CONSTANT_DATA uint kReduceThreads = 256;  // reduce: threads of its one group
+JBA_CONSTANT_DATA uint kGatherUnit = 16384;   // block_gather: observations per group at most
+JBA_CONSTANT_DATA uint kNoSlot = 0xffffffffu;  // GatherUnit::slot of a block's only unit
 
 // Equal to cpu::BlockKind and jba::LossType (checked on the host).
 enum BlockKind : int { kPose = 0, kIntrinsics = 1, kSetRigid = 2, kSetScale = 3, kFrame = 4, kDepth = 5 };
@@ -62,6 +64,17 @@ struct Chunk {
   uint list;  // 0: per-image list, 1: per-intrinsics-block list
   uint q0;
   uint q1;
+};
+
+// One group of block_gather: observations q0 to q1 of a camera-side block's list.
+// slot: kNoSlot for a block's only unit, else where its sums go (16 floats each).
+struct GatherUnit {
+  uint block, q0, q1, slot;
+};
+
+// A block of several gather units: their sums are slots s0 to s1.
+struct GatherSplit {
+  uint block, s0, s1, pad;
 };
 
 // A camera-side factor (pose prior, gravity, segment, depth prior): rows x cols
@@ -93,7 +106,10 @@ struct TileChunk {
 // pose and depth, ib_list for intrinsics); kind 1: factor ka, slots role_a, role_b.
 struct TileEntry {
   uint ka, kb;
-  uint info;  // bits 0-1 role_a, 2-3 role_b, 4 kind, 5 one observation, 6 point eliminated
+  // bits 0-1 role_a, 2-3 role_b, 4 kind, 5 the own J^T J term of observation ka (in
+  // both roles), 6 the elimination term G_a E_b^T, 7 the own J^T J terms of the
+  // intrinsics run that ka starts (both roles intrinsics; tile_entries on the host)
+  uint info;
 };
 
 struct Args {
@@ -176,9 +192,13 @@ struct Args {
   // order. Pose (18 floats) from 0, depth (6) from eo_dep, intrinsics (3 np) from eo_intr.
   JBA_DEVICE float* Eo;
   JBA_DEVICE float* Go;
+  // Gather units (block_gather, gather_finish).
+  JBA_DEVICE const GatherUnit* gunits;
+  JBA_DEVICE const GatherSplit* gsplits;
+  JBA_DEVICE float* gpartial;  // 16 per unit of a split block
   // Sizes and options.
   uint nobs, npts, nf, ne, nfb, nchunks, nfac, np, ntiles, ntile_chunks;
-  uint eo_dep, eo_intr;
+  uint eo_dep, eo_intr, ngunits, ngsplits;
   int has_depth, has_intr, loss_type;
   float loss_scale, pivot_floor;
 };

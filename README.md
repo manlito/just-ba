@@ -141,6 +141,12 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_WITH_CUDA=ON
 For `sparse_schur` on CUDA, add `-DJBA_WITH_CUDSS=ON -Dcudss_DIR=<cuDSS>/lib/cmake/cudss`
 (cuDSS 1.0 or later, NVIDIA's redistributable).
 
+## Demo app
+
+`demo/` is a minimal incremental reconstruction, natively and as the live demo of the
+documentation site. It alone links poselib-gpu, from its sources next to this
+repository, and is built only with `-DJBA_BUILD_DEMO=ON` (D134); see `demo/README.md`.
+
 ## Parity with Ceres
 
 With the reference solver enabled, `build/tests/ceres/jba_parity <problem>` solves

@@ -12,4 +12,6 @@ kernel void layout_sizes(device uint* out [[buffer(0)]], uint tid [[thread_posit
   out[6] = sizeof(Tile);
   out[7] = sizeof(TileEntry);
   out[8] = sizeof(TileChunk);
+  out[9] = sizeof(GatherUnit);
+  out[10] = sizeof(GatherSplit);
 }

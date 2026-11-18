@@ -28,6 +28,34 @@ autodoc_typehints = "signature"
 # The docstring examples run with `sphinx-build -b doctest` (document 08).
 doctest_global_setup = "import numpy as np\nimport just_ba\njba = just_ba"
 
+# The live demo (D134): its built page and module, from a WebAssembly build of the
+# demo app, copied to demo/ when JBA_DEMO_WEB names their folder. Without it the
+# demo page says the demo is not in this build. A relative path is from the repository root.
+DEMO_WEB = os.environ.get("JBA_DEMO_WEB", "")
+if DEMO_WEB:
+    DEMO_WEB = os.path.join(os.path.dirname(HERE), DEMO_WEB)
+DEMO_FILES = ("index.html", "jba_demo.js", "jba_demo.wasm")
+if DEMO_WEB:
+    missing = [f for f in DEMO_FILES if not os.path.isfile(os.path.join(DEMO_WEB, f))]
+    if missing:
+        raise RuntimeError(f"JBA_DEMO_WEB={DEMO_WEB} lacks {', '.join(missing)}")
+    tags.add("demo")  # noqa: F821  (Sphinx provides `tags` to conf.py)
+
+
+def copy_demo(app, exception):
+    if exception is None and DEMO_WEB and app.builder.format == "html":
+        import shutil
+
+        out = os.path.join(app.outdir, "demo")
+        os.makedirs(out, exist_ok=True)
+        for f in DEMO_FILES:
+            shutil.copy2(os.path.join(DEMO_WEB, f), out)
+
+
+def setup(app):
+    app.connect("build-finished", copy_demo)
+
+
 # The site's own theme in _theme/justba (D130), on Sphinx's basic theme.
 html_theme = "justba"
 html_theme_path = ["_theme"]

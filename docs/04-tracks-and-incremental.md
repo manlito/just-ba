@@ -135,9 +135,11 @@ Use COLMAP 4.2.1 with its Ceres backend as the reference. Compare on the same ma
 exported from a COLMAP database, so differences come from our pipeline and solver, not
 from features. Metrics are in document 05.
 
-### Risk
+### Where it lives
 
 Relative pose and PnP estimation are a sizeable amount of code that is not our core.
-If the language decision (document 06) makes an existing minimal-solver library
-available as a test-only dependency, use it here and keep it out of the shipped
-library.
+They come from poselib-gpu, the owner's sibling library, which only the demo app
+links (`demo/`, built with `JBA_BUILD_DEMO`). The library and its wheels never depend
+on it (D134). The mapper of steps 1 to 5 lives in the demo too: a native binary for
+the COLMAP comparison and a WebAssembly module for the live demo on the documentation
+site.

@@ -46,8 +46,8 @@ constexpr std::uint32_t kMaxGroupsX = 65535;   // WebGPU's guaranteed groups per
 // the State's word index.
 constexpr std::size_t kArgPointers = offsetof(jba_gpu::Args, nobs) / sizeof(void*);
 static_assert(offsetof(jba_gpu::Args, nobs) % sizeof(void*) == 0);
-static_assert(kArgPointers == 69, "layout.h's Args changed: update solver.wgsl's Args and this count");
-constexpr std::size_t kArgScalars = 17;  // nobs .. pivot_floor
+static_assert(kArgPointers == 72, "layout.h's Args changed: update solver.wgsl's Args and this count");
+constexpr std::size_t kArgScalars = 19;  // nobs .. pivot_floor
 static_assert(offsetof(jba_gpu::Args, pivot_floor) + 4 == offsetof(jba_gpu::Args, nobs) + 4 * kArgScalars);
 static_assert(sizeof(jba_gpu::State) == 100, "layout.h's State changed: update solver.wgsl's S_ constants");
 
