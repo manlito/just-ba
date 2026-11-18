@@ -593,7 +593,6 @@ fn block_gather_body(gid: u32, group: u32, lid: u32) {
   let i = lid;
   let skip = op.mode == 1 && done();
   let fb = fblock(b);
-  let n = fb.size;
   let width = select(8u, 16u, op.mode == 0);
   var acc: array<f32, 16>;
   let c0 = ldu(a.block_chunks + b);

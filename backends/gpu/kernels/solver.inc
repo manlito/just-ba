@@ -500,7 +500,6 @@ JBA_KERNEL(block_gather) {
   const GatherUnit U = a.gunits[group];
   const uint b = U.block;
   const FBlockDesc fb = a.fblocks[b];
-  const int n = fb.size;
   const int width = op.mode == 0 ? 16 : 8;
   float acc[16];
   for (int c = 0; c < 16; ++c) acc[c] = 0;
