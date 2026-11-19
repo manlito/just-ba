@@ -62,6 +62,8 @@ std::string check(const Capture& c) {
     return "prior_position needs 3 values per image";
   if (!c.prior_sigma.empty() && c.prior_sigma.size() != 2 * c.num_images())
     return "prior_sigma needs 2 values per image";
+  if (!c.image_size.empty() && c.image_size.size() != 2 * static_cast<std::size_t>(blocks))
+    return "image_size needs a width and a height per intrinsics block";
   for (const Pair& p : c.pairs) {
     if (p.ka.size() != p.kb.size()) return "a pair has more keypoints on one side than the other";
     if (p.a < 0 || p.b < 0 || p.a == p.b || static_cast<std::size_t>(std::max(p.a, p.b)) >= c.num_images())
@@ -93,6 +95,49 @@ struct Map {
   int aligned_with = 0;                         // registered images with a prior at the last (re)alignment
   std::size_t n_images() const { return registered.size(); }
 };
+
+// Area of the convex hull of `xy` (2 values per point), Andrew's monotone chain; 0 for
+// fewer than three points or points on a line.
+double hull_area(std::vector<std::pair<double, double>>& p) {
+  if (p.size() < 3) return 0.0;
+  std::sort(p.begin(), p.end());
+  auto cross = [](const std::pair<double, double>& o, const std::pair<double, double>& a,
+                  const std::pair<double, double>& b) {
+    return (a.first - o.first) * (b.second - o.second) - (a.second - o.second) * (b.first - o.first);
+  };
+  std::vector<std::pair<double, double>> h(2 * p.size());
+  std::size_t k = 0;
+  for (std::size_t i = 0; i < p.size(); ++i) {
+    while (k >= 2 && cross(h[k - 2], h[k - 1], p[i]) <= 0.0) --k;
+    h[k++] = p[i];
+  }
+  for (std::size_t i = p.size() - 1, t = k + 1; i > 0; --i) {
+    while (k >= t && cross(h[k - 2], h[k - 1], p[i - 1]) <= 0.0) --k;
+    h[k++] = p[i - 1];
+  }
+  double area = 0.0;
+  for (std::size_t i = 0; i + 1 < k; ++i) area += h[i].first * h[i + 1].second - h[i + 1].first * h[i].second;
+  return 0.5 * std::abs(area);
+}
+
+// The share of each image of pair `i` the convex hull of its inliers covers, the smaller
+// of the two (D151); NaN without the images' sizes.
+float pair_coverage(const Capture& c, const Pair& p, const std::uint8_t* inlier) {
+  if (c.image_size.empty()) return std::numeric_limits<float>::quiet_NaN();
+  double share = 1.0;
+  for (const bool side_a : {true, false}) {
+    const std::int32_t image = side_a ? p.a : p.b;
+    const std::size_t b = static_cast<std::size_t>(c.block(static_cast<std::size_t>(image)));
+    const double area = static_cast<double>(c.image_size[2 * b]) * static_cast<double>(c.image_size[2 * b + 1]);
+    if (!(area > 0.0)) return std::numeric_limits<float>::quiet_NaN();
+    std::vector<std::pair<double, double>> pts;
+    const std::vector<std::int32_t>& kp = side_a ? p.ka : p.kb;
+    for (std::size_t k = 0; k < kp.size(); ++k)
+      if (inlier[k]) pts.emplace_back(c.keypoints[image][2 * kp[k]], c.keypoints[image][2 * kp[k] + 1]);
+    share = std::min(share, hull_area(pts) / area);
+  }
+  return static_cast<float>(share);
+}
 
 // Whether the run uses the capture's position priors.
 bool uses_priors(const Capture& c, const MapperOptions& o) { return o.use_position_priors && !c.prior_position.empty(); }
@@ -912,8 +957,11 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   // The matches that go on to track building: the inliers of every pair with enough of
   // them. A DEGENERATE pair (no observable baseline) is kept too: its inliers are good
   // matches and connect images that the pairs with a baseline may not.
+  // With the images' sizes, a pair also needs its inliers spread over min_pair_coverage
+  // of both images (D151).
   std::vector<std::int32_t> verified;
   run.pair_kept.assign(c.pairs.size(), 0);
+  run.pair_coverage.assign(c.pairs.size(), std::numeric_limits<float>::quiet_NaN());
   for (std::size_t i = 0; i < c.pairs.size(); ++i) {
     const Pair& p = c.pairs[i];
     const jpo_pose_result& r = run.pair_results[i];
@@ -921,8 +969,13 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     else if (r.status == JPO_DEGENERATE) ++run.pairs_degenerate;
     else ++run.pairs_failed;
     if (r.status != JPO_OK && r.status != JPO_DEGENERATE) continue;
+    run.pair_coverage[i] = pair_coverage(c, p, &run.pair_inliers[offsets[i]]);
     if (r.n_inliers < o.min_pair_inliers || r.n_inliers < o.min_pair_inlier_ratio * static_cast<double>(p.ka.size()))
       continue;
+    if (o.min_pair_coverage > 0.0 && std::isfinite(run.pair_coverage[i]) && run.pair_coverage[i] < o.min_pair_coverage) {
+      ++run.pairs_narrow;
+      continue;
+    }
     run.pair_kept[i] = 1;
     ++run.pairs_kept;
     for (std::size_t k = 0; k < p.ka.size(); ++k)
@@ -997,6 +1050,29 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     }
     run.prior_error_horizontal = median(eh);
     run.prior_error_vertical = median(ev);
+    // Per image (D151): the points of this model it sees, and its reprojection error.
+    run.image_points_seen.assign(n_img, 0);
+    std::vector<std::int32_t> seen;
+    for (std::size_t i = 0; i < n_img; ++i) {
+      seen.clear();
+      for (std::int64_t k : mm.image_obs[i])
+        if (!mm.obs_dead[k] && mm.has_point[mm.obs_track[k]]) seen.push_back(mm.obs_track[k]);
+      std::sort(seen.begin(), seen.end());
+      run.image_points_seen[i] = static_cast<std::int32_t>(std::unique(seen.begin(), seen.end()) - seen.begin());
+    }
+    run.image_error_px.assign(n_img, std::numeric_limits<double>::quiet_NaN());
+    std::vector<double> sum(n_img, 0.0);
+    std::vector<std::size_t> count(n_img, 0);
+    const jba::Problem& pr = run.problem;
+    for (std::size_t k = 0; k < pr.obs_image.size(); ++k) {
+      const int image = run.image_of[static_cast<std::size_t>(pr.obs_image[k])];
+      const double e = reprojection_error(mm, image, &pr.obs_xy[2 * k], &pr.points[3 * static_cast<std::size_t>(pr.obs_point[k])]);
+      if (e < 0.0) continue;
+      sum[static_cast<std::size_t>(image)] += e;
+      ++count[static_cast<std::size_t>(image)];
+    }
+    for (std::size_t i = 0; i < n_img; ++i)
+      if (mm.registered[i] && count[i]) run.image_error_px[i] = sum[i] / static_cast<double>(count[i]);
     run.time.total = seconds_since(t_start);
   };
   auto timed_points = [&](bool split) {
@@ -1035,6 +1111,8 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   // last adjustment in `last`; false when poselib-gpu fails (run.error says why) or the
   // run is stopped (`stopped`).
   Adjusted last;
+  // Per image, the inliers of its last rejected PnP in the model being grown (D151).
+  std::vector<std::int32_t> rejected(n_img, -1);
   // A step done: kept for on_step, shown to on_progress. False when the run is stopped.
   auto step = [&](std::vector<Step>* steps, const char* stage, const std::vector<std::int32_t>& added) {
     if (stopped) return false;
@@ -1056,6 +1134,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     // the second is the relative pose as returned (camera a to camera b is then world to
     // camera b), whose unit translation fixes the scale of the map.
     const int fa = c.pairs[first].a, fb = c.pairs[first].b;
+    rejected.assign(n_img, -1);
     const double identity[7] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     std::copy(identity, identity + 7, &m.cams.poses[7 * static_cast<std::size_t>(fa)]);
     std::copy(run.pair_results[first].pose, run.pair_results[first].pose + 7,
@@ -1130,6 +1209,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
                         out[k].n_inliers >= o.min_pnp_inlier_ratio * static_cast<double>(n);
         if (!ok) {
           failed_with[image] = seen[k].first;
+          rejected[static_cast<std::size_t>(image)] = out[k].status == JPO_OK ? static_cast<std::int32_t>(out[k].n_inliers) : 0;
           ++run.pnp_rejected;
           continue;
         }
@@ -1160,6 +1240,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   std::vector<char> in_a_model(n_img, 0);
   Map best_map;
   Adjusted best_last;
+  std::vector<std::int32_t> best_rejected;
   std::vector<Step> best_steps;
   std::size_t best_images = 0;
   int best_first = -1;
@@ -1183,11 +1264,22 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
       images += m.registered[i] != 0;
       if (m.registered[i]) in_a_model[i] = 1;
     }
+    Reconstruction::Model summary;
+    summary.registered = m.registered;
+    summary.poses = m.cams.poses;
+    summary.points = last.problem.points;
+    summary.observations = last.problem.num_observations();
+    summary.mean_error_px = last.mean_error_px;
+    summary.first_pair = first;
+    summary.aligned = m.aligned;
+    run.all_models.push_back(std::move(summary));
     if (images > best_images || (images == best_images && last.problem.num_points() > best_last.problem.num_points())) {
       best_images = images;
       best_first = first;
+      run.kept_model = static_cast<int>(run.all_models.size()) - 1;
       best_map = std::move(m);
       best_last = std::move(last);
+      best_rejected = rejected;
       best_steps = std::move(steps);
     }
     if (best_images == n_img) break;
@@ -1214,6 +1306,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     on_step(s);
   }
   finish(best_map, std::move(best_last));
+  run.image_pnp_inliers = std::move(best_rejected);
   return run;
 }
 

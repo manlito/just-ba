@@ -15,6 +15,7 @@
 //
 //   jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo] [--two-view-tracks]
 //                [--tri-angle deg] [--json file] [--check] [--no-priors]
+//                [--min-pair-inliers n] [--min-pair-coverage share]
 //                [common options]
 //     Reconstructs a capture file (from demo/tools/colmap_capture.py) and, when it holds a
 //     reference reconstruction, compares with it (document 05, level 3).
@@ -50,6 +51,7 @@ int usage() {
                "                      [--false-pairs n] [--focal-error f] [--priors sigma] [--write dir] [options]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
                "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [--no-priors]\n"
+               "                    [--min-pair-inliers n] [--min-pair-coverage share]\n"
                "                    [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
                "         [--refine none|focal|focal+distortion] [--export dir] [-v]\n");
@@ -325,7 +327,8 @@ int run(const std::vector<std::string>& args) {
   std::string intrinsics = "reference", thresholds = "colmap";
   bool check = false, two_view = false, no_priors = false;
   std::string json_path;
-  double tri_angle = -1.0;
+  double tri_angle = -1.0, min_pair_coverage = -1.0;
+  int min_pair_inliers = -1;
   Common c;
   for (std::size_t i = 1; i < args.size(); ++i) {
     const std::string& a = args[i];
@@ -340,6 +343,8 @@ int run(const std::vector<std::string>& args) {
     else if (a == "--two-view-tracks") two_view = true;
     else if (a == "--no-priors") no_priors = true;
     else if (a == "--tri-angle" && has_value) tri_angle = std::atof(args[++i].c_str());
+    else if (a == "--min-pair-inliers" && has_value) min_pair_inliers = std::atoi(args[++i].c_str());
+    else if (a == "--min-pair-coverage" && has_value) min_pair_coverage = std::atof(args[++i].c_str());
 
     else return usage();
   }
@@ -351,6 +356,8 @@ int run(const std::vector<std::string>& args) {
   if (two_view) mo.ignore_two_view_tracks = false;
   if (no_priors) mo.use_position_priors = false;
   if (tri_angle >= 0.0) mo.tri_max_angle_error_deg = tri_angle;
+  if (min_pair_inliers >= 0) mo.min_pair_inliers = static_cast<std::uint32_t>(min_pair_inliers);
+  if (min_pair_coverage >= 0.0) mo.min_pair_coverage = min_pair_coverage;
   if (!available(mo)) return 2;
 
   demo::CaptureFile file = demo::read_capture(path);
@@ -375,10 +382,17 @@ int run(const std::vector<std::string>& args) {
   demo::Mapper mapper(mo);
   const demo::Reconstruction r = mapper.run(file.capture, printer(c.verbose));
   if (!r.ok()) std::printf("  stopped: %s\n", r.error.c_str());
-  std::printf("  pairs: %d kept of %zu (%d OK, %d without baseline, %d failed); %zu tracks; %d PnP calls, %d rejected;"
-              " %d model%s grown\n",
-              r.pairs_kept, file.capture.pairs.size(), r.pairs_ok, r.pairs_degenerate, r.pairs_failed, r.tracks,
-              r.pnp_calls, r.pnp_rejected, r.models, r.models == 1 ? "" : "s");
+  std::printf("  pairs: %d kept of %zu (%d OK, %d without baseline, %d failed, %d too narrow); %zu tracks; %d PnP"
+              " calls, %d rejected; %d model%s grown\n",
+              r.pairs_kept, file.capture.pairs.size(), r.pairs_ok, r.pairs_degenerate, r.pairs_failed, r.pairs_narrow,
+              r.tracks, r.pnp_calls, r.pnp_rejected, r.models, r.models == 1 ? "" : "s");
+  for (std::size_t k = 0; r.all_models.size() > 1 && k < r.all_models.size(); ++k) {
+    const demo::Reconstruction::Model& md = r.all_models[k];
+    std::size_t n = 0;
+    for (char g : md.registered) n += g != 0;
+    std::printf("    model %zu%s: %zu images, %zu points, %.3f px\n", k + 1,
+                static_cast<int>(k) == r.kept_model ? " (kept)" : "", n, md.points.size() / 3, md.mean_error_px);
+  }
   print_times(r);
   if (!file.capture.prior_position.empty()) {
     std::size_t with = 0;
