@@ -20,7 +20,7 @@ name: release
 
 on:
   push:
-    branches: [main]
+    branches: [main, wt/release-on-merge]  # TEMPORARY: test the build on this branch
     paths-ignore: ["docs/**"]
   workflow_dispatch:
     inputs:
