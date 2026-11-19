@@ -428,18 +428,54 @@ struct Adjusted {
 // with fewer than two views or a small triangulation angle are removed (their tracks
 // can be triangulated again later). `on_iteration` goes to the solver; when it stops the
 // solve, the map is left as it was.
-Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::IterationCallback& on_iteration) {
+// With `free` (a session's window, D152): only the points some free registered image
+// sees, with the poses of the free images adjusted and those of the other registered
+// images that see the points held; with fewer than two held, everything as without.
+Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::IterationCallback& on_iteration,
+                const std::vector<char>* free = nullptr) {
   Adjusted a;
   jba::Problem& p = a.problem;
   p.model = m.cams.model;
   p.intrinsics = m.cams.intrinsics;
+  // The window: its points, and the images in the problem.
+  std::vector<char> use_point, in_problem(m.registered.begin(), m.registered.end());
+  if (free) {
+    use_point.assign(m.tracks.size(), 0);
+    std::fill(in_problem.begin(), in_problem.end(), 0);
+    for (std::size_t t = 0; t < m.tracks.size(); ++t) {
+      if (!m.has_point[t]) continue;
+      int n = 0;
+      bool seen_free = false;
+      for (std::int64_t k = m.tracks.begin[t]; k < m.tracks.begin[t + 1]; ++k) {
+        const int image = m.tracks.image[k];
+        if (!m.obs_in[k] || !m.registered[image]) continue;
+        ++n;
+        seen_free = seen_free || (*free)[image];
+      }
+      if (n < 2 || !seen_free) continue;
+      use_point[t] = 1;
+      for (std::int64_t k = m.tracks.begin[t]; k < m.tracks.begin[t + 1]; ++k)
+        if (m.obs_in[k] && m.registered[m.tracks.image[k]]) in_problem[m.tracks.image[k]] = 1;
+    }
+    int held = 0;
+    for (std::size_t i = 0; i < m.n_images(); ++i) {
+      if (m.registered[i] && (*free)[i]) in_problem[i] = 1;
+      held += in_problem[i] && !(*free)[i];
+    }
+    if (held < 2) {  // the gauge: two held poses fix the frame and its scale
+      free = nullptr;
+      use_point.clear();
+      in_problem.assign(m.registered.begin(), m.registered.end());
+    }
+  }
   std::vector<int> dense(m.n_images(), -1);
   for (std::size_t i = 0; i < m.n_images(); ++i)
-    if (m.registered[i]) {
+    if (in_problem[i]) {
       dense[i] = static_cast<int>(a.image_of.size());
       a.image_of.push_back(static_cast<std::int32_t>(i));
       p.poses.insert(p.poses.end(), &m.cams.poses[7 * i], &m.cams.poses[7 * i] + 7);
       if (!m.capture->image_intrinsics.empty()) p.image_intrinsics.push_back(m.capture->image_intrinsics[i]);
+      if (free) p.image_fixed.push_back((*free)[i] ? 0 : 1);
     }
   if (o.refine_intrinsics) {
     // The groups asked for, in each block enough registered images use.
@@ -452,7 +488,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   }
   std::vector<std::int64_t> obs_of;  // problem observation -> observation of the map
   for (std::size_t t = 0; t < m.tracks.size(); ++t) {
-    if (!m.has_point[t]) continue;
+    if (!m.has_point[t] || (!use_point.empty() && !use_point[t])) continue;
     int n = 0;
     for (std::int64_t k = m.tracks.begin[t]; k < m.tracks.begin[t + 1]; ++k)
       n += m.obs_in[k] && m.registered[m.tracks.image[k]];
@@ -478,7 +514,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   if (m.aligned && uses_priors(*m.capture, o))
     for (std::size_t k = 0; k < a.image_of.size(); ++k) {
       const std::size_t i = static_cast<std::size_t>(a.image_of[k]);
-      if (!m.capture->has_prior(i)) continue;
+      if (!m.capture->has_prior(i) || (free && !(*free)[i])) continue;
       double h, v;
       prior_sigmas(*m.capture, o, i, &h, &v);
       const double* P = &m.capture->prior_position[3 * i];
@@ -544,6 +580,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   kept_problem.intrinsics_free = p.intrinsics_free;
   kept_problem.poses = p.poses;
   kept_problem.image_intrinsics = p.image_intrinsics;
+  kept_problem.image_fixed = p.image_fixed;
   kept_problem.glob_image = p.glob_image;
   kept_problem.glob_pose = p.glob_pose;
   kept_problem.glob_sqrt_info = p.glob_sqrt_info;
@@ -757,6 +794,12 @@ bool align_to_priors(Map& m, const MapperOptions& o) {
 
 }  // namespace
 
+// The first model of Mapper::run_from: the start's, not a first pair.
+constexpr int kResume = -2;
+// A start image whose pose disagrees with its verified pairs by more than this (the
+// median over them) is left out of the start.
+constexpr double kResumeMaxRotationDeg = 5.0;
+
 Mapper::Mapper(const MapperOptions& options) : options_(options) {
   jpo_config config;
   jpo_config_init(&config);
@@ -854,6 +897,16 @@ double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o) {
 }  // namespace
 
 Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const ProgressCallback& on_progress) {
+  return run_impl(c, nullptr, on_step, on_progress);
+}
+
+Reconstruction Mapper::run_from(const Capture& c, const StartFrom& start, const StepCallback& on_step,
+                                const ProgressCallback& on_progress) {
+  return run_impl(c, &start, on_step, on_progress);
+}
+
+Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const StepCallback& on_step,
+                                const ProgressCallback& on_progress) {
   const MapperOptions& o = options_;
   const auto t_start = Clock::now();
   Reconstruction run;
@@ -864,6 +917,16 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   m.registered.assign(n_img, 0);
   run.error = check(c);
   if (!run.ok()) return run;
+  if (from) {
+    std::size_t placed = 0;
+    for (char g : from->registered) placed += g != 0;
+    if (from->registered.size() != n_img || from->poses.size() != 7 * n_img ||
+        from->intrinsics.size() != c.intrinsics.size())
+      run.error = "the start does not match the capture";
+    else if (placed < 2)
+      run.error = "the start has fewer than two registered images";
+    if (!run.ok()) return run;
+  }
 
   // Live progress (D146). Once the callback returns false it is not called again, and
   // every stage checks `stopped` on its way out.
@@ -893,8 +956,9 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   };
   // The starting intrinsics: the capture's, with the searched focal lengths. Pair
   // verification uses them; PnP the map's, refined as it grows.
-  std::vector<double> start = c.intrinsics;
-  if (o.search_focal) {
+  std::vector<double> start = from ? from->intrinsics : c.intrinsics;
+  if (from) run.focal_factor = from->focal_factor;
+  if (o.search_focal && !from) {
     const auto ts = Clock::now();
     run.focal_factor = search_focal(ctx_, c, o);
     if (run.focal_factor < 0.0) {
@@ -1026,6 +1090,40 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
 
   const Map fresh = m;  // the map before any model: tracks built, nothing registered
 
+  // The start's images that agree with their verified pairs (D152): per image, the
+  // median over its kept pairs to other start images of the angle between the relative
+  // rotation of the two start poses and the pair's own. An image placed wrong while
+  // capturing disagrees with most of its pairs; it is left out of the start and placed
+  // again later, by PnP against the map. With fewer than two left, no start.
+  std::vector<char> from_kept;
+  if (from) {
+    from_kept.assign(from->registered.begin(), from->registered.end());
+    std::vector<std::vector<double>> disagree(n_img);
+    for (std::size_t i = 0; i < c.pairs.size(); ++i) {
+      const std::size_t a = static_cast<std::size_t>(c.pairs[i].a), b = static_cast<std::size_t>(c.pairs[i].b);
+      const jpo_pose_result& p = run.pair_results[i];
+      if (!run.pair_kept[i] || p.status != JPO_OK || !from->registered[a] || !from->registered[b]) continue;
+      double Ra[9], Rb[9], Rat[9], Rab[9], Rp[9];
+      quat_to_rotmat(&from->poses[7 * a], Ra);
+      quat_to_rotmat(&from->poses[7 * b], Rb);
+      transpose3(Ra, Rat);
+      mat3_mul(Rb, Rat, Rab);
+      quat_to_rotmat(p.pose, Rp);
+      const double e = rotation_angle_deg(Rab, Rp);
+      disagree[a].push_back(e);
+      disagree[b].push_back(e);
+    }
+    std::size_t left = 0;
+    for (std::size_t i = 0; i < n_img; ++i) {
+      if (from_kept[i] && !disagree[i].empty() && median(disagree[i]) > kResumeMaxRotationDeg) {
+        from_kept[i] = 0;
+        ++run.start_left_out;
+      }
+      left += from_kept[i] != 0;
+    }
+    if (left < 2) from = nullptr;
+  }
+
   auto finish = [&](Map& mm, Adjusted&& a) {
     run.poses = mm.cams.poses;
     run.registered = mm.registered;
@@ -1130,19 +1228,37 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     return progress(stage, &s);
   };
   auto grow = [&](int first, std::vector<Step>* steps) -> bool {
-    // -- 3. First pair, first points, first adjustment. The first image is the origin;
-    // the second is the relative pose as returned (camera a to camera b is then world to
-    // camera b), whose unit translation fixes the scale of the map.
-    const int fa = c.pairs[first].a, fb = c.pairs[first].b;
     rejected.assign(n_img, -1);
-    const double identity[7] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    std::copy(identity, identity + 7, &m.cams.poses[7 * static_cast<std::size_t>(fa)]);
-    std::copy(run.pair_results[first].pose, run.pair_results[first].pose + 7,
-              &m.cams.poses[7 * static_cast<std::size_t>(fb)]);
-    m.registered[fa] = m.registered[fb] = 1;
-    timed_points(false);
-    last = timed_adjust(o.local_iterations);
-    if (!step(steps, "first pair", {fa, fb})) return false;
+    if (first == kResume) {
+      // -- 3'. The start's model (D152): its images and poses, its points triangulated
+      // from the tracks of every pair, and everything adjusted.
+      std::vector<std::int32_t> added;
+      for (std::size_t i = 0; i < n_img; ++i)
+        if (from_kept[i]) {
+          m.registered[i] = 1;
+          std::copy(&from->poses[7 * i], &from->poses[7 * i] + 7, &m.cams.poses[7 * i]);
+          added.push_back(static_cast<std::int32_t>(i));
+        }
+      m.aligned = from->aligned && uses_priors(c, o);
+      if (m.aligned)
+        for (std::size_t i = 0; i < n_img; ++i) m.aligned_with += m.registered[i] && c.has_prior(i);
+      timed_points(false);
+      last = timed_adjust(o.final_iterations);
+      if (!step(steps, "resume", added)) return false;
+    } else {
+      // -- 3. First pair, first points, first adjustment. The first image is the origin;
+      // the second is the relative pose as returned (camera a to camera b is then world to
+      // camera b), whose unit translation fixes the scale of the map.
+      const int fa = c.pairs[first].a, fb = c.pairs[first].b;
+      const double identity[7] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+      std::copy(identity, identity + 7, &m.cams.poses[7 * static_cast<std::size_t>(fa)]);
+      std::copy(run.pair_results[first].pose, run.pair_results[first].pose + 7,
+                &m.cams.poses[7 * static_cast<std::size_t>(fb)]);
+      m.registered[fa] = m.registered[fb] = 1;
+      timed_points(false);
+      last = timed_adjust(o.local_iterations);
+      if (!step(steps, "first pair", {fa, fb})) return false;
+    }
 
     // -- 4. Register the remaining images. Those that see the most triangulated points go
     // first; up to pnp_batch are resected in one call, all against the same map.
@@ -1244,9 +1360,10 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   std::vector<Step> best_steps;
   std::size_t best_images = 0;
   int best_first = -1;
+  bool found = false;  // a model was grown
   for (int model = 0; model < o.max_models; ++model) {
-    const int first = choose_first_pair(c, run, o, in_a_model);
-    if (first < 0) break;
+    const int first = model == 0 && from ? kResume : choose_first_pair(c, run, o, in_a_model);
+    if (first == -1) break;
     if (model > 0) m = fresh;
     model_index = model;
     std::vector<Step> steps;
@@ -1270,10 +1387,12 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     summary.points = last.problem.points;
     summary.observations = last.problem.num_observations();
     summary.mean_error_px = last.mean_error_px;
-    summary.first_pair = first;
+    summary.first_pair = first >= 0 ? first : -1;
     summary.aligned = m.aligned;
     run.all_models.push_back(std::move(summary));
-    if (images > best_images || (images == best_images && last.problem.num_points() > best_last.problem.num_points())) {
+    if (!found || images > best_images ||
+        (images == best_images && last.problem.num_points() > best_last.problem.num_points())) {
+      found = true;
       best_images = images;
       best_first = first;
       run.kept_model = static_cast<int>(run.all_models.size()) - 1;
@@ -1284,15 +1403,17 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     }
     if (best_images == n_img) break;
   }
-  if (best_first < 0) {
+  if (!found) {
     run.error = "no pair is fit to start from";
     run.time.total = seconds_since(t_start);
     return run;
   }
-  run.first_a = c.pairs[best_first].a;
-  run.first_b = c.pairs[best_first].b;
-  run.first_inliers = run.pair_results[best_first].n_inliers;
-  run.first_angle_deg = run.pair_results[best_first].median_tri_angle_deg;
+  if (best_first >= 0) {  // not the start's model
+    run.first_a = c.pairs[best_first].a;
+    run.first_b = c.pairs[best_first].b;
+    run.first_inliers = run.pair_results[best_first].n_inliers;
+    run.first_angle_deg = run.pair_results[best_first].median_tri_angle_deg;
+  }
   for (const Step& st : best_steps) {
     Snapshot s;
     s.stage = st.stage;
@@ -1308,6 +1429,672 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   finish(best_map, std::move(best_last));
   run.image_pnp_inliers = std::move(best_rejected);
   return run;
+}
+
+double pair_rotation_error_deg(const Capture& c, const Reconstruction& r, double q) {
+  std::vector<double> err;
+  for (std::size_t i = 0; i < c.pairs.size() && i < r.pair_kept.size(); ++i) {
+    const std::size_t a = static_cast<std::size_t>(c.pairs[i].a), b = static_cast<std::size_t>(c.pairs[i].b);
+    if (!r.pair_kept[i] || r.pair_results[i].status != JPO_OK || a >= r.registered.size() || b >= r.registered.size() ||
+        !r.registered[a] || !r.registered[b])
+      continue;
+    double Ra[9], Rb[9], Rat[9], Rab[9], Rp[9];
+    quat_to_rotmat(&r.poses[7 * a], Ra);
+    quat_to_rotmat(&r.poses[7 * b], Rb);
+    transpose3(Ra, Rat);
+    mat3_mul(Rb, Rat, Rab);
+    quat_to_rotmat(r.pair_results[i].pose, Rp);
+    err.push_back(rotation_angle_deg(Rab, Rp));
+  }
+  if (err.empty()) return std::numeric_limits<double>::quiet_NaN();
+  std::sort(err.begin(), err.end());
+  const std::size_t k = std::min(err.size() - 1, static_cast<std::size_t>(q * static_cast<double>(err.size())));
+  return err[k];
+}
+
+// ---------------------------------------------------------------- sessions (D152)
+
+namespace {
+
+// A track's entry while tracks grow: an observation of the map and its flags.
+struct Entry {
+  std::int32_t image, keypoint;
+  char in, dead, filtered;
+};
+
+// Pairs [from, end) of `c` verified under `intrinsics`, in one poselib-gpu call: per pair
+// its result, its inlier mask and whether its inliers go to the tracks (the rules of
+// `run`'s step 1). False when poselib-gpu fails.
+bool verify_pairs(jpo_ctx* ctx, const Capture& c, const MapperOptions& o, const std::vector<double>& intrinsics,
+                  std::size_t from, std::vector<jpo_pose_result>& results,
+                  std::vector<std::vector<std::uint8_t>>& inliers, std::vector<char>& kept) {
+  results.resize(c.pairs.size());
+  inliers.resize(c.pairs.size());
+  kept.resize(c.pairs.size(), 0);
+  if (from >= c.pairs.size()) return true;
+  const std::vector<jpo_camera> cameras = to_jpo(c.model, intrinsics);
+  std::vector<std::uint32_t> offsets = {0}, cam_a, cam_b;
+  std::vector<double> xy_a, xy_b;
+  for (std::size_t i = from; i < c.pairs.size(); ++i) {
+    const Pair& p = c.pairs[i];
+    cam_a.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(p.a))));
+    cam_b.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(p.b))));
+    for (std::size_t k = 0; k < p.ka.size(); ++k) {
+      xy_a.insert(xy_a.end(), &c.keypoints[p.a][2 * p.ka[k]], &c.keypoints[p.a][2 * p.ka[k]] + 2);
+      xy_b.insert(xy_b.end(), &c.keypoints[p.b][2 * p.kb[k]], &c.keypoints[p.b][2 * p.kb[k]] + 2);
+    }
+    offsets.push_back(static_cast<std::uint32_t>(xy_a.size() / 2));
+  }
+  jpo_pairs pairs;
+  std::memset(&pairs, 0, sizeof(pairs));
+  pairs.n_pairs = static_cast<std::uint32_t>(cam_a.size());
+  pairs.n_cameras = static_cast<std::uint32_t>(cameras.size());
+  pairs.offsets = offsets.data();
+  pairs.xy_a = xy_a.data();
+  pairs.xy_b = xy_b.data();
+  pairs.cameras = cameras.data();
+  pairs.camera_a = cam_a.data();
+  pairs.camera_b = cam_b.data();
+  std::vector<jpo_pose_result> out(cam_a.size());
+  std::vector<std::uint8_t> mask(offsets.back(), 0);
+  jpo_ransac_options ransac;
+  jpo_ransac_options_init(&ransac);
+  ransac.max_error_px = o.pair_max_error_px;
+  if (jpo_relative_pose(ctx, &pairs, &ransac, out.data(), mask.data()) != 0) return false;
+  for (std::size_t q = 0; q < out.size(); ++q) {
+    const std::size_t i = from + q;
+    const Pair& p = c.pairs[i];
+    results[i] = out[q];
+    inliers[i].assign(mask.begin() + offsets[q], mask.begin() + offsets[q + 1]);
+    const jpo_pose_result& r = out[q];
+    bool keep = (r.status == JPO_OK || r.status == JPO_DEGENERATE) && r.n_inliers >= o.min_pair_inliers &&
+                r.n_inliers >= o.min_pair_inlier_ratio * static_cast<double>(p.ka.size());
+    if (keep && o.min_pair_coverage > 0.0) {
+      const float cov = pair_coverage(c, p, inliers[i].data());
+      keep = !std::isfinite(cov) || cov >= o.min_pair_coverage;
+    }
+    kept[i] = keep;
+  }
+  return true;
+}
+
+// The verified matches of the kept pairs [from, end): 4 values each (a, keypoint, b,
+// keypoint), as `run` gives them to the tracks.
+std::vector<std::int32_t> verified_of(const Capture& c, const std::vector<std::vector<std::uint8_t>>& inliers,
+                                      const std::vector<char>& kept, std::size_t from) {
+  std::vector<std::int32_t> v;
+  for (std::size_t i = from; i < c.pairs.size(); ++i) {
+    if (!kept[i]) continue;
+    const Pair& p = c.pairs[i];
+    for (std::size_t k = 0; k < p.ka.size(); ++k)
+      if (inliers[i][k]) v.insert(v.end(), {p.a, p.ka[k], p.b, p.kb[k]});
+  }
+  return v;
+}
+
+// The tracks' entries as lists, one per track.
+std::vector<std::vector<Entry>> track_lists(const Map& m) {
+  std::vector<std::vector<Entry>> lists(m.tracks.size());
+  for (std::size_t t = 0; t < m.tracks.size(); ++t)
+    for (std::int64_t k = m.tracks.begin[t]; k < m.tracks.begin[t + 1]; ++k)
+      lists[t].push_back({m.tracks.image[k], m.tracks.keypoint[k], m.obs_in[k], m.obs_dead[k], m.obs_filtered[k]});
+  return lists;
+}
+
+// The map's tracks and observations from `lists`; the per-track arrays keep their values
+// and grow for new tracks, which have no point yet.
+void set_tracks(Map& m, const std::vector<std::vector<Entry>>& lists) {
+  jba::Tracks t;
+  m.obs_track.clear();
+  m.obs_in.clear();
+  m.obs_dead.clear();
+  m.obs_filtered.clear();
+  m.image_obs.assign(m.n_images(), {});
+  m.track_images.assign(lists.size(), 0);
+  for (std::size_t tr = 0; tr < lists.size(); ++tr) {
+    int images = 0, last = -1;
+    for (const Entry& e : lists[tr]) {
+      const std::int64_t k = static_cast<std::int64_t>(t.image.size());
+      t.image.push_back(e.image);
+      t.keypoint.push_back(e.keypoint);
+      m.obs_track.push_back(static_cast<std::int32_t>(tr));
+      m.obs_in.push_back(e.in);
+      m.obs_dead.push_back(e.dead);
+      m.obs_filtered.push_back(e.filtered);
+      m.image_obs[static_cast<std::size_t>(e.image)].push_back(k);
+      if (!e.dead && e.image != last) {
+        last = e.image;
+        ++images;
+      }
+    }
+    t.begin.push_back(static_cast<std::int64_t>(t.image.size()));
+    m.track_images[tr] = images;
+  }
+  m.tracks = std::move(t);
+  m.has_point.resize(lists.size(), 0);
+  m.X.resize(3 * lists.size(), 0.0);
+  m.split_tried.resize(lists.size(), 0);
+}
+
+// The verified matches of a new image (4 values each, the earlier image first) into the
+// tracks: a match joins the new keypoint to its partner's track, or makes a track of
+// the two; two tracks a match would join are merged when at most one has a point (the
+// one kept), and left apart when both have one, as their points may differ. Tracks keep
+// their indices, a merged-away track is left empty.
+void extend_tracks(Map& m, const std::vector<std::int32_t>& verified) {
+  std::vector<std::vector<Entry>> lists = track_lists(m);
+  std::vector<std::int32_t> kp_track(static_cast<std::size_t>(m.keypoints.begin.back()), -1);
+  auto global = [&](std::int32_t image, std::int32_t kp) {
+    return static_cast<std::size_t>(m.keypoints.begin[static_cast<std::size_t>(image)] + kp);
+  };
+  for (std::size_t t = 0; t < lists.size(); ++t)
+    for (const Entry& e : lists[t])
+      if (!e.dead) kp_track[global(e.image, e.keypoint)] = static_cast<std::int32_t>(t);
+  auto has_point = [&](std::int32_t t) { return static_cast<std::size_t>(t) < m.has_point.size() && m.has_point[t]; };
+  std::vector<char> touched(lists.size(), 0);
+  for (std::size_t k = 0; k + 3 < verified.size(); k += 4) {
+    const std::int32_t a = verified[k], ka = verified[k + 1], b = verified[k + 2], kb = verified[k + 3];
+    const std::size_t ga = global(a, ka), gb = global(b, kb);
+    const std::int32_t ta = kp_track[ga], tb = kp_track[gb];
+    if (ta < 0 && tb < 0) {
+      const std::int32_t t = static_cast<std::int32_t>(lists.size());
+      lists.push_back({{a, ka, 0, 0, 0}, {b, kb, 0, 0, 0}});
+      touched.push_back(1);
+      kp_track[ga] = kp_track[gb] = t;
+    } else if (tb < 0 || ta < 0) {
+      const std::int32_t t = ta >= 0 ? ta : tb;
+      if (ta >= 0) lists[t].push_back({b, kb, 0, 0, 0});
+      else lists[t].push_back({a, ka, 0, 0, 0});
+      kp_track[ta >= 0 ? gb : ga] = t;
+      touched[t] = 1;
+    } else if (ta != tb) {
+      if (has_point(ta) && has_point(tb)) continue;
+      const std::int32_t keep = has_point(tb) ? tb : ta, gone = keep == ta ? tb : ta;
+      for (const Entry& e : lists[gone]) {
+        lists[keep].push_back(e);
+        if (!e.dead) kp_track[global(e.image, e.keypoint)] = keep;
+      }
+      lists[gone].clear();
+      touched[keep] = 1;
+    }
+  }
+  // Entries in image order (split_leftovers and the image counts rely on it).
+  for (std::size_t t = 0; t < lists.size(); ++t)
+    if (touched[t])
+      std::stable_sort(lists[t].begin(), lists[t].end(), [](const Entry& x, const Entry& y) {
+        return x.image != y.image ? x.image < y.image : x.keypoint < y.keypoint;
+      });
+  set_tracks(m, lists);
+}
+
+// Distinct points an image sees (as `run` counts them for PnP).
+int points_seen_in(const Map& m, std::size_t image) {
+  std::vector<std::int32_t> seen;
+  for (std::int64_t k : m.image_obs[image])
+    if (!m.obs_dead[k] && m.has_point[m.obs_track[k]]) seen.push_back(m.obs_track[k]);
+  std::sort(seen.begin(), seen.end());
+  return static_cast<int>(std::unique(seen.begin(), seen.end()) - seen.begin());
+}
+
+}  // namespace
+
+struct Session::State {
+  Mapper* mapper = nullptr;
+  SessionOptions so;
+  Capture c;
+  Map m;
+  bool started = false;
+  // Pieces put aside (SessionOptions::restart_after), as they were left.
+  struct Piece {
+    std::vector<char> registered;
+    std::vector<double> poses, points, intrinsics;
+    std::vector<std::int32_t> point_track;
+    double mean_error_px = 0.0;
+    bool aligned = false;
+  };
+  std::vector<Piece> pieces;
+  std::vector<char> in_piece;  // per image: registered in some piece, the current one included
+  std::vector<char> in_earlier;  // per image: registered in a piece put aside
+  double start_floor = 0.0;    // the angle floor the current piece started from
+  int last_placed = -1;        // the newest image placed in the current piece
+  double focal_factor = 1.0;
+  std::vector<jpo_pose_result> pair_results;
+  std::vector<std::vector<std::uint8_t>> pair_inliers;
+  std::vector<char> pair_kept;
+  std::vector<int> failed_with;  // per image: the points it saw when its PnP last failed
+  Adjusted last;
+  std::vector<double> snap_points;
+  std::vector<std::int32_t> snap_track;
+
+  const MapperOptions& o() const { return mapper->options_; }
+
+  // A window adjustment (or everything, early on), after aligning to the priors as
+  // `run` does (D150).
+  void adjust_window(const std::vector<std::int32_t>& added, SessionStep& st) {
+    const MapperOptions& opt = o();
+    if (uses_priors(c, opt)) {
+      int with = 0;
+      for (std::size_t i = 0; i < m.n_images(); ++i) with += m.registered[i] && c.has_prior(i);
+      if (!m.aligned || with >= m.aligned_with + std::max(3, m.aligned_with / 2)) align_to_priors(m, opt);
+    }
+    std::vector<char> free(m.n_images(), 0);
+    int n = 0;
+    for (std::int32_t i : added) {
+      free[static_cast<std::size_t>(i)] = 1;
+      ++n;
+    }
+    for (std::size_t i = m.n_images(); i-- > 0 && n < so.window;)
+      if (m.registered[i] && !free[i]) {
+        free[i] = 1;
+        ++n;
+      }
+    const int iterations = so.window_iterations > 0 ? so.window_iterations : opt.local_iterations;
+    last = adjust(m, opt, iterations, {}, so.window > 0 ? &free : nullptr);
+    st.window.clear();
+    st.held.clear();
+    for (std::size_t k = 0; k < last.image_of.size(); ++k) {
+      const bool held = !last.problem.image_fixed.empty() && last.problem.image_fixed[k];
+      (held ? st.held : st.window).push_back(last.image_of[k]);
+    }
+    st.mean_error_px = last.mean_error_px;
+  }
+
+  // Images not yet in the map that see enough of it, by PnP, as `run`'s step 4: each
+  // registration adds its points and adjusts a window. False when poselib-gpu fails.
+  bool place(SessionStep& st) {
+    const MapperOptions& opt = o();
+    const std::size_t n_img = m.n_images();
+    for (;;) {
+      update_points(m, opt, true);
+      std::vector<std::pair<int, int>> seen;  // (points seen, image)
+      for (std::size_t i = 0; i < n_img; ++i) {
+        if (m.registered[i]) continue;
+        const int n = points_seen_in(m, i);
+        if (n >= static_cast<int>(opt.min_pnp_inliers) && n > failed_with[i]) seen.emplace_back(n, static_cast<int>(i));
+      }
+      if (seen.empty()) return true;
+      std::sort(seen.begin(), seen.end(),
+                [](const auto& x, const auto& y) { return x.first != y.first ? x.first > y.first : x.second < y.second; });
+      std::size_t n_cand = 1;
+      while (n_cand < seen.size() && n_cand < opt.pnp_batch && 2 * seen[n_cand].first >= seen[0].first) ++n_cand;
+      std::vector<std::uint32_t> off = {0}, cam;
+      std::vector<double> xy, xyz;
+      for (std::size_t k = 0; k < n_cand; ++k) {
+        const int image = seen[k].second;
+        cam.push_back(static_cast<std::uint32_t>(c.block(static_cast<std::size_t>(image))));
+        for (std::int64_t ob : m.image_obs[image]) {
+          const std::int32_t t = m.obs_track[ob];
+          if (m.obs_dead[ob] || !m.has_point[t]) continue;
+          const double* kp = m.keypoints.at(image, m.tracks.keypoint[ob]);
+          xy.insert(xy.end(), kp, kp + 2);
+          xyz.insert(xyz.end(), &m.X[3 * t], &m.X[3 * t] + 3);
+        }
+        off.push_back(static_cast<std::uint32_t>(xy.size() / 2));
+      }
+      const std::vector<jpo_camera> cameras = to_jpo(m.cams.model, m.cams.intrinsics);
+      jpo_resections res;
+      std::memset(&res, 0, sizeof(res));
+      res.n_images = static_cast<std::uint32_t>(n_cand);
+      res.n_cameras = static_cast<std::uint32_t>(cameras.size());
+      res.offsets = off.data();
+      res.xy = xy.data();
+      res.xyz = xyz.data();
+      res.cameras = cameras.data();
+      res.camera = cam.data();
+      std::vector<jpo_pose_result> out(n_cand);
+      jpo_ransac_options ransac;
+      jpo_ransac_options_init(&ransac);
+      ransac.max_error_px = opt.pnp_max_error_px;
+      if (jpo_absolute_pose(mapper->ctx_, &res, &ransac, out.data(), nullptr) != 0) {
+        st.error = std::string("absolute pose: ") + jpo_last_error();
+        return false;
+      }
+      std::vector<std::int32_t> added;
+      for (std::size_t k = 0; k < n_cand; ++k) {
+        const int image = seen[k].second;
+        if (image == st.image) st.pnp_inliers = out[k].status == JPO_OK ? static_cast<int>(out[k].n_inliers) : 0;
+        const bool ok = out[k].status == JPO_OK && out[k].n_inliers >= opt.min_pnp_inliers &&
+                        out[k].n_inliers >= opt.min_pnp_inlier_ratio * static_cast<double>(seen[k].first);
+        if (!ok) {
+          failed_with[static_cast<std::size_t>(image)] = seen[k].first;
+          continue;
+        }
+        std::copy(out[k].pose, out[k].pose + 7, &m.cams.poses[7 * static_cast<std::size_t>(image)]);
+        m.registered[static_cast<std::size_t>(image)] = 1;
+        added.push_back(image);
+      }
+      if (added.empty()) continue;
+      update_points(m, opt, false);
+      adjust_window(added, st);
+      st.placed.insert(st.placed.end(), added.begin(), added.end());
+    }
+  }
+
+  // Before the map exists: the focal length searched for (when a guess), every pair
+  // verified, and the map started from the best pair fit to start from, if one is.
+  // How try_start starts: the session's first map; a new piece, the current one put
+  // aside; or the current piece again, from a better pair of its images.
+  enum class Start { First, NewPiece, Rebuild };
+
+  bool try_start(SessionStep& st, Start how) {
+    const MapperOptions& opt = o();
+    const bool restart = how != Start::First;  // the map's focal length, no search
+    std::vector<double> intr = restart ? m.cams.intrinsics : c.intrinsics;
+    double factor = restart ? focal_factor : 1.0;
+    if (opt.search_focal && !restart) {
+      factor = search_focal(mapper->ctx_, c, opt);
+      if (factor < 0.0) {
+        st.error = std::string("focal search: ") + jpo_last_error();
+        return false;
+      }
+      const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+      for (std::size_t b = 0; b < intr.size() / np; ++b)
+        for (std::size_t j = 0; j < np; ++j)
+          if (!c.focal_unknown.empty() && c.focal_unknown[b] &&
+              jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal)
+            intr[np * b + j] *= factor;
+    }
+    pair_results.clear();
+    pair_inliers.clear();
+    pair_kept.clear();
+    if (!verify_pairs(mapper->ctx_, c, opt, intr, 0, pair_results, pair_inliers, pair_kept)) {
+      st.error = std::string("relative pose: ") + jpo_last_error();
+      return false;
+    }
+    // The floors this attempt may go down to: one more per start_patience images it
+    // has waited (since the session began, or since the last image placed).
+    // A rebuild takes only a floor above the one the piece started from, from images of
+    // no earlier piece.
+    const int waited = static_cast<int>(c.num_images()) - 1 - last_placed;
+    const int floors = 1 + (so.start_patience > 0 ? waited / so.start_patience : 3);
+    const std::vector<char>& taken = how == Start::Rebuild ? in_earlier : in_piece;
+    int first = -1, k = 0;
+    double floor_used = 0.0;
+    for (const double floor_deg : {16.0, 8.0, 4.0, 2.0}) {
+      if (how == Start::Rebuild ? floor_deg <= start_floor
+                                : k++ >= floors || (floor_deg < so.min_start_angle_deg && floor_deg != 16.0))
+        break;
+      floor_used = floor_deg;
+      for (std::size_t i = 0; i < c.pairs.size(); ++i) {
+        const jpo_pose_result& p = pair_results[i];
+        if (taken[static_cast<std::size_t>(c.pairs[i].a)] || taken[static_cast<std::size_t>(c.pairs[i].b)]) continue;
+        if (!pair_kept[i] || p.status != JPO_OK || p.n_inliers < opt.min_first_pair_inliers ||
+            p.median_tri_angle_deg < floor_deg)
+          continue;
+        if (first < 0 || p.n_inliers > pair_results[first].n_inliers) first = static_cast<int>(i);
+      }
+      if (first >= 0) break;
+    }
+    if (first < 0) return true;  // not yet
+
+    if (how == Start::NewPiece) {
+      // The current piece is put aside.
+      Piece piece;
+      piece.registered = m.registered;
+      piece.poses = m.cams.poses;
+      piece.intrinsics = m.cams.intrinsics;
+      update_snapshot();
+      piece.points = snap_points;
+      piece.point_track = snap_track;
+      piece.mean_error_px = last.mean_error_px;
+      piece.aligned = m.aligned;
+      for (std::size_t i = 0; i < m.n_images(); ++i)
+        if (m.registered[i]) in_earlier[i] = 1;
+      pieces.push_back(std::move(piece));
+    }
+    if (restart) {
+      // The map starts again from nothing.
+      std::fill(m.registered.begin(), m.registered.end(), 0);
+      std::fill(failed_with.begin(), failed_with.end(), -1);
+      m.aligned = false;
+      m.aligned_with = 0;
+      m.has_point.clear();
+      m.X.clear();
+      m.split_tried.clear();
+      last = {};
+    }
+    started = true;
+    st.started = true;
+    start_floor = floor_used;
+    focal_factor = factor;
+    m.cams.intrinsics = intr;
+    jba::TrackStats stats;
+    m.tracks = components(m.keypoints, verified_of(c, pair_inliers, pair_kept, 0), stats);
+    set_tracks(m, track_lists_fresh(m.tracks));
+    const int fa = c.pairs[first].a, fb = c.pairs[first].b;
+    const double identity[7] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    std::copy(identity, identity + 7, &m.cams.poses[7 * static_cast<std::size_t>(fa)]);
+    std::copy(pair_results[first].pose, pair_results[first].pose + 7, &m.cams.poses[7 * static_cast<std::size_t>(fb)]);
+    m.registered[fa] = m.registered[fb] = 1;
+    update_points(m, opt, false);
+    adjust_window({fa, fb}, st);
+    st.placed = {fa, fb};
+    return place(st);
+  }
+
+  // The bookkeeping after a step: which images are in a piece, the newest placed.
+  void placed(const SessionStep& st) {
+    for (std::int32_t i : st.placed) {
+      in_piece[static_cast<std::size_t>(i)] = 1;
+      last_placed = std::max(last_placed, static_cast<int>(i));
+    }
+    if (st.started) last_placed = *std::max_element(st.placed.begin(), st.placed.end());
+  }
+
+  // Lists for tracks just built: every entry live, none in a point.
+  static std::vector<std::vector<Entry>> track_lists_fresh(const jba::Tracks& t) {
+    std::vector<std::vector<Entry>> lists(t.size());
+    for (std::size_t tr = 0; tr < t.size(); ++tr)
+      for (std::int64_t k = t.begin[tr]; k < t.begin[tr + 1]; ++k) lists[tr].push_back({t.image[k], t.keypoint[k], 0, 0, 0});
+    return lists;
+  }
+
+  void update_snapshot() {
+    snap_points.clear();
+    snap_track.clear();
+    for (std::size_t t = 0; t < m.has_point.size(); ++t)
+      if (m.has_point[t]) {
+        snap_points.insert(snap_points.end(), &m.X[3 * t], &m.X[3 * t] + 3);
+        snap_track.push_back(static_cast<std::int32_t>(t));
+      }
+  }
+};
+
+Session::Session(Mapper& mapper, jba::CameraModel model, const std::vector<double>& intrinsics, bool focal_unknown,
+                 std::int32_t width, std::int32_t height, const SessionOptions& options)
+    : s_(std::make_unique<State>()) {
+  if (static_cast<std::size_t>(jba::num_params(model)) != intrinsics.size())
+    throw std::invalid_argument("a session takes one intrinsics block of its camera model");
+  s_->mapper = &mapper;
+  s_->so = options;
+  Capture& c = s_->c;
+  c.model = model;
+  c.intrinsics = intrinsics;
+  c.focal_unknown = {static_cast<std::uint8_t>(focal_unknown ? 1 : 0)};
+  if (width > 0 && height > 0) c.image_size = {width, height};
+  Map& m = s_->m;
+  m.capture = &s_->c;
+  m.keypoints.begin.push_back(0);
+  m.tracks.begin.push_back(0);
+  m.cams.model = model;
+  m.cams.intrinsics = intrinsics;
+}
+
+Session::~Session() = default;
+Session::Session(Session&&) noexcept = default;
+Session& Session::operator=(Session&&) noexcept = default;
+
+SessionStep Session::add(const SessionImage& image) {
+  const auto t0 = Clock::now();
+  State& s = *s_;
+  Capture& c = s.c;
+  Map& m = s.m;
+  SessionStep st;
+  const std::size_t i = c.num_images();
+  st.image = static_cast<std::int32_t>(i);
+  const std::size_t n_kp = image.keypoints.size() / 2;
+
+  // The image joins the capture and the map, unregistered; a pair that names what does
+  // not exist is left out and said so.
+  c.keypoints.push_back(image.keypoints);
+  const bool has_prior = std::isfinite(image.prior_position[0]) && std::isfinite(image.prior_position[1]) &&
+                         std::isfinite(image.prior_position[2]);
+  if (has_prior || !c.prior_position.empty()) {
+    c.prior_position.resize(3 * i, std::nan(""));
+    c.prior_sigma.resize(2 * i, std::nan(""));
+    c.prior_position.insert(c.prior_position.end(), image.prior_position, image.prior_position + 3);
+    c.prior_sigma.insert(c.prior_sigma.end(), image.prior_sigma, image.prior_sigma + 2);
+  }
+  const std::size_t first_pair = c.pairs.size();
+  for (Pair p : image.pairs) {
+    p.b = static_cast<std::int32_t>(i);
+    bool ok = p.a >= 0 && static_cast<std::size_t>(p.a) < i && p.ka.size() == p.kb.size();
+    for (std::size_t k = 0; ok && k < p.ka.size(); ++k)
+      ok = p.ka[k] >= 0 && p.kb[k] >= 0 && static_cast<std::size_t>(p.ka[k]) < c.keypoints[p.a].size() / 2 &&
+           static_cast<std::size_t>(p.kb[k]) < n_kp;
+    if (!ok) {
+      st.error = "a pair names an image or a keypoint that does not exist";
+      continue;
+    }
+    c.pairs.push_back(std::move(p));
+  }
+  m.keypoints.xy.insert(m.keypoints.xy.end(), image.keypoints.begin(), image.keypoints.end());
+  m.keypoints.begin.push_back(static_cast<std::int64_t>(m.keypoints.xy.size() / 2));
+  m.registered.push_back(0);
+  for (const double v : {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}) m.cams.poses.push_back(v);
+  m.image_obs.emplace_back();
+  s.failed_with.push_back(-1);
+  s.in_piece.push_back(0);
+  s.in_earlier.push_back(0);
+
+  bool ok = true;
+  if (!s.started) {
+    ok = s.try_start(st, State::Start::First);
+  } else {
+    ok = verify_pairs(s.mapper->ctx_, c, s.o(), m.cams.intrinsics, first_pair, s.pair_results, s.pair_inliers,
+                      s.pair_kept);
+    if (!ok) st.error = std::string("relative pose: ") + jpo_last_error();
+    if (ok) {
+      extend_tracks(m, verified_of(c, s.pair_inliers, s.pair_kept, first_pair));
+      ok = s.place(st);
+    }
+    // Lost: images in a row not placed. A new piece, from images in none, if a pair of
+    // them is fit to start from.
+    if (ok && s.so.restart_after > 0 && !m.registered[i] &&
+        static_cast<int>(i) - s.last_placed > s.so.restart_after) {
+      SessionStep restart;
+      restart.image = st.image;
+      ok = s.try_start(restart, State::Start::NewPiece);
+      if (restart.started) {
+        st.started = true;
+        st.placed = restart.placed;
+        st.window = restart.window;
+        st.held = restart.held;
+        st.mean_error_px = restart.mean_error_px;
+      }
+      if (!restart.ok()) st.error = restart.error;
+    }
+  }
+  // A young piece that started from a narrow pair, again from a wider one of its images
+  // once there is one: a map from a narrow pair bends.
+  if (ok && s.started && !st.started && s.start_floor < 16.0 &&
+      std::count(m.registered.begin(), m.registered.end(), 1) <= s.so.rebuild_within) {
+    SessionStep again;
+    again.image = st.image;
+    ok = s.try_start(again, State::Start::Rebuild);
+    if (again.started) {
+      st.started = true;
+      st.rebuilt = true;
+      st.placed = again.placed;
+      st.window = again.window;
+      st.held = again.held;
+      st.mean_error_px = again.mean_error_px;
+      st.pnp_inliers = again.pnp_inliers >= 0 ? again.pnp_inliers : st.pnp_inliers;
+    }
+    if (!again.ok()) st.error = again.error;
+  }
+  if (ok) s.placed(st);
+  if (s.started) st.piece = static_cast<int>(s.pieces.size());
+  for (std::size_t k = first_pair; k < c.pairs.size() && k < s.pair_kept.size(); ++k) st.pairs_kept += s.pair_kept[k];
+  if (s.started) st.points_seen = points_seen_in(m, i);
+  if (st.mean_error_px == 0.0) st.mean_error_px = s.last.mean_error_px;
+  (void)ok;
+  s.update_snapshot();
+  st.seconds = seconds_since(t0);
+  return st;
+}
+
+std::size_t Session::num_images() const { return s_->c.num_images(); }
+std::size_t Session::num_pieces() const { return s_->started ? s_->pieces.size() + 1 : 0; }
+
+Snapshot Session::piece(std::size_t k) const {
+  if (k + 1 >= num_pieces()) return snapshot();
+  const State::Piece& p = s_->pieces[k];
+  Snapshot snap;
+  snap.stage = "piece";
+  snap.poses = &p.poses;
+  snap.registered = &p.registered;
+  snap.points = p.points;
+  snap.point_track = p.point_track;
+  snap.mean_error_px = p.mean_error_px;
+  snap.aligned = p.aligned;
+  return snap;
+}
+bool Session::started() const { return s_->started; }
+const std::vector<double>& Session::intrinsics() const { return s_->m.cams.intrinsics; }
+const Capture& Session::capture() const { return s_->c; }
+
+Snapshot Session::snapshot() const {
+  Snapshot snap;
+  snap.stage = "session";
+  snap.poses = &s_->m.cams.poses;
+  snap.registered = &s_->m.registered;
+  snap.points = s_->snap_points;
+  snap.point_track = s_->snap_track;
+  snap.mean_error_px = s_->last.mean_error_px;
+  snap.aligned = s_->m.aligned;
+  return snap;
+}
+
+std::vector<std::int32_t> Session::keypoint_points(std::size_t i) const {
+  const Map& m = s_->m;
+  if (i >= s_->c.num_images()) return {};
+  std::vector<std::int32_t> out(s_->c.keypoints[i].size() / 2, -1);
+  if (!s_->started || !m.registered[i]) return out;
+  for (std::int64_t k : m.image_obs[i]) {
+    const std::int32_t t = m.obs_track[k];
+    if (!m.obs_dead[k] && m.obs_in[k] && m.has_point[t]) out[static_cast<std::size_t>(m.tracks.keypoint[k])] = t;
+  }
+  return out;
+}
+
+Reconstruction Session::finish(const Capture& capture, const ProgressCallback& on_progress) {
+  const State& s = *s_;
+  if (!s.started) return s.mapper->run(capture, {}, on_progress);
+  Reconstruction bad;
+  if (capture.num_images() != s.c.num_images() || capture.intrinsics.size() != s.c.intrinsics.size()) {
+    bad.error = "the capture is not the session's";
+    return bad;
+  }
+  StartFrom start;
+  start.registered = s.m.registered;
+  start.poses = s.m.cams.poses;
+  start.intrinsics = s.m.cams.intrinsics;
+  start.aligned = s.m.aligned;
+  start.focal_factor = s.focal_factor;
+  // The piece with the most images (the current one on a tie).
+  auto placed = [](const std::vector<char>& r) { return std::count(r.begin(), r.end(), 1); };
+  for (const State::Piece& p : s.pieces)
+    if (placed(p.registered) > placed(start.registered)) {
+      start.registered = p.registered;
+      start.poses = p.poses;
+      start.intrinsics = p.intrinsics;
+      start.aligned = p.aligned;
+    }
+  // A piece left before later images were added has fewer entries.
+  start.registered.resize(s.c.num_images(), 0);
+  start.poses.resize(7 * s.c.num_images(), 0.0);
+  return s.mapper->run_from(capture, start, {}, on_progress);
 }
 
 }  // namespace demo
