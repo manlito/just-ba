@@ -32,9 +32,11 @@ const FLEXGLUE = {
 };
 // Like Recon's numbers (src-tauri/src/capture.rs, online.rs).
 // LightGlue's live and map depths: on a Pixel 9a at 640 px, 2 layers take 160 ms (342
-// matches), 5 take 330 ms, adaptive 9 about 510 ms.
+// matches), 3 take 215 ms (481), 5 take 330 ms, adaptive 9 about 510 ms.
 const LIVE = { flexglue: { layers: 0 }, lightglue: { layers: 2, depthConfidence: -1, widthConfidence: -1 } };
-const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 5, depthConfidence: -1, widthConfidence: -1 } };
+const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 3, depthConfidence: -1, widthConfidence: -1 } };
+// Finish's pairs: FlexGlue as the map's; LightGlue at full, adaptive depth (it has the time).
+const FINISH = { flexglue: { layers: 3 }, lightglue: { layers: 9, depthConfidence: 0.95, widthConfidence: 0.99 } };
 const SEQUENTIAL = 3;            // keyframes each new one is matched to
 const MATCHES_PER_PAIR = 1024;   // the strongest, per online pair
 const WINDOW = 8;                // keyframes adjusted together
@@ -68,7 +70,7 @@ const S = {
   jobs: [],            // online work: one keyframe at a time
   links: new Set(),    // "a-b" pairs already matched for the map
   map: null, lastStep: null, result: null,
-  stats: { frameMs: 0, mapMs: 0, frames: 0 },
+  stats: { frameMs: 0, mapMs: 0, frames: 0, kpMs: 0, describeMs: 0, matchMs: 0, loopMs: 0 },
 };
 
 // ---- small things
@@ -210,12 +212,15 @@ async function liveStep() {
   }
   const shoot = S.shoot;
   S.shoot = false;
+  const tKp = performance.now();
   const kp = await S.extractor.extract(frame.image);
+  const tDescribe = performance.now();
   const confidentNow = G.confident(kp.score);
   const sharp = G.sharpness(frame.image.data, w, h);
   const blurry = S.blur.blurry(sharp);
   const ratio = S.blur.ratio(sharp);
   const f = await describe(frame.image, kp);
+  const tMatch = performance.now();
   let now = null, overlap2 = null, relocalized = false;
   if (S.reference) {
     now = await measure(S.reference, f, kp.xy, w, h);
@@ -237,6 +242,7 @@ async function liveStep() {
       overlap2 = m2.overlap;
     }
   }
+  const tRules = performance.now();
   const overlapNow = now ? now.overlap : null;
   const speed = S.speed.update(overlapNow);
   const verdict = G.decide(S.settings, S.floor, {
@@ -263,7 +269,11 @@ async function liveStep() {
   const gate = pick ? 'kept' : verdict.gate === 'kept' ? 'waiting' : verdict.gate;
   showGate(gate, pick?.why, overlapNow, G.slowDown(speed, blurry && S.settings.rejectBlur), relocalized);
   const ms = performance.now() - t0;
-  S.stats.frameMs = S.stats.frames ? 0.8 * S.stats.frameMs + 0.2 * ms : ms;
+  const avg = (old, v) => (S.stats.frames ? 0.8 * old + 0.2 * v : v);
+  S.stats.frameMs = avg(S.stats.frameMs, ms);
+  S.stats.kpMs = avg(S.stats.kpMs, tDescribe - tKp);
+  S.stats.describeMs = avg(S.stats.describeMs, tMatch - tDescribe);
+  S.stats.matchMs = avg(S.stats.matchMs, tRules - tMatch);
   S.stats.frames++;
   if (DEBUG) console.log(`frame ${ms.toFixed(0)} ms, ${kp.n} kp (${confidentNow} sure), overlap ${fmt(overlapNow)}, ${gate}`);
 }
@@ -415,7 +425,8 @@ function takeMap(step, map, ms) {
 
 // The map's share of each camera frame: more when it falls behind. The desktop app matches
 // the map's pairs on a thread of its own; here they share the GPU module with the camera.
-const MAP_BUDGET_MS = 120, MAP_BEHIND_MS = 400;
+// On a phone a map pair alone takes ~200 ms: one a frame at most, while the camera moves.
+const MAP_BUDGET_MS = phone ? 0 : 120, MAP_BEHIND_MS = phone ? 0 : 400;
 
 async function loop() {
   const v = $('video');
@@ -426,11 +437,14 @@ async function loop() {
       // A frame the camera hasn't moved on from (a paused or ended video) is measured once.
       const fresh = v.currentTime !== lastTime || S.shoot;
       lastTime = v.currentTime;
+      const tLoop = performance.now();
       if (fresh) await liveStep();
       const t0 = performance.now();
-      const budget = !fresh ? MAP_BEHIND_MS : S.jobs.length > 2 ? MAP_BEHIND_MS : MAP_BUDGET_MS;
-      while (performance.now() - t0 < budget && (await onlineStep()));
+      const budget = !fresh ? Math.max(MAP_BEHIND_MS, 400) : S.jobs.length > 2 ? MAP_BEHIND_MS : MAP_BUDGET_MS;
+      // At least one piece of the map's work a frame, then more while the budget lasts.
+      if (await onlineStep()) while (performance.now() - t0 < budget && (await onlineStep()));
       if (!fresh && !S.jobs.length) await new Promise((r) => setTimeout(r, 100));
+      if (fresh) S.stats.loopMs = S.stats.frames > 1 ? 0.8 * S.stats.loopMs + 0.2 * (performance.now() - tLoop) : performance.now() - tLoop;
     } catch (e) {
       console.error(e);
       setStatus('Something went wrong: ' + e.message, true);
@@ -513,6 +527,8 @@ function renderNumbers() {
     ['Reprojection error', m ? `${fmt(m.mean_error_px)} px` : '–'],
     ['Focal length', m?.intrinsics?.length ? `${fmt(m.intrinsics[0], 0)} px` : '–'],
     ['Camera frame', `${fmt(S.stats.frameMs, 0)} ms`],
+    ['Keypoints · describe · match', `${fmt(S.stats.kpMs, 0)} · ${fmt(S.stats.describeMs, 0)} · ${fmt(S.stats.matchMs, 0)} ms`],
+    ['Loop, with the map', `${fmt(S.stats.loopMs, 0)} ms`],
     ['Map, last keyframe', `${fmt(S.stats.mapMs, 0)} ms`],
   ];
   if (r) {
@@ -581,7 +597,7 @@ async function finish() {
       const A = S.keyframes[a], B = S.keyframes[b];
       for (const K of [A, B])
         if (!K.feat) K.feat = await S.matcher.describeKeypoints({ width: K.w, height: K.h }, K.xy, K.desc);
-      const m = await S.matcher.match(A.feat, A.xy, B.feat, B.xy, ONLINE[S.matcherKind]);
+      const m = await S.matcher.match(A.feat, A.xy, B.feat, B.xy, FINISH[S.matcherKind]);
       if (m.n >= MIN_FINISH_MATCHES) pairs.push({ a, b, matches: m.matches });
     }
     setProgress(null);
@@ -856,7 +872,7 @@ async function reset() {
   Object.assign(S, {
     keyframes: [], reference: null, before: null, twoBack: false, held: [], cursor: 0, jobs: [], links: new Set(),
     map: null, lastStep: null, result: null, done: false, session: null,
-    picker: new G.Picker(), speed: new G.Speed(), blur: new G.Blur(), stats: { frameMs: 0, mapMs: 0, frames: 0 },
+    picker: new G.Picker(), speed: new G.Speed(), blur: new G.Blur(), stats: { frameMs: 0, mapMs: 0, frames: 0, kpMs: 0, describeMs: 0, matchMs: 0, loopMs: 0 },
   });
   await call('free');
   $('strip').innerHTML = '';
@@ -932,6 +948,9 @@ async function boot() {
     return;
   }
   S.supported = true;
+  // A phone measures each frame against the last keyframe only: the redundancy check is a
+  // second live match a frame (330 ms for both on a Pixel 9a, against ~165 for one).
+  if (phone) S.settings.redundant = false;
   S.precision = adapter.features.has('shader-f16') ? 'fp16' : 'fp32';
   const i = adapter.info ?? {};
   $('gpu-info').textContent = `GPU: ${[i.vendor, i.architecture, i.description].filter(Boolean).join(' / ') || 'WebGPU adapter'}; ` +
@@ -946,4 +965,5 @@ async function boot() {
   setStatus(matcherKind() === 'flexglue' && !S.weightsReady ? 'FlexGlue needs its weights (below), or choose LightGlue.' : 'Press Start and allow the camera.');
 }
 
+if (DEBUG) window.capture = S;
 boot().catch((e) => setStatus('Could not load the capture: ' + e.message, true));
