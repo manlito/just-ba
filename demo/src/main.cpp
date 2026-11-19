@@ -341,7 +341,7 @@ int run(const std::vector<std::string>& args) {
   if (args.empty()) return usage();
   const std::string path = args[0];
   std::string intrinsics = "reference", thresholds = "colmap";
-  bool check = false, two_view = false, no_priors = false;
+  bool check = false, two_view = false, no_priors = false, resume = false;
   std::string json_path;
   double tri_angle = -1.0, min_pair_coverage = -1.0;
   int min_pair_inliers = -1;
@@ -358,6 +358,7 @@ int run(const std::vector<std::string>& args) {
     else if (a == "--json" && has_value) json_path = args[++i];
     else if (a == "--two-view-tracks") two_view = true;
     else if (a == "--no-priors") no_priors = true;
+    else if (a == "--resume") resume = true;
     else if (a == "--tri-angle" && has_value) tri_angle = std::atof(args[++i].c_str());
     else if (a == "--min-pair-inliers" && has_value) min_pair_inliers = std::atoi(args[++i].c_str());
     else if (a == "--min-pair-coverage" && has_value) min_pair_coverage = std::atof(args[++i].c_str());
@@ -434,6 +435,53 @@ int run(const std::vector<std::string>& args) {
       std::printf(", the reference's %.1f (ours %+.2f %%)", demo::median_focal(file.capture.model, ref.intrinsics),
                   100.0 * (f1 / demo::median_focal(file.capture.model, ref.intrinsics) - 1.0));
     std::printf("\n");
+  }
+
+  // --resume: the mapper again from its own result (run_from, D153's resume), which
+  // on unchanged input should give the same model back.
+  if (resume && r.ok()) {
+    demo::StartFrom start;
+    start.registered = r.registered;
+    start.poses = r.poses;
+    start.intrinsics = r.problem.intrinsics;
+    start.aligned = r.aligned;
+    start.focal_factor = r.focal_factor;
+    const demo::Reconstruction again = mapper.run_from(file.capture, start);
+    std::size_t a = 0, b = 0;
+    for (char g : r.registered) a += g != 0;
+    for (char g : again.registered) b += g != 0;
+    std::printf("  resumed from it: %zu images (%zu before), %zu points (%zu), %zu observations (%zu), %.3f px (%.3f);"
+                " %d start images left out\n",
+                b, a, again.problem.num_points(), r.problem.num_points(), again.problem.num_observations(),
+                r.problem.num_observations(), again.mean_error_px, r.mean_error_px, again.start_left_out);
+    const demo::PoseAgreement pa = demo::compare_poses(again.registered, again.poses, r.registered, r.poses);
+    std::printf("  resumed vs the run: rotation median %.4f°, max %.4f°; centres median %.4f %%, max %.4f %%\n",
+                pa.rot_median_deg, pa.rot_max_deg, pa.centre_median_pct, pa.centre_max_pct);
+    // Resumed again from the resumed model: points that hold steady are not duplicates
+    // made anew each time.
+    demo::StartFrom twice = start;
+    twice.registered = again.registered;
+    twice.poses = again.poses;
+    twice.intrinsics = again.problem.intrinsics;
+    const demo::Reconstruction third = mapper.run_from(file.capture, twice);
+    std::printf("  resumed again: %zu points, %zu observations, %.3f px\n", third.problem.num_points(),
+                third.problem.num_observations(), third.mean_error_px);
+    // Points by where their track came from: built from the matches, or split off later.
+    auto by_kind = [&](const demo::Reconstruction& x, const char* label) {
+      std::size_t n[2] = {0, 0}, obs[2] = {0, 0}, two = 0;
+      std::vector<std::size_t> per(x.problem.num_points(), 0);
+      for (std::int32_t p : x.problem.obs_point) ++per[static_cast<std::size_t>(p)];
+      for (std::size_t p = 0; p < per.size(); ++p) {
+        const int k = static_cast<std::size_t>(x.point_track[p]) >= x.track_stats.components ? 1 : 0;
+        ++n[k];
+        obs[k] += per[p];
+        two += per[p] == 2;
+      }
+      std::printf("  %s: %zu points of built tracks (%.2f obs each), %zu split off (%.2f), %zu seen twice\n", label,
+                  n[0], n[0] ? double(obs[0]) / n[0] : 0.0, n[1], n[1] ? double(obs[1]) / n[1] : 0.0, two);
+    };
+    by_kind(r, "the run");
+    by_kind(again, "resumed");
   }
 
   const std::size_t n_img = file.capture.num_images();
