@@ -147,6 +147,18 @@ void scene_case(const std::string& name) {
     check(r.ok() && count(r.registered) == n, name + " run_from: every image");
     check(a.centre_median_pct < 0.05, name + " run_from: the batch result stays where it was");
     check(r.start_left_out == 0, name + " run_from: a good start keeps every image");
+    // Its points (D155): every point a track holds, split at once, so no fewer than the
+    // run grew; the error as low, the cameras as near the truth.
+    const demo::PoseAgreement vt = demo::compare_poses(r.registered, r.poses, all(n), scene.poses);
+    const demo::PoseAgreement bt = demo::compare_poses(batch.registered, batch.poses, all(n), scene.poses);
+    std::printf("%-16s run_from: %zu points (batch %zu), %.3f px (%.3f); vs truth %.3f %% (batch %.3f %%)\n",
+                name.c_str(), r.problem.num_points(), batch.problem.num_points(), r.mean_error_px,
+                batch.mean_error_px, vt.centre_median_pct, bt.centre_median_pct);
+    check(r.problem.num_points() >= batch.problem.num_points() * 98 / 100,
+          name + " run_from: keeps the run's points (" + std::to_string(r.problem.num_points()) + " of " +
+              std::to_string(batch.problem.num_points()) + ")");
+    check(r.mean_error_px <= 1.05 * batch.mean_error_px, name + " run_from: its error no worse than the run's");
+    check(vt.centre_median_pct <= 1.5 * bt.centre_median_pct + 0.01, name + " run_from: as near the truth");
 
     // One start image turned 30 degrees: it disagrees with its pairs, is left out of
     // the start and placed again, where the others put it.

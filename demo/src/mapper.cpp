@@ -278,7 +278,7 @@ double reprojection_error(const Map& m, int image, const double* xy, const doubl
 // those keypoints are triangulated on their own and, if they make a point, move to a
 // new track, as the library's ConflictPolicy::Repair splits tracks once poses exist.
 // Three images, so stray wrong matches do not become points (D140).
-void split_leftovers(Map& m, std::size_t t, const jba::TriangulationOptions& tri) {
+bool split_leftovers(Map& m, std::size_t t, const jba::TriangulationOptions& tri) {
   const std::int64_t b = m.tracks.begin[t], e = m.tracks.begin[t + 1];
   std::vector<jba::Ray> rays;
   std::vector<std::int64_t> idx;
@@ -295,11 +295,11 @@ void split_leftovers(Map& m, std::size_t t, const jba::TriangulationOptions& tri
     idx.push_back(k);
     group.push_back(image);
   }
-  if (images < 3 || static_cast<std::int64_t>(idx.size()) <= m.split_tried[t]) return;
+  if (images < 3 || static_cast<std::int64_t>(idx.size()) <= m.split_tried[t]) return false;
   const jba::TriangulationResult res = jba::triangulate_robust(rays, tri, &group);
   if (!res.ok || res.num_inliers < 3) {
     m.split_tried[t] = static_cast<std::int64_t>(idx.size());
-    return;
+    return false;
   }
   const std::int32_t nt = static_cast<std::int32_t>(m.tracks.size());
   for (std::size_t q = 0; q < idx.size(); ++q) {
@@ -328,13 +328,26 @@ void split_leftovers(Map& m, std::size_t t, const jba::TriangulationOptions& tri
   m.X.insert(m.X.end(), res.X, res.X + 3);
   m.track_images.push_back(res.num_inliers);
   m.split_tried.push_back(0);
+  return true;
 }
+
+// update_points' max_splits from a start (D155): the points a track holds, up to 8 a
+// pass. Each split triangulates the track's leftovers again, so a track joining
+// hundreds of keypoints (a repeated pattern) costs a split per few of them: uncapped,
+// house-04's finish took 8.9 s instead of 0.9 (2.3 s with 8, the batch's point count).
+constexpr int kResumeSplits = 8;
 
 // New points for tracks that have none, and new observations for points that exist,
 // from the images registered so far. `split`: also split tracks (split_leftovers);
 // only right after an adjustment, as a split is never undone and poses fresh from PnP
 // could agree on a duplicate of a point.
-void update_points(Map& m, const MapperOptions& o, bool split) {
+void update_points(Map& m, const MapperOptions& o, bool split, int max_splits = 1) {
+  // A track gives at most max_splits new points a call: one as images are added (each
+  // call sees a few more), more when every image is there at once (a start, D155).
+  auto split_track = [&](std::size_t t, const jba::TriangulationOptions& tri) {
+    for (int k = 0; k < max_splits && split_leftovers(m, t, tri); ++k) {
+    }
+  };
   jba::TriangulationOptions tri;
   // The library's default (2 degrees) is for noisy tracker poses. Without an angle of
   // its own, the reprojection threshold seen through the camera: poses here come from
@@ -388,7 +401,7 @@ void update_points(Map& m, const MapperOptions& o, bool split) {
         used.push_back(image);
         m.obs_in[k] = 1;
       }
-      if (split) split_leftovers(m, t, tri);
+      if (split) split_track(t, tri);
       continue;
     }
     rays.clear();
@@ -411,7 +424,7 @@ void update_points(Map& m, const MapperOptions& o, bool split) {
     m.has_point[t] = 1;
     for (int d = 0; d < 3; ++d) m.X[3 * t + d] = res.X[d];
     for (std::size_t k = 0; k < idx.size(); ++k) m.obs_in[idx[k]] = res.inlier[k];
-    if (split) split_leftovers(m, t, tri);
+    if (split) split_track(t, tri);
   }
 }
 
@@ -1173,9 +1186,9 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
       if (mm.registered[i] && count[i]) run.image_error_px[i] = sum[i] / static_cast<double>(count[i]);
     run.time.total = seconds_since(t_start);
   };
-  auto timed_points = [&](bool split) {
+  auto timed_points = [&](bool split, int max_splits = 1) {
     const auto t = Clock::now();
-    update_points(m, o, split);
+    update_points(m, o, split, max_splits);
     run.time.triangulate += seconds_since(t);
   };
   auto timed_adjust = [&](int iterations) {
@@ -1243,6 +1256,12 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
       if (m.aligned)
         for (std::size_t i = 0; i < n_img; ++i) m.aligned_with += m.registered[i] && c.has_prior(i);
       timed_points(false);
+      last = timed_adjust(o.final_iterations);
+      // Every image is there at once: a track holding several points (two keypoints of
+      // one image, joined by a wrong match or a repeated pattern) gives them now, where
+      // a run splits it one point a step as images come (D155). Then adjusted with
+      // them: step 5's completion then finds more of their keypoints.
+      timed_points(true, kResumeSplits);
       last = timed_adjust(o.final_iterations);
       if (!step(steps, "resume", added)) return false;
     } else {
@@ -1342,7 +1361,9 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
     // -- 5. Final adjustment: complete the tracks, adjust, filter, and adjust what is left.
     // An aligned model is refitted to all its priors first (D150).
     if (m.aligned && uses_priors(c, o)) align_to_priors(m, o);
-    timed_points(true);
+    // From a start, every point a track holds here too (D155): images placed in step 4
+    // (start images left out, the rest) bring leftovers of their own.
+    timed_points(true, first == kResume ? kResumeSplits : 1);
     last = timed_adjust(o.final_iterations);
     if (stopped) return false;
     last = timed_adjust(o.final_iterations);

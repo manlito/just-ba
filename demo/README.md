@@ -101,6 +101,10 @@ point. The map has started with them; they and the intrinsics are held while new
 images join, so a capture goes on into a finished reconstruction without moving it;
 `num_seeded()` says how many there are.
 
+`jba_demo run capture.jbc --resume` runs the mapper, then `run_from` its own result
+(and again from that), and prints what the resume kept: points, observations, error,
+the agreement with the run (D155).
+
 ```sh
 build/demo/demo/jba_demo session live.jbc --finish all.jbc --window 8
 ```
