@@ -209,6 +209,45 @@ int main() {
                 in_second, restarted_at, fin.models);
   }
 
+  // Coming back: frames 0-5, then 8-11 seeing nothing of them (a second piece), then
+  // 6 and 7, which link only to the first frames. The first piece takes them back and
+  // is the current one again.
+  {
+    const demo::Scene scene = demo::make_scene("orbit");
+    demo::MapperOptions mo;
+    demo::thresholds_for_noise(scene.noise_px, mo);
+    demo::Mapper mapper(mo);
+    const demo::Capture& c = scene.capture;
+    const std::vector<std::int32_t> order = {0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 6, 7};
+    auto group = [](std::int32_t i) { return i < 8 ? 0 : 1; };
+    std::vector<std::int32_t> at(c.num_images(), -1);  // capture image -> session index
+    demo::Session s(mapper, c.model, c.intrinsics, false, static_cast<std::int32_t>(scene.width),
+                    static_cast<std::int32_t>(scene.height));
+    bool rejoined = false;
+    for (std::size_t q = 0; q < order.size(); ++q) {
+      const std::int32_t i = order[q];
+      demo::SessionImage im;
+      im.keypoints = c.keypoints[static_cast<std::size_t>(i)];
+      for (demo::Pair p : c.pairs) {
+        if (p.b != i) std::swap(p.a, p.b), std::swap(p.ka, p.kb);
+        if (p.b != i || at[static_cast<std::size_t>(p.a)] < 0 || group(p.a) != group(i)) continue;
+        p.a = at[static_cast<std::size_t>(p.a)];
+        im.pairs.push_back(p);
+      }
+      at[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(q);
+      const demo::SessionStep st = s.add(im);
+      rejoined = rejoined || st.rejoined;
+      if (i == 6) check(st.rejoined && st.ok(), "back: frame 6 rejoins the first piece");
+    }
+    const demo::Snapshot now = s.snapshot();
+    std::size_t placed = 0;
+    for (std::size_t q = 0; q < order.size(); ++q) placed += (*now.registered)[q] != 0 && group(order[q]) == 0;
+    check(rejoined && s.num_pieces() == 2, "back: two pieces, one rejoined");
+    check(placed == 8, "back: the current piece is the first, with frames 6 and 7 (" + std::to_string(placed) + ")");
+    check(s.largest_piece() == s.num_pieces() - 1, "back: the largest piece is the current one");
+    std::printf("coming back: %zu pieces, the first holds %zu frames again\n", s.num_pieces(), placed);
+  }
+
   // Bad input: a pair naming a later image, or a keypoint that does not exist, is left
   // out and said so; the image still joins, so the caller's numbering holds.
   {

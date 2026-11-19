@@ -346,7 +346,9 @@ struct SessionOptions {
   int rebuild_within = 16;
   // When more than this many images in a row could not be placed, the map is put aside
   // as a piece and a new one started from a pair of images in no piece, if one is fit
-  // to start from (a capture that lost its way). 0: never.
+  // to start from (a capture that lost its way). 0: never. An image the current piece
+  // can't place but whose pairs link to an earlier piece goes to that piece, which
+  // becomes the current one again (the capture came back).
   int restart_after = 2;
 };
 
@@ -368,6 +370,7 @@ struct SessionStep {
   bool started = false;              // the map (or a new piece of it) started with this image
   int piece = -1;                    // the piece being grown, from 0; -1 before the map starts
   bool rebuilt = false;              // the piece was started again from a wider pair (started too)
+  bool rejoined = false;             // an earlier piece took the image and is the current one now
   std::vector<std::int32_t> placed;  // registered in this step: this image, and earlier ones it lets in
   std::vector<std::int32_t> window;  // adjusted in this step, poses free
   std::vector<std::int32_t> held;    // in that adjustment, poses held
@@ -407,6 +410,12 @@ class Session {
   // were left (piece(k), k below num_pieces() - 1, the current one is snapshot()).
   std::size_t num_pieces() const;
   Snapshot piece(std::size_t k) const;
+  // The piece with the most images placed (the current one on a tie), its
+  // intrinsics, and per keypoint of image `i` the track whose point it observes in
+  // piece `k` (-1 for none).
+  std::size_t largest_piece() const;
+  const std::vector<double>& piece_intrinsics(std::size_t k) const;
+  std::vector<std::int32_t> keypoint_points(std::size_t i, std::size_t k) const;
   // The map now, stage "session": every point with its track (track indices stay the
   // same as the map grows). The pointers are valid until the next add.
   Snapshot snapshot() const;

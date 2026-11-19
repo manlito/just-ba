@@ -84,10 +84,10 @@ image is placed by PnP, its new points triangulated and a window of the latest
 `window` images adjusted with the older ones that see their points held. An image
 that can't be placed is tried again as the map grows; after more than
 `restart_after` of them in a row the map is put aside as a piece and a new one
-started from images in none; a young piece that started from a narrow pair is started
+started from images in none (an image whose pairs link to an earlier piece goes back to it, which becomes the current one again); a young piece that started from a narrow pair is started
 again once a wider one comes (`rebuild_within`). `snapshot()` is the map now (every
-point with its track, stable as the map grows), `keypoint_points(i)` the landmarks of
-image `i`, and `finish(capture)` reconstructs the whole capture (any pairs, normally
+point with its track, stable as the map grows), `piece(k)` and `largest_piece()` the
+pieces, `keypoint_points(i)` the landmarks of image `i`, and `finish(capture)` reconstructs the whole capture (any pairs, normally
 more of them, matched more thoroughly) from the live map with
 `Mapper::run_from(capture, StartFrom)`. `run_from` keeps the start's poses, but leaves
 out start images whose relative rotations disagree with their verified pairs by a

@@ -20,7 +20,8 @@
 //     Reconstructs a capture file (from demo/tools/colmap_capture.py) and, when it holds a
 //     reference reconstruction, compares with it (document 05, level 3).
 //
-//   jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n] [--finish other.jbc]
+//   jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n] [--restart-after n]
+//                    [--finish other.jbc]
 //                    [--thresholds colmap|demo] [--min-pair-inliers n] [--min-pair-coverage share]
 //                    [common options]
 //     Feeds the capture's images in order to a mapper session (D152), each with its pairs
@@ -64,7 +65,7 @@ int usage() {
                "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [--no-priors]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share]\n"
                "                    [options]\n"
-               "       jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n]\n"
+               "       jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n] [--restart-after n]\n"
                "                    [--finish other.jbc]\n"
                "                    [--thresholds colmap|demo]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share] [options]\n"
@@ -512,6 +513,7 @@ int session(const std::vector<std::string>& args) {
     } else if (a == "--window" && has_value) so.window = std::atoi(args[++i].c_str());
     else if (a == "--start-angle" && has_value) so.min_start_angle_deg = std::atof(args[++i].c_str());
     else if (a == "--patience" && has_value) so.start_patience = std::atoi(args[++i].c_str());
+    else if (a == "--restart-after" && has_value) so.restart_after = std::atoi(args[++i].c_str());
     else if (a == "--finish" && has_value) finish_path = args[++i];
     else if (a == "--thresholds" && has_value) thresholds = args[++i];
     else if (a == "--min-pair-inliers" && has_value) min_pair_inliers = std::atoi(args[++i].c_str());

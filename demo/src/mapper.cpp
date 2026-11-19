@@ -1645,12 +1645,14 @@ struct Session::State {
   Map m;
   bool started = false;
   // Pieces put aside (SessionOptions::restart_after), as they were left.
+  // A piece put aside, whole, so it can grow again: its map as it was left (sized for
+  // the images of the session then), the pairs it had, and its bookkeeping.
   struct Piece {
-    std::vector<char> registered;
-    std::vector<double> poses, points, intrinsics;
-    std::vector<std::int32_t> point_track;
+    Map m;
+    std::size_t pairs_end = 0;
+    std::vector<int> failed_with;
     double mean_error_px = 0.0;
-    bool aligned = false;
+    double start_floor = 0.0;
   };
   std::vector<Piece> pieces;
   std::vector<char> in_piece;  // per image: registered in some piece, the current one included
@@ -1829,18 +1831,8 @@ struct Session::State {
 
     if (how == Start::NewPiece) {
       // The current piece is put aside.
-      Piece piece;
-      piece.registered = m.registered;
-      piece.poses = m.cams.poses;
-      piece.intrinsics = m.cams.intrinsics;
-      update_snapshot();
-      piece.points = snap_points;
-      piece.point_track = snap_track;
-      piece.mean_error_px = last.mean_error_px;
-      piece.aligned = m.aligned;
-      for (std::size_t i = 0; i < m.n_images(); ++i)
-        if (m.registered[i]) in_earlier[i] = 1;
-      pieces.push_back(std::move(piece));
+      pieces.push_back(current());
+      recount();
     }
     if (restart) {
       // The map starts again from nothing.
@@ -1870,6 +1862,88 @@ struct Session::State {
     adjust_window({fa, fb}, st);
     st.placed = {fa, fb};
     return place(st);
+  }
+
+  // The current piece, as a piece put aside would keep it.
+  Piece current() const {
+    Piece p;
+    p.m = m;
+    p.pairs_end = c.pairs.size();
+    p.failed_with = failed_with;
+    p.mean_error_px = last.mean_error_px;
+    p.start_floor = start_floor;
+    return p;
+  }
+
+  // Makes `p` the current piece (the map then grown to the session's images).
+  void restore(Piece&& p) {
+    m = std::move(p.m);
+    failed_with = std::move(p.failed_with);
+    start_floor = p.start_floor;
+    last = {};
+    last.mean_error_px = p.mean_error_px;
+    for (std::size_t i = m.n_images(); i < c.num_images(); ++i) {
+      m.keypoints.xy.insert(m.keypoints.xy.end(), c.keypoints[i].begin(), c.keypoints[i].end());
+      m.keypoints.begin.push_back(static_cast<std::int64_t>(m.keypoints.xy.size() / 2));
+      m.registered.push_back(0);
+      for (const double v : {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}) m.cams.poses.push_back(v);
+      m.image_obs.emplace_back();
+    }
+    failed_with.resize(c.num_images(), -1);
+  }
+
+  // Which images are in an earlier piece, and in any.
+  void recount() {
+    std::fill(in_earlier.begin(), in_earlier.end(), 0);
+    for (const Piece& p : pieces)
+      for (std::size_t i = 0; i < p.m.n_images(); ++i)
+        if (p.m.registered[i]) in_earlier[i] = 1;
+    for (std::size_t i = 0; i < in_piece.size(); ++i)
+      in_piece[i] = in_earlier[i] || (i < m.n_images() && m.registered[i]);
+  }
+
+  // Image `st.image`, not placed in the current piece, into an earlier piece its kept
+  // pairs link to (the most recent first): that piece, brought up to date with the
+  // pairs added since it was put aside, places it, and becomes the current one; the
+  // current one is put aside. False, and nothing changed, when none does.
+  bool rejoin(SessionStep& st, std::size_t first_pair) {
+    const std::size_t i = static_cast<std::size_t>(st.image);
+    for (std::size_t k = pieces.size(); k-- > 0;) {
+      const Map& pm = pieces[k].m;
+      bool links = false;
+      for (std::size_t q = first_pair; q < c.pairs.size() && !links; ++q) {
+        const std::size_t a = static_cast<std::size_t>(c.pairs[q].a);
+        links = pair_kept[q] && a < pm.n_images() && pm.registered[a];
+      }
+      if (!links) continue;
+      Piece now = current();
+      const std::size_t since = pieces[k].pairs_end;
+      restore(Piece(pieces[k]));  // a copy: the piece stays as it was if this fails
+      extend_tracks(m, verified_of(c, pair_inliers, pair_kept, since));
+      SessionStep trial;
+      trial.image = st.image;
+      const bool ok = place(trial);
+      if (ok && m.registered[i]) {
+        pieces.erase(pieces.begin() + static_cast<std::ptrdiff_t>(k));
+        pieces.push_back(std::move(now));
+        recount();
+        st.rejoined = true;
+        st.placed = trial.placed;
+        st.window = trial.window;
+        st.held = trial.held;
+        st.pnp_inliers = trial.pnp_inliers;
+        st.mean_error_px = trial.mean_error_px;
+        last_placed = static_cast<int>(i);
+        return true;
+      }
+      // Back as it was: the current piece current, the old one untouched.
+      restore(std::move(now));
+      if (!ok) {
+        st.error = trial.error;
+        return false;
+      }
+    }
+    return false;
   }
 
   // The bookkeeping after a step: which images are in a piece, the newest placed.
@@ -1978,6 +2052,8 @@ SessionStep Session::add(const SessionImage& image) {
       extend_tracks(m, verified_of(c, s.pair_inliers, s.pair_kept, first_pair));
       ok = s.place(st);
     }
+    // Not placed, but linked to an earlier piece: that piece takes it, and grows on.
+    if (ok && !m.registered[i] && !s.pieces.empty()) s.rejoin(st, first_pair);
     // Lost: images in a row not placed. A new piece, from images in none, if a pair of
     // them is fit to start from.
     if (ok && s.so.restart_after > 0 && !m.registered[i] &&
@@ -2032,13 +2108,32 @@ Snapshot Session::piece(std::size_t k) const {
   const State::Piece& p = s_->pieces[k];
   Snapshot snap;
   snap.stage = "piece";
-  snap.poses = &p.poses;
-  snap.registered = &p.registered;
-  snap.points = p.points;
-  snap.point_track = p.point_track;
+  snap.poses = &p.m.cams.poses;
+  snap.registered = &p.m.registered;
+  for (std::size_t t = 0; t < p.m.has_point.size(); ++t)
+    if (p.m.has_point[t]) {
+      snap.points.insert(snap.points.end(), &p.m.X[3 * t], &p.m.X[3 * t] + 3);
+      snap.point_track.push_back(static_cast<std::int32_t>(t));
+    }
   snap.mean_error_px = p.mean_error_px;
-  snap.aligned = p.aligned;
+  snap.aligned = p.m.aligned;
   return snap;
+}
+
+std::size_t Session::largest_piece() const {
+  std::size_t best = s_->pieces.size();  // the current one, on a tie
+  auto placed = [](const std::vector<char>& r) { return std::count(r.begin(), r.end(), 1); };
+  std::ptrdiff_t most = placed(s_->m.registered);
+  for (std::size_t k = 0; k < s_->pieces.size(); ++k)
+    if (placed(s_->pieces[k].m.registered) > most) {
+      most = placed(s_->pieces[k].m.registered);
+      best = k;
+    }
+  return best;
+}
+
+const std::vector<double>& Session::piece_intrinsics(std::size_t k) const {
+  return k < s_->pieces.size() ? s_->pieces[k].m.cams.intrinsics : s_->m.cams.intrinsics;
 }
 bool Session::started() const { return s_->started; }
 const std::vector<double>& Session::intrinsics() const { return s_->m.cams.intrinsics; }
@@ -2057,10 +2152,14 @@ Snapshot Session::snapshot() const {
 }
 
 std::vector<std::int32_t> Session::keypoint_points(std::size_t i) const {
-  const Map& m = s_->m;
+  return keypoint_points(i, s_->pieces.size());
+}
+
+std::vector<std::int32_t> Session::keypoint_points(std::size_t i, std::size_t piece) const {
+  const Map& m = piece < s_->pieces.size() ? s_->pieces[piece].m : s_->m;
   if (i >= s_->c.num_images()) return {};
   std::vector<std::int32_t> out(s_->c.keypoints[i].size() / 2, -1);
-  if (!s_->started || !m.registered[i]) return out;
+  if (!s_->started || i >= m.n_images() || !m.registered[i]) return out;
   for (std::int64_t k : m.image_obs[i]) {
     const std::int32_t t = m.obs_track[k];
     if (!m.obs_dead[k] && m.obs_in[k] && m.has_point[t]) out[static_cast<std::size_t>(m.tracks.keypoint[k])] = t;
@@ -2083,14 +2182,14 @@ Reconstruction Session::finish(const Capture& capture, const ProgressCallback& o
   start.aligned = s.m.aligned;
   start.focal_factor = s.focal_factor;
   // The piece with the most images (the current one on a tie).
-  auto placed = [](const std::vector<char>& r) { return std::count(r.begin(), r.end(), 1); };
-  for (const State::Piece& p : s.pieces)
-    if (placed(p.registered) > placed(start.registered)) {
-      start.registered = p.registered;
-      start.poses = p.poses;
-      start.intrinsics = p.intrinsics;
-      start.aligned = p.aligned;
-    }
+  const std::size_t k = largest_piece();
+  if (k < s.pieces.size()) {
+    const Map& pm = s.pieces[k].m;
+    start.registered = pm.registered;
+    start.poses = pm.cams.poses;
+    start.intrinsics = pm.cams.intrinsics;
+    start.aligned = pm.aligned;
+  }
   // A piece left before later images were added has fewer entries.
   start.registered.resize(s.c.num_images(), 0);
   start.poses.resize(7 * s.c.num_images(), 0.0);
