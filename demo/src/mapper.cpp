@@ -1661,6 +1661,7 @@ struct Session::State {
   double start_floor = 0.0;    // the angle floor the current piece started from
   int last_placed = -1;        // the newest image placed in the current piece
   double focal_factor = 1.0;
+  std::size_t seeded = 0;      // images the session started with, held (D154)
   std::vector<jpo_pose_result> pair_results;
   std::vector<std::vector<std::uint8_t>> pair_inliers;
   std::vector<char> pair_kept;
@@ -1686,13 +1687,19 @@ struct Session::State {
       free[static_cast<std::size_t>(i)] = 1;
       ++n;
     }
-    for (std::size_t i = m.n_images(); i-- > 0 && n < so.window;)
+    for (std::size_t i = m.n_images(); i-- > seeded && n < so.window;)
       if (m.registered[i] && !free[i]) {
         free[i] = 1;
         ++n;
       }
     const int iterations = so.window_iterations > 0 ? so.window_iterations : opt.local_iterations;
-    last = adjust(m, opt, iterations, {}, so.window > 0 ? &free : nullptr);
+    // A seeded session (D154) holds its model: its images (never in the window, so held
+    // when they see the window's points) and its intrinsics.
+    MapperOptions model_held = opt;
+    if (seeded > 0) model_held.refine_intrinsics = 0;
+    if (seeded > 0 && so.window == 0)
+      for (std::size_t i = seeded; i < m.n_images(); ++i) free[i] = free[i] || m.registered[i];
+    last = adjust(m, model_held, iterations, {}, (so.window > 0 || seeded > 0) ? &free : nullptr);
     st.window.clear();
     st.held.clear();
     for (std::size_t k = 0; k < last.image_of.size(); ++k) {
@@ -2017,6 +2024,58 @@ Session::Session(Mapper& mapper, jba::CameraModel model, const std::vector<doubl
   m.cams.intrinsics = intrinsics;
 }
 
+Session::Session(Mapper& mapper, jba::CameraModel model, const std::vector<double>& intrinsics, std::int32_t width,
+                 std::int32_t height, const SessionSeed& seed, const SessionOptions& options)
+    : Session(mapper, model, intrinsics, false, width, height, options) {
+  State& s = *s_;
+  Capture& c = s.c;
+  Map& m = s.m;
+  const std::size_t n = seed.keypoints.size();
+  const std::size_t n_points = seed.points.size() / 3;
+  const std::size_t n_obs = seed.obs_image.size();
+  if (n < 2 || seed.poses.size() != 7 * n || seed.points.size() != 3 * n_points ||
+      seed.obs_keypoint.size() != n_obs || seed.obs_point.size() != n_obs)
+    throw std::invalid_argument("a seed takes two or more images, 7 values of pose each, 3 per point, and 3 per observation");
+  for (std::size_t i = 0; i < n; ++i) {
+    if (seed.keypoints[i].size() % 2 != 0) throw std::invalid_argument("a seed image's keypoints are 2 values each");
+    c.keypoints.push_back(seed.keypoints[i]);
+    s.image_first_pair.push_back(0);
+    m.keypoints.xy.insert(m.keypoints.xy.end(), seed.keypoints[i].begin(), seed.keypoints[i].end());
+    m.keypoints.begin.push_back(static_cast<std::int64_t>(m.keypoints.xy.size() / 2));
+    m.registered.push_back(1);
+    m.cams.poses.insert(m.cams.poses.end(), &seed.poses[7 * i], &seed.poses[7 * i] + 7);
+    m.image_obs.emplace_back();
+    s.failed_with.push_back(-1);
+    s.in_piece.push_back(1);
+    s.in_earlier.push_back(0);
+  }
+  // One track per point, its observations as inliers of it, in image order.
+  std::vector<std::vector<Entry>> lists(n_points);
+  for (std::size_t k = 0; k < n_obs; ++k) {
+    const std::int32_t i = seed.obs_image[k], kp = seed.obs_keypoint[k], p = seed.obs_point[k];
+    if (i < 0 || static_cast<std::size_t>(i) >= n || kp < 0 ||
+        static_cast<std::size_t>(kp) >= seed.keypoints[static_cast<std::size_t>(i)].size() / 2 || p < 0 ||
+        static_cast<std::size_t>(p) >= n_points)
+      throw std::invalid_argument("a seed observation names an image, a keypoint or a point that does not exist");
+    lists[static_cast<std::size_t>(p)].push_back({i, kp, 1, 0, 0});
+  }
+  for (auto& l : lists)
+    std::stable_sort(l.begin(), l.end(), [](const Entry& x, const Entry& y) {
+      return x.image != y.image ? x.image < y.image : x.keypoint < y.keypoint;
+    });
+  set_tracks(m, lists);
+  for (std::size_t t = 0; t < n_points; ++t) {
+    m.has_point[t] = m.track_images[t] >= 2;
+    std::copy(&seed.points[3 * t], &seed.points[3 * t] + 3, &m.X[3 * t]);
+  }
+  m.aligned = seed.aligned;
+  s.started = true;
+  s.start_floor = 90.0;  // never started again from a wider pair: it didn't start from one
+  s.last_placed = static_cast<int>(n) - 1;
+  s.seeded = n;
+  s.update_snapshot();
+}
+
 Session::~Session() = default;
 Session::Session(Session&&) noexcept = default;
 Session& Session::operator=(Session&&) noexcept = default;
@@ -2160,6 +2219,7 @@ SessionStep Session::retry(const std::vector<Pair>& more, bool new_piece) {
 }
 
 std::size_t Session::num_images() const { return s_->c.num_images(); }
+std::size_t Session::num_seeded() const { return s_->seeded; }
 std::size_t Session::num_pieces() const { return s_->started ? s_->pieces.size() + 1 : 0; }
 
 Snapshot Session::piece(std::size_t k) const {

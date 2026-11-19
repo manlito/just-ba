@@ -367,6 +367,19 @@ struct SessionImage {
   bool defer_split = false;
 };
 
+// A model a session starts from (D154): images already placed, with their keypoints,
+// poses, and the model's points with the keypoints that observe them (a finished
+// reconstruction, so a capture can go on into it). Its images are held where they are
+// and its intrinsics are kept while new images join; its points take part in placing
+// them. Per observation: its image (from 0), its keypoint in that image, its point.
+struct SessionSeed {
+  std::vector<std::vector<double>> keypoints;  // per image: 2 per keypoint, pixels
+  std::vector<double> poses;                   // 7 per image
+  std::vector<double> points;                  // 3 per point
+  std::vector<std::int32_t> obs_image, obs_keypoint, obs_point;
+  bool aligned = false;                        // in the frame of the position priors (D150)
+};
+
 // What Session::add did.
 struct SessionStep {
   std::int32_t image = -1;           // the image added, from 0
@@ -399,6 +412,12 @@ class Session {
   // and must outlive the session.
   Session(Mapper& mapper, jba::CameraModel model, const std::vector<double>& intrinsics, bool focal_unknown,
           std::int32_t width, std::int32_t height, const SessionOptions& options = {});
+  // A session started from a model (D154): `seed`'s images are the session's first,
+  // placed and held, the map started from them; `intrinsics` are the model's (its block
+  // of `model`, not searched, held while the session grows). Throws
+  // std::invalid_argument when the seed's arrays disagree or name what doesn't exist.
+  Session(Mapper& mapper, jba::CameraModel model, const std::vector<double>& intrinsics, std::int32_t width,
+          std::int32_t height, const SessionSeed& seed, const SessionOptions& options = {});
   ~Session();
   Session(const Session&) = delete;
   Session& operator=(const Session&) = delete;
@@ -413,6 +432,8 @@ class Session {
   SessionStep retry(const std::vector<Pair>& more, bool new_piece = false);
 
   std::size_t num_images() const;
+  // Images the session started with (D154): the first num_seeded() of it; 0 without.
+  std::size_t num_seeded() const;
   bool started() const;
   // Pieces grown so far, the current one included; earlier pieces are kept as they
   // were left (piece(k), k below num_pieces() - 1, the current one is snapshot()).

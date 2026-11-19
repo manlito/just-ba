@@ -294,6 +294,90 @@ int main() {
     std::printf("retry: image 8 placed on its second try; %zu piece\n", s.num_pieces());
   }
 
+  // A session seeded from a model (D154): the orbit's first half reconstructed in a
+  // batch run, then the session starts from that model and takes the second half with
+  // its pairs (to any earlier image). Every new image is placed as it comes; the model's
+  // images and intrinsics don't move; the map is near the truth; the finish places all.
+  {
+    const demo::Scene scene = demo::make_scene("orbit");
+    demo::MapperOptions mo;
+    demo::thresholds_for_noise(scene.noise_px, mo);
+    demo::Mapper mapper(mo);
+    const demo::Capture& c = scene.capture;
+    const std::size_t n = c.num_images();
+    const std::int32_t h = static_cast<std::int32_t>(n / 2);
+    demo::Capture first = c;
+    first.keypoints.resize(static_cast<std::size_t>(h));
+    if (!first.image_intrinsics.empty()) first.image_intrinsics.resize(static_cast<std::size_t>(h));
+    first.pairs.clear();
+    for (const demo::Pair& p : c.pairs)
+      if (p.a < h && p.b < h) first.pairs.push_back(p);
+    const demo::Reconstruction model = mapper.run(first);
+    check(model.ok() && count(model.registered) == static_cast<std::size_t>(h), "seed: the first half's model");
+
+    demo::SessionSeed seed;
+    seed.keypoints = first.keypoints;
+    seed.poses = model.poses;
+    seed.points = model.problem.points;
+    for (std::size_t k = 0; k < model.problem.obs_image.size(); ++k) {
+      seed.obs_image.push_back(model.image_of[static_cast<std::size_t>(model.problem.obs_image[k])]);
+      seed.obs_keypoint.push_back(model.obs_keypoint[k]);
+      seed.obs_point.push_back(model.problem.obs_point[k]);
+    }
+    const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+    const std::vector<double> intr(model.problem.intrinsics.begin(), model.problem.intrinsics.begin() + np);
+    demo::SessionOptions so;
+    demo::Session s(mapper, c.model, intr, static_cast<std::int32_t>(scene.width),
+                    static_cast<std::int32_t>(scene.height), seed, so);
+    check(s.started() && s.num_seeded() == static_cast<std::size_t>(h) && s.num_images() == static_cast<std::size_t>(h),
+          "seed: started from the model's images");
+    const std::vector<std::int32_t> lm = s.keypoint_points(static_cast<std::size_t>(h - 1));
+    check(std::count_if(lm.begin(), lm.end(), [](std::int32_t t) { return t >= 0; }) >=
+              static_cast<std::ptrdiff_t>(mo.min_pnp_inliers),
+          "seed: the model's images have landmarks");
+    int late = 0;
+    bool ok = true;
+    for (std::size_t i = static_cast<std::size_t>(h); i < n; ++i) {
+      demo::SessionImage im;
+      im.keypoints = c.keypoints[i];
+      for (demo::Pair p : c.pairs) {
+        if (p.a > p.b) {
+          std::swap(p.a, p.b);
+          std::swap(p.ka, p.kb);
+        }
+        if (static_cast<std::size_t>(p.b) == i) im.pairs.push_back(p);
+      }
+      const demo::SessionStep st = s.add(im);
+      ok = ok && st.ok() && !st.started;
+      late += std::find(st.placed.begin(), st.placed.end(), static_cast<std::int32_t>(i)) == st.placed.end();
+      for (std::int32_t w : st.window) ok = ok && w >= h;
+    }
+    check(ok, "seed: every step succeeds, none starts a piece, the window holds only new images");
+    check(late == 0, "seed: every new image is placed as it comes (" + std::to_string(late) + " late)");
+    const demo::Snapshot live = s.snapshot();
+    bool held = true;
+    for (std::size_t k = 0; k < 7 * static_cast<std::size_t>(h); ++k) held = held && (*live.poses)[k] == model.poses[k];
+    check(held, "seed: the model's images don't move");
+    check(s.intrinsics() == intr, "seed: the model's intrinsics are kept");
+    check(count(*live.registered) == n && s.num_pieces() == 1, "seed: one piece, every image");
+    const demo::PoseAgreement vs_truth = demo::compare_poses(*live.registered, *live.poses, all(n), scene.poses);
+    check(vs_truth.rot_median_deg < 0.5 && vs_truth.centre_median_pct < 1.0,
+          "seed: the map is near the truth (" + std::to_string(vs_truth.rot_median_deg) + "°, " +
+              std::to_string(vs_truth.centre_median_pct) + " %)");
+    const demo::Reconstruction fin = s.finish(c);
+    check(fin.ok() && count(fin.registered) == n, "seed: the finish places every image");
+
+    bool threw = false;
+    try {
+      demo::SessionSeed bad = seed;
+      bad.obs_keypoint[0] = 1 << 30;
+      demo::Session wrong(mapper, c.model, intr, 0, 0, bad);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    check(threw, "seed: an observation of a keypoint that doesn't exist is refused");
+  }
+
   // Bad input: a pair naming a later image, or a keypoint that does not exist, is left
   // out and said so; the image still joins, so the caller's numbering holds.
   {
