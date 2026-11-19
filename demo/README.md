@@ -66,6 +66,13 @@ neither changes the result.
   `error` is "cancelled", the rest of the result is incomplete, and `on_step` is not
   called. This is what a desktop app needs for live progress and a Stop button.
 
+With position priors in the capture (`Capture::prior_position`, D150), a model moves into
+their frame once three of its images with a prior are registered and spread across a
+line by more than five standard deviations, and every later adjustment holds those
+images to their priors: the result is in the priors' frame, units and axes
+(`Reconstruction::aligned`). `jba_demo synth --priors sigma` checks it on the generated
+scenes; `jba_demo run --no-priors` ignores them.
+
 ## Against COLMAP
 
 The comparison of milestone 7 (document 05, level 3): both systems start from the same
@@ -133,6 +140,8 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 | `camera.focal_unknown` | u8 | [B] | no | 1: the block's focal length is only a guess. Without the section, a focal length of exactly 1.2 times the larger side of `camera.size` (COLMAP's guess) counts as one |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Block of each image |
 | `image.names` | u8 | [bytes] | no | N names, separated by `\n` |
+| `image.prior_position` | f64 | [N, 3] | no | Position priors (D150): each image's measured camera centre in a metric frame whose third axis is up (east, north, up); NaN for an image without one |
+| `image.prior_sigma` | f64 | [N, 2] | no | Their standard deviations, horizontal and vertical; NaN: the mapper's defaults (3 and 5) |
 | `keypoint.begin` | i64 | [N + 1] | yes | Image i owns keypoints begin[i] to begin[i + 1] - 1 |
 | `keypoint.xy` | f64 | [K, 2] | yes | Pixels |
 | `pair.images` | i32 | [R, 2] | yes | Images a, b of each pair |

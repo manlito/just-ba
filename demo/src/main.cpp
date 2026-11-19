@@ -1,16 +1,20 @@
 // jba_demo: the demo app's command line.
 //
 //   jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f] [--false-pairs n]
-//                  [--focal-error f] [--write dir] [common options]
+//                  [--focal-error f] [--priors sigma] [--write dir] [common options]
 //     Reconstructs the generated scenes and compares each with its ground truth.
 //     --focal-error: the mapper is given focal lengths that much too large (1.2: 2.2
 //     times the truth, as COLMAP's guess on ETH3D), marked as a guess, so it searches
 //     for them and refines them (--refine focal+distortion unless given). The truth
 //     keeps the true ones; --write writes the given ones.
+//     --priors: each image gets a position prior (D150), its true centre in another
+//     frame (rotated, ten times larger, moved) with noise of sigma scene units per
+//     axis; the result must then be in that frame: its centres and rotations are
+//     compared with the truth carried into it, without fitting anything.
 //     --write: also writes each scene as a capture file (<dir>/<scene>.jbc), truth as reference.
 //
 //   jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo] [--two-view-tracks]
-//                [--tri-angle deg] [--json file] [--check]
+//                [--tri-angle deg] [--json file] [--check] [--no-priors]
 //                [common options]
 //     Reconstructs a capture file (from demo/tools/colmap_capture.py) and, when it holds a
 //     reference reconstruction, compares with it (document 05, level 3).
@@ -19,6 +23,7 @@
 //                   [--refine none|focal|focal+distortion] [--export dir] [-v]
 //     --refine: the intrinsics the adjustments refine. Default: focal+distortion with
 //     --thresholds colmap, as COLMAP's mapper; none otherwise.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -28,9 +33,11 @@
 #include <string>
 #include <vector>
 
+#include "align.h"
 #include "capture_io.h"
 #include "compare.h"
 #include "evaluate.h"
+#include "geometry.h"
 #include "jba/export.h"
 #include "mapper.h"
 #include "scenes.h"
@@ -40,9 +47,10 @@ namespace {
 int usage() {
   std::fprintf(stderr,
                "usage: jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f]\n"
-               "                      [--false-pairs n] [--focal-error f] [--write dir] [options]\n"
+               "                      [--false-pairs n] [--focal-error f] [--priors sigma] [--write dir] [options]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
-               "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [options]\n"
+               "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [--no-priors]\n"
+               "                    [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
                "         [--refine none|focal|focal+distortion] [--export dir] [-v]\n");
   return 2;
@@ -163,9 +171,49 @@ void write_json(const std::string& out, const std::string& capture, const demo::
   std::fclose(f);
 }
 
+// The prior frame of synth --priors: X_prior = s R X + t, the same for every scene.
+struct PriorFrame {
+  double R[9], t[3] = {120.0, -40.0, 15.0}, s = 10.0;
+  PriorFrame() {
+    demo::Rng rng(2026);
+    demo::random_rotation(rng, 180.0, R);
+  }
+  void centre(const double* pose, double out[3]) const {
+    double C[3];
+    demo::camera_centre(pose, C);
+    for (int r = 0; r < 3; ++r) out[r] = s * (R[3 * r] * C[0] + R[3 * r + 1] * C[1] + R[3 * r + 2] * C[2]) + t[r];
+  }
+};
+
+// The reconstruction against the truth carried into the prior frame, nothing fitted:
+// median centre error over the extent of the true centres there, median rotation error.
+void prior_frame_errors(const demo::Scene& scene, const demo::Reconstruction& r, const PriorFrame& f,
+                        double* centre_pct, double* rot_deg) {
+  std::vector<double> truth, ce, re;
+  for (std::size_t i = 0; i < scene.poses.size() / 7; ++i) {
+    double C[3];
+    f.centre(&scene.poses[7 * i], C);
+    truth.insert(truth.end(), C, C + 3);
+  }
+  const double extent = demo::bbox_diagonal(truth);
+  for (std::size_t i = 0; i < r.registered.size(); ++i) {
+    if (!r.registered[i]) continue;
+    double C[3], Rt[9], Re[9], Rg[9], St[9];
+    demo::camera_centre(&r.poses[7 * i], C);
+    ce.push_back(std::hypot(C[0] - truth[3 * i], C[1] - truth[3 * i + 1], C[2] - truth[3 * i + 2]) / extent * 100.0);
+    demo::quat_to_rotmat(&r.poses[7 * i], Re);
+    demo::quat_to_rotmat(&scene.poses[7 * i], Rt);
+    demo::transpose3(f.R, St);
+    demo::mat3_mul(Rt, St, Rg);  // world to camera, from the prior frame
+    re.push_back(demo::rotation_angle_deg(Re, Rg));
+  }
+  *centre_pct = demo::median(ce);
+  *rot_deg = demo::median(re);
+}
+
 int synth(const std::vector<std::string>& args) {
   std::string scene_arg = "all", write_dir;
-  double focal_error = 0.0;
+  double focal_error = 0.0, prior_sigma = 0.0;
   demo::SceneOptions so;
   Common c;
   for (std::size_t i = 0; i < args.size(); ++i) {
@@ -180,6 +228,7 @@ int synth(const std::vector<std::string>& args) {
     else if (a == "--wrong" && has_value) so.wrong_fraction = std::atof(args[++i].c_str());
     else if (a == "--false-pairs" && has_value) so.false_pairs = std::atoi(args[++i].c_str());
     else if (a == "--focal-error" && has_value) focal_error = std::atof(args[++i].c_str());
+    else if (a == "--priors" && has_value) prior_sigma = std::atof(args[++i].c_str());
     else if (a == "--write" && has_value) write_dir = args[++i];
     else return usage();
   }
@@ -206,8 +255,31 @@ int synth(const std::vector<std::string>& args) {
     for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
       for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_error;
     if (focal_error != 0.0) start.focal_unknown.assign(start.intrinsics.size() / np, 1);
+    const PriorFrame frame;
+    if (prior_sigma > 0.0) {
+      demo::Rng rng(so.seed + 99);
+      for (std::size_t i = 0; i < start.num_images(); ++i) {
+        double C[3];
+        frame.centre(&scene.poses[7 * i], C);
+        for (int d = 0; d < 3; ++d) start.prior_position.push_back(C[d] + frame.s * prior_sigma * rng.normal());
+        start.prior_sigma.insert(start.prior_sigma.end(), {frame.s * prior_sigma, frame.s * prior_sigma});
+      }
+    }
     const demo::Reconstruction r = mapper.run(start, printer(c.verbose));
-    const demo::Metrics mt = demo::evaluate(scene, r);
+    demo::Metrics mt = demo::evaluate(scene, r);
+    double prior_centre_pct = 0.0, prior_rot_deg = 0.0;
+    if (prior_sigma > 0.0 && r.ok()) {
+      // In the prior frame, within the generated scenes' margins (1 % of the extent,
+      // 0.5 degrees) and no fitted similarity to hide a wrong frame.
+      prior_frame_errors(scene, r, frame, &prior_centre_pct, &prior_rot_deg);
+      if (mt.pass && !r.aligned) {
+        mt.pass = false;
+        mt.why = "not in the priors' frame";
+      } else if (mt.pass && (prior_centre_pct >= 1.0 || prior_rot_deg >= 0.5)) {
+        mt.pass = false;
+        mt.why = "off in the priors' frame";
+      }
+    }
     if (!mt.pass) ++failed;
     char images[32];
     std::snprintf(images, sizeof(images), "%zu/%zu", mt.registered, mt.images);
@@ -216,6 +288,11 @@ int synth(const std::vector<std::string>& args) {
                 mt.centre_median_pct, mt.point_median_pct, 100.0 * mt.mask_precision, 100.0 * mt.mask_recall,
                 r.adjustments, r.time.total, mt.pass ? "PASS" : "FAIL", mt.why.empty() ? "" : ": ", mt.why.c_str());
     if (c.verbose) print_times(r);
+    if (prior_sigma > 0.0)
+      std::printf("       priors: %d of %zu images, %s; in their frame: centre median %.4f %%, rotation median %.4f°;"
+                  " to the priors: %.4g horizontal, %.4g vertical (sigma %.4g)\n",
+                  r.prior_images, mt.images, r.aligned ? "aligned" : "NOT aligned", prior_centre_pct, prior_rot_deg,
+                  r.prior_error_horizontal, r.prior_error_vertical, frame.s * prior_sigma);
     if (focal_error != 0.0)
       std::printf("       focal: true %.1f px, given %.1f, searched x%.3f, refined %.1f\n",
                   demo::median_focal(scene.capture.model, scene.capture.intrinsics),
@@ -224,6 +301,8 @@ int synth(const std::vector<std::string>& args) {
     demo::CaptureFile file = demo::to_capture_file(scene);
     file.capture.intrinsics = start.intrinsics;
     file.capture.focal_unknown = start.focal_unknown;
+    file.capture.prior_position = start.prior_position;
+    file.capture.prior_sigma = start.prior_sigma;
     if (focal_error != 0.0) file.reference.intrinsics = scene.capture.intrinsics;  // the truth's
     if (!c.export_dir.empty())
       export_model((std::filesystem::path(c.export_dir) / name).string(), r, file.names, file.image_size);
@@ -244,7 +323,7 @@ int run(const std::vector<std::string>& args) {
   if (args.empty()) return usage();
   const std::string path = args[0];
   std::string intrinsics = "reference", thresholds = "colmap";
-  bool check = false, two_view = false;
+  bool check = false, two_view = false, no_priors = false;
   std::string json_path;
   double tri_angle = -1.0;
   Common c;
@@ -259,6 +338,7 @@ int run(const std::vector<std::string>& args) {
     else if (a == "--check") check = true;
     else if (a == "--json" && has_value) json_path = args[++i];
     else if (a == "--two-view-tracks") two_view = true;
+    else if (a == "--no-priors") no_priors = true;
     else if (a == "--tri-angle" && has_value) tri_angle = std::atof(args[++i].c_str());
 
     else return usage();
@@ -269,6 +349,7 @@ int run(const std::vector<std::string>& args) {
   if (thresholds == "colmap") demo::colmap_thresholds(mo);
   if (c.refine >= 0) mo.refine_intrinsics = static_cast<std::uint8_t>(c.refine);
   if (two_view) mo.ignore_two_view_tracks = false;
+  if (no_priors) mo.use_position_priors = false;
   if (tri_angle >= 0.0) mo.tri_max_angle_error_deg = tri_angle;
   if (!available(mo)) return 2;
 
@@ -299,6 +380,17 @@ int run(const std::vector<std::string>& args) {
               r.pairs_kept, file.capture.pairs.size(), r.pairs_ok, r.pairs_degenerate, r.pairs_failed, r.tracks,
               r.pnp_calls, r.pnp_rejected, r.models, r.models == 1 ? "" : "s");
   print_times(r);
+  if (!file.capture.prior_position.empty()) {
+    std::size_t with = 0;
+    for (std::size_t i = 0; i < file.capture.num_images(); ++i) with += file.capture.has_prior(i);
+    if (no_priors)
+      std::printf("  position priors: %zu images have one, not used (--no-priors)\n", with);
+    else
+      std::printf("  position priors: %zu images have one, %d registered; %s; %d within %.3g sigma, median distance"
+                  " %.4g horizontal, %.4g vertical\n",
+                  with, r.prior_images, r.aligned ? "aligned to them" : "NOT aligned (too few, or along a line)",
+                  r.prior_inliers, mo.prior_inlier_sigmas, r.prior_error_horizontal, r.prior_error_vertical);
+  }
   std::printf("  tracks: %zu built, %zu of them with two keypoints in one image; %zu after splitting\n",
               r.track_stats.components, r.track_stats.conflicted, r.all_tracks.size());
   if (!c.export_dir.empty()) export_model(c.export_dir, r, file.names, file.image_size);

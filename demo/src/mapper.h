@@ -4,6 +4,7 @@
 // Part of the demo app, not of the library: only the demo links poselib-gpu.
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -34,8 +35,20 @@ struct Capture {
   // Per block: 1 when its focal length is only a guess (COLMAP's database without a
   // prior_focal_length); empty: all known.
   std::vector<std::uint8_t> focal_unknown;
+  // Position priors (D150): where each image was taken, measured (GPS), as its camera
+  // centre in a metric frame of the caller's whose third axis points up (east, north,
+  // up about a point near the capture, for one). 3 per image, NaN for an image without
+  // one; empty: none. prior_sigma: per image the standard deviations of the
+  // measurement, horizontal then vertical, in the same units; empty, or NaN or not
+  // positive for an image: MapperOptions' defaults.
+  std::vector<double> prior_position;
+  std::vector<double> prior_sigma;
   std::size_t num_images() const { return keypoints.size(); }
   std::int32_t block(std::size_t image) const { return image_intrinsics.empty() ? 0 : image_intrinsics[image]; }
+  bool has_prior(std::size_t image) const {
+    return !prior_position.empty() && std::isfinite(prior_position[3 * image]) &&
+           std::isfinite(prior_position[3 * image + 1]) && std::isfinite(prior_position[3 * image + 2]);
+  }
 };
 
 struct MapperOptions {
@@ -84,6 +97,25 @@ struct MapperOptions {
   // times the guess (61 steps of 4.7 %), all in one poselib-gpu call, and the factor
   // with the lowest total MSAC score is applied. The adjustments then refine it.
   bool search_focal = false;
+
+  // Position priors (Capture::prior_position, D150). With them, a model starts from a
+  // pair of images that both have one where such a pair is fit to start from; once
+  // prior_min_images of its registered images have one, spread across their line by
+  // more than prior_min_spread standard deviations, the model is moved into the
+  // priors' frame by the similarity of its camera centres onto their priors (robust:
+  // centres within prior_inlier_sigmas of their prior), and from then on every
+  // adjustment holds each registered image with a prior to it (a global position prior
+  // of the working frame, Cauchy at 3 standard deviations). The model then grows in the
+  // priors' frame, units and axes, and so does every other model the run grows.
+  // false: priors are ignored.
+  bool use_position_priors = true;
+  int prior_min_images = 3;
+  double prior_min_spread = 5.0;
+  double prior_inlier_sigmas = 4.0;
+  // The standard deviations for images whose prior comes without them: an ordinary
+  // GPS receiver's (a drone's or a phone's), horizontal and vertical.
+  double prior_sigma_horizontal = 3.0;
+  double prior_sigma_vertical = 5.0;
 };
 
 // The median focal length over the intrinsics blocks, pixels (fx and fy averaged).
@@ -126,6 +158,7 @@ struct Snapshot {
   std::vector<double> points;              // 3 per triangulated point
   std::vector<std::int32_t> point_track;   // per point: its track, the same across steps
   double mean_error_px = 0.0;
+  bool aligned = false;                    // in the frame of the position priors (D150)
 };
 using StepCallback = std::function<void(const Snapshot&)>;
 
@@ -173,6 +206,16 @@ struct Reconstruction {
   jba::Tracks all_tracks;                  // every track built from the verified matches
   jba::TrackStats track_stats;             // of building them
   double mean_error_px = 0.0;
+
+  // Position priors (D150), of the model returned. aligned: it is in the priors' frame
+  // (D150's alignment happened); otherwise its frame is the first pair's. prior_images:
+  // its registered images with a prior; prior_inliers: those within
+  // prior_inlier_sigmas of their prior after the last adjustment. The errors are the
+  // medians, over prior_images, of the distance from each camera centre to its prior,
+  // horizontally and vertically, in the priors' units (0 unless aligned).
+  bool aligned = false;
+  int prior_images = 0, prior_inliers = 0;
+  double prior_error_horizontal = 0.0, prior_error_vertical = 0.0;
 
   // Pair verification.
   std::vector<jpo_pose_result> pair_results;
