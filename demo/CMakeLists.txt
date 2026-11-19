@@ -62,13 +62,16 @@ if(EMSCRIPTEN)
   target_link_options(
     jba_demo_wasm PRIVATE
     -sJSPI
-    "-sJSPI_EXPORTS=demo_reconstruct,demo_backends"
-    "-sEXPORTED_FUNCTIONS=_demo_reconstruct,_demo_backends,_demo_points,_demo_tracks,_demo_colour_obs,_malloc,_free"
-    "-sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8,HEAP32,HEAPF32,HEAPF64"
+    "-sJSPI_EXPORTS=demo_reconstruct,demo_backends,demo_session_new,demo_session_add,demo_session_retry,demo_session_finish"
+    "-sEXPORTED_FUNCTIONS=_demo_reconstruct,_demo_backends,_demo_points,_demo_tracks,_demo_colour_obs,_malloc,_free,\
+_demo_session_new,_demo_session_add,_demo_session_retry,_demo_session_snapshot,_demo_session_finish,_demo_session_free,\
+_demo_pair_inliers,_demo_last_error"
+    "-sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8,HEAP32,HEAPF32,HEAPF64,UTF8ToString"
     -sMODULARIZE
     -sEXPORT_ES6
     -sEXPORT_NAME=createDemo
-    -sENVIRONMENT=web
+    # The live capture's session runs in a worker (D157).
+    -sENVIRONMENT=web,worker
     -sALLOW_MEMORY_GROWTH
     -sMAXIMUM_MEMORY=4GB
     -sSTACK_SIZE=2MB)
@@ -84,7 +87,10 @@ if(EMSCRIPTEN)
   add_custom_command(
     TARGET jba_demo_wasm POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/web/index.html
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/demo.js ${_web}
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/demo.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.html
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture_worker.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/weights_worker.js ${CMAKE_CURRENT_SOURCE_DIR}/web/gates.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/view.js ${_web}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/web/samples ${_web}/samples)
   if(EXISTS "${JBA_DEMO_MATCH_WEB_DIR}")
     add_custom_command(TARGET jba_demo_wasm POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory

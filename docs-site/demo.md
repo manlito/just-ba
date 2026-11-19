@@ -27,3 +27,30 @@ in the browser: nothing is uploaded.
 ```{only} not demo
 The demo is not part of this build of the documentation.
 ```
+
+## Live capture
+
+The same pipeline on your camera, as you capture: open the page on a laptop or a phone,
+point the camera at a scene and walk around it. The page keeps a keyframe each time the
+view has moved on enough. It uses Like Recon's rules: how much of the last keyframe is
+still in view, how many verified matches link the two, the keypoints and the blur. Each
+keyframe goes to a map that grows while you move (the demo's mapper session: verified
+pairs, placement by PnP, a window of the latest keyframes bundle-adjusted with this
+library). Finish then matches more pairs and reconstructs every keyframe, starting from
+that map.
+
+Matches come from FlexGlue or LightGlue. FlexGlue gives the better map. Its weights are not
+served by this site, because the backbone is under Meta's DINOv3 License. You download
+`flexglue.pth` (567 MB) from FlexGlue's release once and give it to the page, which
+checks it, converts it to half precision (284 MB) and keeps it in the browser. LightGlue's
+weights (24 MB) come with the page; it is the default on phones, where FlexGlue is heavy.
+
+```{only} demo
+<p><a href="demo/capture.html"><strong>Open the live capture</strong></a>. On a computer,
+you can also open this page on your phone.</p>
+
+It needs WebGPU, WebAssembly JavaScript Promise Integration and camera access: Chrome and
+Edge 137 or later, on a computer or on Android. Safari has WebGPU but not JSPI yet, so
+the page says it can't run there. The camera's frames stay in the browser: nothing is
+uploaded.
+```

@@ -37,7 +37,8 @@ DEMO_WEB = os.environ.get("JBA_DEMO_WEB", "")
 if DEMO_WEB:
     DEMO_WEB = os.path.join(os.path.dirname(HERE), DEMO_WEB)
 DEMO_FILES = ("index.html", "demo.js", "jba_demo.js", "jba_demo.wasm", "jkp/jkp.js", "jmt/jmt.js",
-              "samples/samples.json")
+              "samples/samples.json", "capture.html", "capture.js", "capture_worker.js", "weights_worker.js",
+              "gates.js", "view.js")
 if DEMO_WEB:
     missing = [f for f in DEMO_FILES if not os.path.isfile(os.path.join(DEMO_WEB, f))]
     if missing:
