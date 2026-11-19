@@ -9,7 +9,8 @@
 #
 #   emcmake cmake -S . -B build/demo-wasm -G Ninja -DJBA_BUILD_DEMO=ON -DJBA_WITH_WEBGPU=ON \
 #     -DJBA_EMDAWNWEBGPU_DIR=<emdawnwebgpu_pkg>
-#   cmake --build build/demo-wasm   # build/demo-wasm/demo/web: index.html, jba_demo.js, jba_demo.wasm
+#   demo/tools/fetch_match_web.sh   # keypoints and matcher, for the page
+#   cmake --build build/demo-wasm   # build/demo-wasm/demo/web: the page and everything it loads
 
 set(JBA_POSELIB_GPU_DIR "${PROJECT_SOURCE_DIR}/../poselib-gpu" CACHE PATH "poselib-gpu sources, for the demo app")
 if(NOT EXISTS "${JBA_POSELIB_GPU_DIR}/CMakeLists.txt" OR NOT EXISTS "${JBA_POSELIB_GPU_DIR}/include/jpo/jpo.h")
@@ -61,9 +62,9 @@ if(EMSCRIPTEN)
   target_link_options(
     jba_demo_wasm PRIVATE
     -sJSPI
-    "-sJSPI_EXPORTS=demo_run,demo_backends"
-    "-sEXPORTED_FUNCTIONS=_demo_run,_demo_backends"
-    "-sEXPORTED_RUNTIME_METHODS=ccall"
+    "-sJSPI_EXPORTS=demo_reconstruct,demo_backends"
+    "-sEXPORTED_FUNCTIONS=_demo_reconstruct,_demo_backends,_demo_points,_demo_tracks,_demo_colour_obs,_malloc,_free"
+    "-sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8,HEAP32,HEAPF32,HEAPF64"
     -sMODULARIZE
     -sEXPORT_ES6
     -sEXPORT_NAME=createDemo
@@ -71,8 +72,24 @@ if(EMSCRIPTEN)
     -sALLOW_MEMORY_GROWTH
     -sMAXIMUM_MEMORY=4GB
     -sSTACK_SIZE=2MB)
-  add_custom_command(TARGET jba_demo_wasm POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                     ${CMAKE_CURRENT_SOURCE_DIR}/web/index.html ${CMAKE_CURRENT_BINARY_DIR}/web/index.html)
+  # The page, its script and sample images, and the keypoints and matcher modules
+  # (demo/tools/fetch_match_web.sh) it loads from jkp/ and jmt/ (D156).
+  set(JBA_DEMO_MATCH_WEB_DIR "${PROJECT_SOURCE_DIR}/third_party/match-web" CACHE PATH
+      "just-keypoints' and just-matching's browser modules, for the live demo")
+  if(NOT EXISTS "${JBA_DEMO_MATCH_WEB_DIR}/jkp/jkp.js" OR NOT EXISTS "${JBA_DEMO_MATCH_WEB_DIR}/jmt/jmt.js")
+    message(WARNING "No keypoints and matcher modules in ${JBA_DEMO_MATCH_WEB_DIR}: the live demo needs them "
+                    "(demo/tools/fetch_match_web.sh)")
+  endif()
+  set(_web ${CMAKE_CURRENT_BINARY_DIR}/web)
+  add_custom_command(
+    TARGET jba_demo_wasm POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/web/index.html
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/demo.js ${_web}
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/web/samples ${_web}/samples)
+  if(EXISTS "${JBA_DEMO_MATCH_WEB_DIR}")
+    add_custom_command(TARGET jba_demo_wasm POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
+                                                               ${JBA_DEMO_MATCH_WEB_DIR} ${_web})
+  endif()
 else()
   add_executable(jba_demo src/main.cpp)
   target_link_libraries(jba_demo PRIVATE jba_demo_mapper jba_warnings)

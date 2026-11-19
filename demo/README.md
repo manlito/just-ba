@@ -19,7 +19,9 @@ not, and a default build does not look for it.
 | `tools/colmap_compare.sh` | One scene from its images: COLMAP, then the capture file, then `jba_demo run`. |
 | `tools/colmap_table.py` | The comparison over several capture files, as Markdown tables. |
 | `tools/colmap_fixture.py`, `tools/test_colmap_roundtrip.py` | The COLMAP path tested without COLMAP. |
-| `web/demo_wasm.cpp`, `web/index.html` | The live demo: the WebAssembly entry points and the page. |
+| `web/demo_wasm.cpp`, `web/index.html`, `web/demo.js` | The live demo (D156): the WebAssembly entry points, the page and its script. |
+| `web/samples/` | The live demo's sample set: 44 images of ETH3D's *delivery_area* and `samples.json` (their focal lengths). |
+| `tools/fetch_match_web.sh` | The live demo's keypoints and matcher modules, from just-keypoints' and just-matching's sites. |
 
 ## Build
 
@@ -203,8 +205,23 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 
 ## The live demo
 
+Structure from motion on real photos in the browser (D156). The page loads the sample
+set or the visitor's own images, finds ALIKED keypoints with just-keypoints' module and
+matches every pair with LightGlue through just-matching's (both on WebGPU), then calls
+`demo_reconstruct` with the keypoints and matches: the mapper with COLMAP's thresholds,
+SIMPLE_RADIAL cameras whose focal length and distortion it refines, on the CPU or
+WebGPU. By default it runs once on each and shows the mapper's timings side by side;
+keypoints and matches are kept, so reconstructing again costs only the reconstruction.
+URL parameters: `run=1` runs once the sample set is loaded, `n=k` keeps its first k
+images, `backends=cpu|webgpu|both`, `focal=guess` drops the samples' focal lengths (as
+for the visitor's own photos: searched for).
+
 Emscripten 7.0.0 and emdawnwebgpu from Dawn's release (D122). Emscripten needs Python
 3.10 or later (`EMSDK_PYTHON` if the first `python3` on the path is older).
+
+```bash
+demo/tools/fetch_match_web.sh
+```
 
 ```bash
 emcmake cmake -S . -B build/demo-wasm -G Ninja -DJBA_BUILD_DEMO=ON -DJBA_WITH_WEBGPU=ON \
@@ -212,12 +229,21 @@ emcmake cmake -S . -B build/demo-wasm -G Ninja -DJBA_BUILD_DEMO=ON -DJBA_WITH_WE
 cmake --build build/demo-wasm
 ```
 
-`build/demo-wasm/demo/web` then holds `index.html`, `jba_demo.js` and
-`jba_demo.wasm`, ready for any static server. The documentation site includes them
-when built with `JBA_DEMO_WEB=build/demo-wasm/demo/web` (`docs-site/README.md`).
+The first fetches the keypoints and matcher modules and LightGlue's float16 weights
+(Apache-2.0, 24 MB) into `third_party/match-web`, checked against pinned hashes.
+`build/demo-wasm/demo/web` then holds the page, `demo.js`, `jba_demo.js`,
+`jba_demo.wasm`, `jkp/`, `jmt/` and `samples/`, ready for any static server
+(`python3 -m http.server -d build/demo-wasm/demo/web`). The documentation site includes
+the folder when built with `JBA_DEMO_WEB=build/demo-wasm/demo/web`
+(`docs-site/README.md`).
 
 The `docs` workflow builds the same way, from poselib-gpu's `main`, and deploys the
 site with the demo on every push to main (D148).
+
+The sample images are ETH3D's (Schöps et al., CVPR 2017), CC BY-NC-SA 4.0
+(non-commercial): the undistorted DSLR images of *delivery_area*, scaled to 1280 px and
+re-encoded as JPEG; `samples.json` gives each one's focal length from ETH3D's calibration,
+scaled the same way.
 
 ## What it checks
 
@@ -229,7 +255,6 @@ thresholds follow the noise (`thresholds_for_noise`): poselib-gpu's defaults up 
 half a pixel, larger above.
 
 Measured on 2026-11-16 on the owner's M5 Pro: the three scenes pass at seeds 0 to 8
-natively, on the CPU and with Metal for both libraries, and at seed 0 in the browser
-pane (Chrome) on WebGPU and on the CPU. With the default backends they pass up to 2 px
+natively, on the CPU and with Metal for both libraries. With the default backends they pass up to 2 px
 of noise with half the matches wrong and 30 unrelated pairs, except the orbit at half the matches
 wrong, where no pair keeps the 100 inliers the first-pair rule asks for.

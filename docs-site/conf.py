@@ -28,28 +28,29 @@ autodoc_typehints = "signature"
 # The docstring examples run with `sphinx-build -b doctest` (document 08).
 doctest_global_setup = "import numpy as np\nimport just_ba\njba = just_ba"
 
-# The live demo (D134): its built page and module, from a WebAssembly build of the
-# demo app, copied to demo/ when JBA_DEMO_WEB names their folder. Without it the
-# demo page says the demo is not in this build. A relative path is from the repository root.
+# The live demo (D134, D156): its built folder (the page, its script, the module, the
+# keypoints and matcher modules and the sample images), from a WebAssembly build of the
+# demo app, copied to demo/ when JBA_DEMO_WEB names it. The demo is a page of its own with
+# the site's top bar; without it the page "Live demo" says the demo is not in this build.
+# A relative path is from the repository root.
 DEMO_WEB = os.environ.get("JBA_DEMO_WEB", "")
 if DEMO_WEB:
     DEMO_WEB = os.path.join(os.path.dirname(HERE), DEMO_WEB)
-DEMO_FILES = ("index.html", "jba_demo.js", "jba_demo.wasm")
+DEMO_FILES = ("index.html", "demo.js", "jba_demo.js", "jba_demo.wasm", "jkp/jkp.js", "jmt/jmt.js",
+              "samples/samples.json")
 if DEMO_WEB:
     missing = [f for f in DEMO_FILES if not os.path.isfile(os.path.join(DEMO_WEB, f))]
     if missing:
         raise RuntimeError(f"JBA_DEMO_WEB={DEMO_WEB} lacks {', '.join(missing)}")
     tags.add("demo")  # noqa: F821  (Sphinx provides `tags` to conf.py)
+html_context = {"jb_demo": bool(DEMO_WEB)}
 
 
 def copy_demo(app, exception):
     if exception is None and DEMO_WEB and app.builder.format == "html":
         import shutil
 
-        out = os.path.join(app.outdir, "demo")
-        os.makedirs(out, exist_ok=True)
-        for f in DEMO_FILES:
-            shutil.copy2(os.path.join(DEMO_WEB, f), out)
+        shutil.copytree(DEMO_WEB, os.path.join(app.outdir, "demo"), dirs_exist_ok=True)
 
 
 def setup(app):
