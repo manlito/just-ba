@@ -860,6 +860,10 @@ async function start() {
     S.session = { width: w, height: h };
     // Like Recon's 800 confident keypoints are for a 1280 x 720 frame.
     S.settings.minKeypoints = Math.max(150, Math.round(800 * Math.min(1, (w * h) / (1280 * 720))));
+    // A phone checks ~2 frames a second, so at walking pace the overlap falls ~0.2 between
+    // checks and keyframes were kept far apart: on a Pixel 9a, pairs two keyframes apart
+    // had 4-42 matches and the map broke into pieces. Keeping earlier leaves overlap two back.
+    if (phone) S.settings.targetOverlap = 0.7;
     S.wakeLock = await navigator.wakeLock?.request('screen').catch(() => null);
     S.running = true;
     S.busy = false;
