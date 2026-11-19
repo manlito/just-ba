@@ -144,7 +144,9 @@ jobs:
 
   publish:
     name: publish to PyPI
-    if: github.event_name == 'push' || inputs.publish
+    # A push publishes from main only (a branch added to the trigger to test the build
+    # never publishes); by hand, publish=true.
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || inputs.publish
     needs: [version, sdist, wheels]
     runs-on: ubuntu-24.04
     permissions:
