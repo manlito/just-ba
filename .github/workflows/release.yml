@@ -1,7 +1,14 @@
-# Release to PyPI (document 08, D111). Started by hand only, like CI (D49, D110):
+# Release to PyPI (document 08, D111, D152). Runs on every push to main, a merge
+# included, and publishes; by hand it builds and tests, and publishes only if asked:
 #
 #   gh workflow run release                  # build and test every wheel, publish nothing
 #   gh workflow run release -f publish=true  # the same, then publish to PyPI
+#
+# The version is chosen here (packaging/version.py, D152): the latest release, tag
+# or PyPI, with its patch bumped, or project(VERSION) in CMakeLists.txt when that is
+# higher (a minor or major release is an edit there). It is written into the
+# checkout before each build, and the tag vX.Y.Z is pushed once every package is up.
+# Pushes that change only the planning notes in docs/ release nothing.
 #
 # Free hosted runners only (D39). Three packages (D114): just-ba (CPU, and Metal on
 # macOS) for Linux x86_64, macOS arm64 and Windows x86_64, with the sdist;
@@ -12,6 +19,9 @@
 name: release
 
 on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**"]
   workflow_dispatch:
     inputs:
       publish:
@@ -19,6 +29,8 @@ on:
         type: boolean
         default: false
 
+# One release at a time, never cancelled: a push during a release waits, and only
+# the newest waiting push is released next.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -30,14 +42,31 @@ env:
   CUDSS_VERSION: "1.0.0.35"
 
 jobs:
+  version:
+    name: choose the version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the tags
+      - id: next
+        run: |
+          v=$(python3 packaging/version.py next just-ba just-ba-cu12 just-ba-cu13)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "::notice::version $v"
+
   sdist:
     name: sdist
+    needs: version
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: python packaging/version.py set ${{ needs.version.outputs.version }}
       - run: python -m pip install build && python -m build --sdist
       - uses: actions/upload-artifact@v7
         with:
@@ -46,6 +75,7 @@ jobs:
 
   wheels:
     name: ${{ matrix.variant }} wheel (${{ matrix.os }})
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,6 +97,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: python packaging/version.py set ${{ needs.version.outputs.version }}
 
       # Linux CUDA: the toolkit and cuDSS are fetched inside the manylinux container.
       - name: CUDA package settings (Linux)
@@ -113,12 +144,14 @@ jobs:
 
   publish:
     name: publish to PyPI
-    if: inputs.publish
-    needs: [sdist, wheels]
+    if: github.event_name == 'push' || inputs.publish
+    needs: [version, sdist, wheels]
     runs-on: ubuntu-24.04
     permissions:
       id-token: write  # trusted publishing
+      contents: write  # the release tag
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
@@ -133,6 +166,7 @@ jobs:
           ls -lR pkg
       # skip-existing: a re-run uploads only what is not on PyPI yet, so the packages
       # can go up one at a time while each first upload creates its project (D129).
+      # A new run never meets an existing version: version.py reads PyPI.
       - uses: pypa/gh-action-pypi-publish@v1.14.3
         with:
           packages-dir: pkg/just-ba/
@@ -145,3 +179,10 @@ jobs:
         with:
           packages-dir: pkg/just-ba-cu13/
           skip-existing: true
+      # Once every package is up. A re-run finds the tag there already.
+      - name: Tag the release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          git tag "v$VERSION" "$GITHUB_SHA"
+          git push origin "v$VERSION" || git ls-remote --exit-code --tags origin "v$VERSION"
