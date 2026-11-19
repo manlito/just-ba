@@ -9,6 +9,7 @@
 #include <cstring>
 #include <stdexcept>
 
+#include "align.h"
 #include "geometry.h"
 #include "jba/camera_model.h"
 #include "jba/report.h"
@@ -56,6 +57,10 @@ std::string check(const Capture& c) {
     return "image_intrinsics needs one block per image";
   for (std::int32_t b : c.image_intrinsics)
     if (b < 0 || b >= blocks) return "an image names an intrinsics block that does not exist";
+  if (!c.prior_position.empty() && c.prior_position.size() != 3 * c.num_images())
+    return "prior_position needs 3 values per image";
+  if (!c.prior_sigma.empty() && c.prior_sigma.size() != 2 * c.num_images())
+    return "prior_sigma needs 2 values per image";
   for (const Pair& p : c.pairs) {
     if (p.ka.size() != p.kb.size()) return "a pair has more keypoints on one side than the other";
     if (p.a < 0 || p.b < 0 || p.a == p.b || static_cast<std::size_t>(std::max(p.a, p.b)) >= c.num_images())
@@ -83,8 +88,70 @@ struct Map {
   std::vector<char> obs_dead;                   // per observation: moved to a track split off
   std::vector<char> obs_filtered;               // per observation: dropped from its track's point by the filter
   std::vector<std::int64_t> split_tried;        // per track: leftovers at its last failed split
+  bool aligned = false;                         // in the frame of the position priors (D150)
   std::size_t n_images() const { return registered.size(); }
 };
+
+// Whether the run uses the capture's position priors.
+bool uses_priors(const Capture& c, const MapperOptions& o) { return o.use_position_priors && !c.prior_position.empty(); }
+
+// An image's prior standard deviations, horizontal and vertical: the capture's, else
+// the options' defaults.
+void prior_sigmas(const Capture& c, const MapperOptions& o, std::size_t image, double* h, double* v) {
+  *h = o.prior_sigma_horizontal;
+  *v = o.prior_sigma_vertical;
+  if (c.prior_sigma.empty()) return;
+  const double sh = c.prior_sigma[2 * image], sv = c.prior_sigma[2 * image + 1];
+  if (std::isfinite(sh) && sh > 0.0) *h = sh;
+  if (std::isfinite(sv) && sv > 0.0) *v = sv;
+}
+
+// Distance from a camera centre to its prior in standard deviations (Mahalanobis, the
+// horizontal and vertical sigmas on their axes).
+double prior_distance(const Capture& c, const MapperOptions& o, std::size_t image, const double C[3]) {
+  double h, v;
+  prior_sigmas(c, o, image, &h, &v);
+  const double* P = &c.prior_position[3 * image];
+  const double dx = (C[0] - P[0]) / h, dy = (C[1] - P[1]) / h, dz = (C[2] - P[2]) / v;
+  return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+// Root mean square distance of points (3 values each) from their best line: how far
+// they spread across it.
+double spread_across_line(const std::vector<double>& pts) {
+  const std::size_t n = pts.size() / 3;
+  if (n < 2) return 0.0;
+  double mean[3] = {0, 0, 0};
+  for (std::size_t i = 0; i < n; ++i)
+    for (int d = 0; d < 3; ++d) mean[d] += pts[3 * i + d] / static_cast<double>(n);
+  double S[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+  for (std::size_t i = 0; i < n; ++i)
+    for (int r = 0; r < 3; ++r)
+      for (int q = 0; q < 3; ++q) S[3 * r + q] += (pts[3 * i + r] - mean[r]) * (pts[3 * i + q] - mean[q]) / static_cast<double>(n);
+  // The largest eigenvalue by power iteration; the rest of the trace is the spread.
+  double v[3] = {1.0, 0.7, 0.3}, lambda = 0.0;
+  for (int it = 0; it < 100; ++it) {
+    double w[3] = {0, 0, 0};
+    for (int r = 0; r < 3; ++r)
+      for (int q = 0; q < 3; ++q) w[r] += S[3 * r + q] * v[q];
+    const double norm = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+    if (!(norm > 0.0)) break;
+    for (int d = 0; d < 3; ++d) v[d] = w[d] / norm;
+    lambda = norm;
+  }
+  return std::sqrt(std::max(0.0, S[0] + S[4] + S[8] - lambda));
+}
+
+// The median horizontal standard deviation of some images' priors.
+double median_sigma_h(const Capture& c, const MapperOptions& o, const std::vector<int>& images) {
+  std::vector<double> h;
+  for (int i : images) {
+    double sh, sv;
+    prior_sigmas(c, o, static_cast<std::size_t>(i), &sh, &sv);
+    h.push_back(sh);
+  }
+  return median(h);
+}
 
 // The tracks: connected components of the verified matches, two keypoints or more,
 // in a fixed order. A component with two keypoints in one image (a wrong match joined
@@ -358,13 +425,32 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
     }
   }
 
+  // Position priors once the map is in their frame (D150): the camera centre only (the
+  // rotation rows of the whitening are zero), in the working frame, so nothing else
+  // holds the gauge.
+  if (m.aligned && uses_priors(*m.capture, o))
+    for (std::size_t k = 0; k < a.image_of.size(); ++k) {
+      const std::size_t i = static_cast<std::size_t>(a.image_of[k]);
+      if (!m.capture->has_prior(i)) continue;
+      double h, v;
+      prior_sigmas(*m.capture, o, i, &h, &v);
+      const double* P = &m.capture->prior_position[3 * i];
+      p.glob_image.push_back(static_cast<std::int32_t>(k));
+      p.glob_pose.insert(p.glob_pose.end(), {1.0, 0.0, 0.0, 0.0, -P[0], -P[1], -P[2]});
+      double W[36] = {};
+      W[3 * 6 + 3] = W[4 * 6 + 4] = 1.0 / h;
+      W[5 * 6 + 5] = 1.0 / v;
+      p.glob_sqrt_info.insert(p.glob_sqrt_info.end(), W, W + 36);
+    }
+
   jba::SolverOptions so;
   so.loss = {jba::LossType::Cauchy, o.loss_scale > 0.0 ? o.loss_scale : o.max_reproj_px};
   so.backend = o.ba_backend;
   so.num_threads = o.threads;
   so.max_iterations = max_iterations;
-  // The gauge is free (no priors): GaugeMode::Auto holds one pose and one translation
-  // coordinate, so the frame and scale set by the first pair carry through.
+  // Without priors the gauge is free: GaugeMode::Auto holds one pose and one translation
+  // coordinate, so the frame and scale set by the first pair carry through. With them
+  // (a set that is the working frame) nothing is held.
   // Stopped by the callback: the run ends, so nothing more is needed.
   if (jba::solve(p, so, on_iteration).termination == jba::Termination::Cancelled) return a;
 
@@ -411,6 +497,9 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   kept_problem.intrinsics_free = p.intrinsics_free;
   kept_problem.poses = p.poses;
   kept_problem.image_intrinsics = p.image_intrinsics;
+  kept_problem.glob_image = p.glob_image;
+  kept_problem.glob_pose = p.glob_pose;
+  kept_problem.glob_sqrt_info = p.glob_sqrt_info;
   std::vector<int> point_index(a.track_of.size(), -1);
   std::vector<std::int32_t> track_of;
   for (std::size_t k = 0; k < obs_of.size(); ++k) {
@@ -454,21 +543,136 @@ void report(std::vector<Step>* steps, const char* stage, const std::vector<std::
 // the most inliers whose median triangulation angle is at least 16 degrees (COLMAP's
 // init_min_tri_angle); if there is none, the same with 8, 4, then 2 degrees.
 // Only pairs whose two images are in no earlier model, as COLMAP starts a new model.
+// With position priors (D150), pairs of two images with a prior come first, under every
+// angle, so the model can move into the priors' frame early; then the others.
 int choose_first_pair(const Capture& c, const Reconstruction& r, const MapperOptions& o,
                       const std::vector<char>& in_a_model) {
-  for (const double floor_deg : {16.0, 8.0, 4.0, 2.0}) {
-    int best = -1;
-    for (std::size_t i = 0; i < c.pairs.size(); ++i) {
-      const jpo_pose_result& p = r.pair_results[i];
-      if (in_a_model[static_cast<std::size_t>(c.pairs[i].a)] || in_a_model[static_cast<std::size_t>(c.pairs[i].b)]) continue;
-      if (!r.pair_kept[i] || p.status != JPO_OK || p.n_inliers < o.min_first_pair_inliers ||
-          p.median_tri_angle_deg < floor_deg)
-        continue;
-      if (best < 0 || p.n_inliers > r.pair_results[best].n_inliers) best = static_cast<int>(i);
+  const bool priors = uses_priors(c, o);
+  for (const bool need_priors : {true, false}) {
+    if (need_priors && !priors) continue;
+    for (const double floor_deg : {16.0, 8.0, 4.0, 2.0}) {
+      int best = -1;
+      for (std::size_t i = 0; i < c.pairs.size(); ++i) {
+        const jpo_pose_result& p = r.pair_results[i];
+        const std::size_t a = static_cast<std::size_t>(c.pairs[i].a), b = static_cast<std::size_t>(c.pairs[i].b);
+        if (in_a_model[a] || in_a_model[b]) continue;
+        if (need_priors && !(c.has_prior(a) && c.has_prior(b))) continue;
+        if (!r.pair_kept[i] || p.status != JPO_OK || p.n_inliers < o.min_first_pair_inliers ||
+            p.median_tri_angle_deg < floor_deg)
+          continue;
+        if (best < 0 || p.n_inliers > r.pair_results[best].n_inliers) best = static_cast<int>(i);
+      }
+      if (best >= 0) return best;
     }
-    if (best >= 0) return best;
   }
   return -1;
+}
+
+// Moving a model into the frame of its position priors (D150): the similarity of the
+// registered images' camera centres onto their priors, from the triples that agree
+// with the most (within prior_inlier_sigmas), refitted on those. False, and the map
+// unchanged, while fewer than prior_min_images agree or their priors lie too close to
+// a line to set the rotation about it.
+bool align_to_priors(Map& m, const MapperOptions& o) {
+  const Capture& c = *m.capture;
+  std::vector<int> images;
+  std::vector<double> centres, priors;
+  for (std::size_t i = 0; i < m.n_images(); ++i) {
+    if (!m.registered[i] || !c.has_prior(i)) continue;
+    double C[3];
+    camera_centre(&m.cams.poses[7 * i], C);
+    images.push_back(static_cast<int>(i));
+    centres.insert(centres.end(), C, C + 3);
+    priors.insert(priors.end(), &c.prior_position[3 * i], &c.prior_position[3 * i] + 3);
+  }
+  const std::size_t n = images.size();
+  const std::size_t need = static_cast<std::size_t>(std::max(3, o.prior_min_images));
+  if (n < need || spread_across_line(priors) < o.prior_min_spread * median_sigma_h(c, o, images)) return false;
+
+  struct Sim {
+    double R[9], t[3], s;
+  };
+  auto fit = [&](const std::vector<std::size_t>& use, Sim& sim) {
+    std::vector<double> from, to;
+    for (std::size_t q : use) {
+      from.insert(from.end(), &centres[3 * q], &centres[3 * q] + 3);
+      to.insert(to.end(), &priors[3 * q], &priors[3 * q] + 3);
+    }
+    fit_similarity(from, to, sim.R, sim.t, &sim.s);
+    return std::isfinite(sim.s) && sim.s > 0.0;
+  };
+  auto inliers_of = [&](const Sim& sim) {
+    std::vector<std::size_t> in;
+    for (std::size_t q = 0; q < n; ++q) {
+      double Y[3];
+      const double zero[3] = {0, 0, 0};
+      apply(sim.R, zero, &centres[3 * q], Y);
+      const double X[3] = {sim.s * Y[0] + sim.t[0], sim.s * Y[1] + sim.t[1], sim.s * Y[2] + sim.t[2]};
+      if (prior_distance(c, o, static_cast<std::size_t>(images[q]), X) < o.prior_inlier_sigmas) in.push_back(q);
+    }
+    return in;
+  };
+  // Triples: all of them when few, else 200 drawn with the run's seed.
+  std::vector<std::size_t> best_in;
+  auto try_triple = [&](std::size_t x, std::size_t y, std::size_t z) {
+    Sim sim;
+    if (!fit({x, y, z}, sim)) return;
+    std::vector<std::size_t> in = inliers_of(sim);
+    if (in.size() > best_in.size()) best_in = std::move(in);
+  };
+  if (n <= 12) {
+    for (std::size_t x = 0; x < n; ++x)
+      for (std::size_t y = x + 1; y < n; ++y)
+        for (std::size_t z = y + 1; z < n; ++z) try_triple(x, y, z);
+  } else {
+    Rng rng(o.seed + 0x5eedull);
+    for (int k = 0; k < 200; ++k) {
+      const std::size_t x = static_cast<std::size_t>(rng.next() % n);
+      const std::size_t y = static_cast<std::size_t>(rng.next() % n);
+      const std::size_t z = static_cast<std::size_t>(rng.next() % n);
+      if (x != y && y != z && x != z) try_triple(x, y, z);
+    }
+  }
+  Sim sim;
+  for (int round = 0; round < 3 && best_in.size() >= need; ++round) {
+    if (!fit(best_in, sim)) return false;
+    std::vector<std::size_t> in = inliers_of(sim);
+    if (in == best_in) break;
+    best_in = std::move(in);
+  }
+  if (best_in.size() < need || !fit(best_in, sim)) return false;
+  std::vector<double> in_priors;
+  std::vector<int> in_images;
+  for (std::size_t q : best_in) {
+    in_priors.insert(in_priors.end(), &priors[3 * q], &priors[3 * q] + 3);
+    in_images.push_back(images[q]);
+  }
+  if (spread_across_line(in_priors) < o.prior_min_spread * median_sigma_h(c, o, in_images)) return false;
+
+  // X' = s R X + t. A pose (Rc, tc) becomes (Rc R^T, s tc - Rc R^T t): the same camera,
+  // its coordinates scaled by s.
+  double Rt[9];
+  transpose3(sim.R, Rt);
+  for (std::size_t i = 0; i < m.n_images(); ++i) {
+    if (!m.registered[i]) continue;
+    double* pose = &m.cams.poses[7 * i];
+    double Rc[9], Rn[9], u[3];
+    quat_to_rotmat(pose, Rc);
+    mat3_mul(Rc, Rt, Rn);
+    const double zero[3] = {0, 0, 0};
+    apply(Rn, zero, sim.t, u);
+    for (int k = 0; k < 3; ++k) pose[4 + k] = sim.s * pose[4 + k] - u[k];
+    rotmat_to_quat(Rn, pose);
+  }
+  for (std::size_t t = 0; t < m.tracks.size(); ++t) {
+    if (!m.has_point[t]) continue;
+    double Y[3];
+    const double zero[3] = {0, 0, 0};
+    apply(sim.R, zero, &m.X[3 * t], Y);
+    for (int k = 0; k < 3; ++k) m.X[3 * t + k] = sim.s * Y[k] + sim.t[k];
+  }
+  m.aligned = true;
+  return true;
 }
 
 }  // namespace
@@ -743,6 +947,21 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     run.point_track = std::move(a.track_of);
     run.all_tracks = mm.tracks;
     run.mean_error_px = a.mean_error_px;
+    run.aligned = mm.aligned;
+    std::vector<double> eh, ev;
+    for (std::size_t i = 0; i < n_img; ++i) {
+      if (!mm.registered[i] || !uses_priors(c, o) || !c.has_prior(i)) continue;
+      ++run.prior_images;
+      if (!mm.aligned) continue;
+      double C[3];
+      camera_centre(&mm.cams.poses[7 * i], C);
+      const double* P = &c.prior_position[3 * i];
+      eh.push_back(std::hypot(C[0] - P[0], C[1] - P[1]));
+      ev.push_back(std::abs(C[2] - P[2]));
+      run.prior_inliers += prior_distance(c, o, i, C) < o.prior_inlier_sigmas;
+    }
+    run.prior_error_horizontal = median(eh);
+    run.prior_error_vertical = median(ev);
     run.time.total = seconds_since(t_start);
   };
   auto timed_points = [&](bool split) {
@@ -752,6 +971,8 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   };
   auto timed_adjust = [&](int iterations) {
     const auto t = Clock::now();
+    // Into the priors' frame as soon as enough registered images have one (D150).
+    if (!m.aligned && uses_priors(c, o)) align_to_priors(m, o);
     Adjusted a = adjust(m, o, iterations, on_iteration);
     ++run.adjustments;
     run.time.adjust += seconds_since(t);

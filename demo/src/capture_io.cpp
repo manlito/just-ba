@@ -87,6 +87,11 @@ CaptureFile read_capture(const std::string& path) {
     }
   }
 
+  // Position priors (D150): NaN rows for images without one.
+  c.prior_position = get<double>(s, path, "image.prior_position", {n_img, 3}, false);
+  c.prior_sigma = get<double>(s, path, "image.prior_sigma", {n_img, 2}, false);
+  if (!c.prior_sigma.empty() && c.prior_position.empty()) fail(path, "image.prior_sigma without image.prior_position");
+
   const auto names = get<std::uint8_t>(s, path, "image.names", {-1}, false);
   if (!names.empty()) {
     std::string cur;
@@ -156,6 +161,8 @@ void write_capture(const std::string& path, const CaptureFile& f) {
   if (!f.image_size.empty()) s.emplace_back("camera.size", make_section(f.image_size, {blocks, 2}));
   if (!c.image_intrinsics.empty()) s.emplace_back("image.intrinsics", make_section(c.image_intrinsics, {n_img}));
   if (!c.focal_unknown.empty()) s.emplace_back("camera.focal_unknown", make_section(c.focal_unknown, {blocks}));
+  if (!c.prior_position.empty()) s.emplace_back("image.prior_position", make_section(c.prior_position, {n_img, 3}));
+  if (!c.prior_sigma.empty()) s.emplace_back("image.prior_sigma", make_section(c.prior_sigma, {n_img, 2}));
   if (!f.names.empty()) {
     std::vector<std::uint8_t> bytes;
     for (std::size_t i = 0; i < f.names.size(); ++i) {
