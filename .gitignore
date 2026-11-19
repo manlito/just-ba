@@ -8,3 +8,5 @@ __pycache__/
 /tests/data/real/
 dist/
 wheelhouse/
+# The live demo's keypoints and matcher modules (demo/tools/fetch_match_web.sh).
+/third_party/match-web/
