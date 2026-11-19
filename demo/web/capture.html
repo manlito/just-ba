@@ -112,8 +112,8 @@
   @media (max-width: 1040px) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
   @media (max-width: 760px) {
     main { padding: 12px 12px 120px; }
-    h1 { font-size: 19px; }
-    .lede { font-size: 13px; }
+    h1 { font-size: 18px; margin-bottom: 8px; }
+    .lede { display: none; }
     .stage { grid-template-columns: minmax(0, 1fr); }
     .tabs { display: inline-flex; }
     .stage[data-tab="camera"] .pane.model, .stage[data-tab="model"] .pane.camera { display: none; }
@@ -144,10 +144,7 @@
 
 <main id="content">
   <h1>Live capture</h1>
-  <p class="lede">Point your camera at a scene and walk around it, slowly. The page keeps a keyframe each time the view has
-    moved on enough, and adds it to a map that grows as you capture; Finish then reconstructs every keyframe from that
-    map. Keypoints (ALIKED), matches (FlexGlue or LightGlue), pose estimation and bundle adjustment all run on your GPU,
-    in this page. Nothing leaves your device.</p>
+  <p class="lede">Walk around a scene; keyframes become a 3D map, on your GPU. Nothing is uploaded.</p>
   <div id="unsupported" class="notice" hidden></div>
   <div id="notice" class="notice" hidden></div>
 

@@ -31,8 +31,10 @@ const FLEXGLUE = {
   storedBytes: 283537600,
 };
 // Like Recon's numbers (src-tauri/src/capture.rs, online.rs).
-const LIVE = { flexglue: { layers: 0 }, lightglue: { layers: 9, depthConfidence: 0.95, widthConfidence: 0.99 } };
-const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 9, depthConfidence: 0.95, widthConfidence: 0.99 } };
+// LightGlue's live and map depths: on a Pixel 9a at 640 px, 2 layers take 160 ms (342
+// matches), 5 take 330 ms, adaptive 9 about 510 ms.
+const LIVE = { flexglue: { layers: 0 }, lightglue: { layers: 2, depthConfidence: -1, widthConfidence: -1 } };
+const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 5, depthConfidence: -1, widthConfidence: -1 } };
 const SEQUENTIAL = 3;            // keyframes each new one is matched to
 const MATCHES_PER_PAIR = 1024;   // the strongest, per online pair
 const WINDOW = 8;                // keyframes adjusted together
@@ -43,10 +45,10 @@ const FINISH_SHORTLIST = 10;     // pairs per keyframe for the finish (FlexGlue'
 const FINISH_SEQUENTIAL = 5;     // LightGlue's finish: each keyframe with the five before it
 const MIN_FINISH_MATCHES = 15;
 
-// A phone: LightGlue by default (FlexGlue's backbone is ~1 GB of GPU memory and slow there),
-// a smaller working image and fewer keypoints.
+// A phone: LightGlue by default (FlexGlue's backbone is ~1 GB of GPU memory and takes ~2 s a
+// frame on a Pixel 9a), a 640 px working image (ALIKED 136 ms there) and 1,024 keypoints.
 const phone = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820;
-const MAX_SIDE = Number(params.get('side')) || (phone ? 960 : 1280);
+const MAX_SIDE = Number(params.get('side')) || (phone ? 640 : 1280);
 const FEATURE_CACHE = phone ? 24 : 48;
 
 const S = {
@@ -829,6 +831,8 @@ async function start() {
       minPairInliers: ONLINE_MIN_PAIR_INLIERS, poses: backends.poses.includes('webgpu') ? 'webgpu' : 'cpu', ba: 'cpu',
     });
     S.session = { width: w, height: h };
+    // Like Recon's 800 confident keypoints are for a 1280 x 720 frame.
+    S.settings.minKeypoints = Math.max(150, Math.round(800 * Math.min(1, (w * h) / (1280 * 720))));
     S.wakeLock = await navigator.wakeLock?.request('screen').catch(() => null);
     S.running = true;
     S.busy = false;
