@@ -428,7 +428,7 @@ struct Adjusted {
 // with fewer than two views or a small triangulation angle are removed (their tracks
 // can be triangulated again later). `on_iteration` goes to the solver; when it stops the
 // solve, the map is left as it was.
-// With `free` (a session's window, D152): only the points some free registered image
+// With `free` (a session's window, D153): only the points some free registered image
 // sees, with the poses of the free images adjusted and those of the other registered
 // images that see the points held; with fewer than two held, everything as without.
 Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::IterationCallback& on_iteration,
@@ -1090,7 +1090,7 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
 
   const Map fresh = m;  // the map before any model: tracks built, nothing registered
 
-  // The start's images that agree with their verified pairs (D152): per image, the
+  // The start's images that agree with their verified pairs (D153): per image, the
   // median over its kept pairs to other start images of the angle between the relative
   // rotation of the two start poses and the pair's own. An image placed wrong while
   // capturing disagrees with most of its pairs; it is left out of the start and placed
@@ -1230,7 +1230,7 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
   auto grow = [&](int first, std::vector<Step>* steps) -> bool {
     rejected.assign(n_img, -1);
     if (first == kResume) {
-      // -- 3'. The start's model (D152): its images and poses, its points triangulated
+      // -- 3'. The start's model (D153): its images and poses, its points triangulated
       // from the tracks of every pair, and everything adjusted.
       std::vector<std::int32_t> added;
       for (std::size_t i = 0; i < n_img; ++i)
@@ -1452,7 +1452,7 @@ double pair_rotation_error_deg(const Capture& c, const Reconstruction& r, double
   return err[k];
 }
 
-// ---------------------------------------------------------------- sessions (D152)
+// ---------------------------------------------------------------- sessions (D153)
 
 namespace {
 

@@ -75,7 +75,7 @@ scenes; `jba_demo run --no-priors` ignores them.
 
 ## Sessions: a map that grows while the capture is taken
 
-`demo::Session` (D152) grows a map image by image, for a capture that reconstructs as
+`demo::Session` (D153) grows a map image by image, for a capture that reconstructs as
 it is taken. `add(SessionImage)` takes an image's keypoints, its matches to earlier
 images of the session and an optional position prior. The matches are verified and
 added to the tracks; once the map has started (a pair reaching 16 degrees of median

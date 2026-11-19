@@ -1,4 +1,4 @@
-// The mapper's sessions (D152): a map grown one image at a time, each image with its
+// The mapper's sessions (D153): a map grown one image at a time, each image with its
 // matches to earlier ones, then finished from the live map with Mapper::run_from. On
 // the generated scenes: every image placed as it comes, the live map near the truth and
 // the batch run, the finish as good as the batch run; a session fed only sequential

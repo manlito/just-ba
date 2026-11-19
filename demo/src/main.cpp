@@ -24,7 +24,7 @@
 //                    [--finish other.jbc]
 //                    [--thresholds colmap|demo] [--min-pair-inliers n] [--min-pair-coverage share]
 //                    [common options]
-//     Feeds the capture's images in order to a mapper session (D152), each with its pairs
+//     Feeds the capture's images in order to a mapper session (D153), each with its pairs
 //     to earlier images, as a capture in progress would; then finishes it from the live
 //     map with every pair, or with those of --finish (the same images, other pairs).
 //     Prints the pieces, and the largest piece and the finish against a batch run of

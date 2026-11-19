@@ -272,7 +272,7 @@ struct Reconstruction {
   Timings time;
 };
 
-// Where a run starts instead of a first pair (D152): a model already grown, normally a
+// Where a run starts instead of a first pair (D153): a model already grown, normally a
 // Session's live map. Per image of the capture its registered flag and pose, and the
 // intrinsics, blocks as the capture's.
 struct StartFrom {
@@ -283,7 +283,7 @@ struct StartFrom {
   double focal_factor = 1.0;       // reported as the run's
 };
 
-// How well a result's cameras agree with its verified pairs (D152): per kept pair whose
+// How well a result's cameras agree with its verified pairs (D153): per kept pair whose
 // two images are registered, the angle between the relative rotation of their poses and
 // the pair's own (poselib-gpu's, from its matches), in degrees; the `q` quantile of
 // those (0.5 the median), or NaN without such pairs.
@@ -302,7 +302,7 @@ class Mapper {
   // Neither changes the result.
   Reconstruction run(const Capture& capture, const StepCallback& on_step = {},
                      const ProgressCallback& on_progress = {});
-  // The same run with its first model taken from `start` (D152): no focal search (the
+  // The same run with its first model taken from `start` (D153): no focal search (the
   // start's intrinsics are used), every pair verified, the tracks built; the start's
   // registered images keep their poses (but those whose relative rotations disagree
   // with their verified pairs by a median of over 5 degrees, which are left out and
@@ -325,7 +325,7 @@ class Mapper {
   jpo_ctx* ctx_ = nullptr;
 };
 
-// ---- Sessions (D152): the map grown one image at a time, while a capture is taken.
+// ---- Sessions (D153): the map grown one image at a time, while a capture is taken.
 
 struct SessionOptions {
   // Images adjusted together after each registration: those just registered and the
@@ -386,7 +386,7 @@ struct SessionStep {
   bool ok() const { return error.empty(); }
 };
 
-// A map that grows image by image (D152). Each image comes with its matches to earlier
+// A map that grows image by image (D153). Each image comes with its matches to earlier
 // images: they are verified, added to the tracks, and once the map has started (the
 // first pair fit to start from, after a focal search when the focal length is a guess)
 // the image is placed by PnP, its new points triangulated and a window of the latest
@@ -433,7 +433,7 @@ class Session {
   std::vector<std::int32_t> keypoint_points(std::size_t i) const;
   // Everything added: the keypoints, the pairs as given, the priors.
   const Capture& capture() const;
-  // The later run (D152): `capture`, the session's images with any pairs (normally the
+  // The later run (D153): `capture`, the session's images with any pairs (normally the
   // session's matched again more thoroughly and pairs it did not have), reconstructed
   // with Mapper::run_from from the live map, or from the piece with the most images
   // when an earlier one has more. Before the map started, Mapper::run.

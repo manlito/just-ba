@@ -90,7 +90,7 @@ else()
     add_executable(test_demo_diagnostics tests/test_diagnostics.cpp)
     target_link_libraries(test_demo_diagnostics PRIVATE jba_demo_mapper jba_warnings)
     add_test(NAME demo_diagnostics COMMAND test_demo_diagnostics)
-    # Sessions (D152): the map grown image by image, then finished from the live map.
+    # Sessions (D153): the map grown image by image, then finished from the live map.
     add_executable(test_demo_session tests/test_session.cpp)
     target_link_libraries(test_demo_session PRIVATE jba_demo_mapper jba_warnings)
     add_test(NAME demo_session COMMAND test_demo_session)
