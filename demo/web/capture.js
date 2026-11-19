@@ -52,6 +52,8 @@ const MIN_FINISH_MATCHES = 15;
 const phone = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820;
 const MAX_SIDE = Number(params.get('side')) || (phone ? 640 : 1280);
 const FEATURE_CACHE = phone ? 24 : 48;
+// Held keyframes tried a frame while lost: each is a live match (~160 ms on a Pixel 9a).
+const RELOCALIZE_PER_FRAME = phone ? 1 : G.RELOCALIZE_PER_FRAME;
 
 const S = {
   gpu: null, precision: 'fp32',
@@ -163,7 +165,7 @@ async function measure(r, f, xy, w, h) {
 async function relocalize(f, xy, w, h, all) {
   const others = S.held.filter((k) => k !== S.reference && k.feat).reverse();
   if (!others.length) return null;
-  const n = all ? others.length : Math.min(G.RELOCALIZE_PER_FRAME, others.length);
+  const n = all ? others.length : Math.min(RELOCALIZE_PER_FRAME, others.length);
   const start = all ? 0 : S.cursor % others.length;
   let best = null;
   for (let k = 0; k < n; k++) {
