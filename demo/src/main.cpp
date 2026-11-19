@@ -20,10 +20,22 @@
 //     Reconstructs a capture file (from demo/tools/colmap_capture.py) and, when it holds a
 //     reference reconstruction, compares with it (document 05, level 3).
 //
+//   jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n] [--restart-after n]
+//                    [--finish other.jbc]
+//                    [--thresholds colmap|demo] [--min-pair-inliers n] [--min-pair-coverage share]
+//                    [common options]
+//     Feeds the capture's images in order to a mapper session (D153), each with its pairs
+//     to earlier images, as a capture in progress would; then finishes it from the live
+//     map with every pair, or with those of --finish (the same images, other pairs).
+//     Prints the pieces, and the largest piece and the finish against a batch run of
+//     the finish's pairs (and against the file's reference, when it has one). The
+//     capture must have one intrinsics block.
+//
 //   common options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]
 //                   [--refine none|focal|focal+distortion] [--export dir] [-v]
 //     --refine: the intrinsics the adjustments refine. Default: focal+distortion with
 //     --thresholds colmap, as COLMAP's mapper; none otherwise.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -53,6 +65,10 @@ int usage() {
                "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [--no-priors]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share]\n"
                "                    [options]\n"
+               "       jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n] [--restart-after n]\n"
+               "                    [--finish other.jbc]\n"
+               "                    [--thresholds colmap|demo]\n"
+               "                    [--min-pair-inliers n] [--min-pair-coverage share] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
                "         [--refine none|focal|focal+distortion] [--export dir] [-v]\n");
   return 2;
@@ -480,6 +496,170 @@ int run(const std::vector<std::string>& args) {
   return pass ? 0 : 1;
 }
 
+int session(const std::vector<std::string>& args) {
+  if (args.empty()) return usage();
+  const std::string path = args[0];
+  std::string thresholds = "colmap", finish_path;
+  demo::SessionOptions so;
+  double min_pair_coverage = -1.0;
+  int min_pair_inliers = -1;
+  Common c;
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    const std::string& a = args[i];
+    const bool has_value = i + 1 < args.size();
+    bool bad = false;
+    if (common_option(args, i, c, &bad)) {
+      if (bad) return usage();
+    } else if (a == "--window" && has_value) so.window = std::atoi(args[++i].c_str());
+    else if (a == "--start-angle" && has_value) so.min_start_angle_deg = std::atof(args[++i].c_str());
+    else if (a == "--patience" && has_value) so.start_patience = std::atoi(args[++i].c_str());
+    else if (a == "--restart-after" && has_value) so.restart_after = std::atoi(args[++i].c_str());
+    else if (a == "--finish" && has_value) finish_path = args[++i];
+    else if (a == "--thresholds" && has_value) thresholds = args[++i];
+    else if (a == "--min-pair-inliers" && has_value) min_pair_inliers = std::atoi(args[++i].c_str());
+    else if (a == "--min-pair-coverage" && has_value) min_pair_coverage = std::atof(args[++i].c_str());
+    else return usage();
+  }
+  if (thresholds != "colmap" && thresholds != "demo") return usage();
+  demo::MapperOptions& mo = c.mapper;
+  if (thresholds == "colmap") demo::colmap_thresholds(mo);
+  if (c.refine >= 0) mo.refine_intrinsics = static_cast<std::uint8_t>(c.refine);
+  if (min_pair_inliers >= 0) mo.min_pair_inliers = static_cast<std::uint32_t>(min_pair_inliers);
+  if (min_pair_coverage >= 0.0) mo.min_pair_coverage = min_pair_coverage;
+  if (!available(mo)) return 2;
+
+  const demo::CaptureFile file = demo::read_capture(path);
+  const demo::Capture& cap = file.capture;
+  const std::size_t n_img = cap.num_images();
+  if (cap.intrinsics.size() != static_cast<std::size_t>(jba::num_params(cap.model))) {
+    std::fprintf(stderr, "a session takes a capture with one intrinsics block\n");
+    return 2;
+  }
+  // Each pair goes with its later image, the earlier one as `a`.
+  std::vector<std::vector<demo::Pair>> by_image(n_img);
+  for (demo::Pair p : cap.pairs) {
+    if (p.a > p.b) {
+      std::swap(p.a, p.b);
+      std::swap(p.ka, p.kb);
+    }
+    by_image[static_cast<std::size_t>(p.b)].push_back(std::move(p));
+  }
+  demo::Mapper mapper(mo);
+  const std::int32_t w = file.image_size.size() >= 2 ? file.image_size[0] : 0;
+  const std::int32_t h = file.image_size.size() >= 2 ? file.image_size[1] : 0;
+  demo::Session sess(mapper, cap.model, cap.intrinsics, !cap.focal_unknown.empty() && cap.focal_unknown[0], w, h, so);
+  double total = 0.0, worst = 0.0;
+  int placed_now = 0, started_at = -1;
+  for (std::size_t i = 0; i < n_img; ++i) {
+    demo::SessionImage im;
+    im.keypoints = cap.keypoints[i];
+    im.pairs = by_image[i];
+    if (cap.has_prior(i)) {
+      std::copy(&cap.prior_position[3 * i], &cap.prior_position[3 * i] + 3, im.prior_position);
+      if (!cap.prior_sigma.empty()) std::copy(&cap.prior_sigma[2 * i], &cap.prior_sigma[2 * i] + 2, im.prior_sigma);
+    }
+    const demo::SessionStep st = sess.add(im);
+    total += st.seconds;
+    worst = std::max(worst, st.seconds);
+    if (st.started) started_at = static_cast<int>(i);
+    placed_now += std::find(st.placed.begin(), st.placed.end(), st.image) != st.placed.end();
+    if (c.verbose || !st.ok())
+      std::printf("  image %3d: %zu pairs (%d kept), %s, PnP %d inliers, sees %d points, placed %zu, window %zu + %zu "
+                  "held, %.3f px, %.1f ms%s%s\n",
+                  st.image, im.pairs.size(), st.pairs_kept, st.started ? "map started" : "", st.pnp_inliers,
+                  st.points_seen, st.placed.size(), st.window.size(), st.held.size(), st.mean_error_px,
+                  1000.0 * st.seconds, st.ok() ? "" : ": ", st.error.c_str());
+  }
+  // The pieces, and the largest of them as "the live map" (the one finish starts from).
+  std::vector<char> live_registered;
+  std::vector<double> live_poses;
+  std::string sizes;
+  for (std::size_t k = 0; k < sess.num_pieces(); ++k) {
+    const demo::Snapshot p = sess.piece(k);
+    std::size_t n = 0;
+    for (char g : *p.registered) n += g != 0;
+    sizes += (k ? ", " : "") + std::to_string(n);
+    if (n > static_cast<std::size_t>(std::count(live_registered.begin(), live_registered.end(), 1))) {
+      live_registered = *p.registered;
+      live_poses = *p.poses;
+    }
+  }
+  live_registered.resize(n_img, 0);
+  live_poses.resize(7 * n_img, 0.0);
+  std::printf("%s: %zu images, window %d; %zu piece%s (%s images), the last from image %d; %d placed as they came; "
+              "%.1f ms an image on average, %.1f at most\n",
+              path.c_str(), n_img, so.window, sess.num_pieces(), sess.num_pieces() == 1 ? "" : "s", sizes.c_str(),
+              started_at, placed_now, 1000.0 * total / std::max<std::size_t>(1, n_img), 1000.0 * worst);
+
+  // --finish: another capture file of the same images (more pairs, matched more
+  // thoroughly), for the finish and the batch run to compare with.
+  demo::CaptureFile other;
+  if (!finish_path.empty()) {
+    other = demo::read_capture(finish_path);
+    if (other.capture.num_images() != n_img) {
+      std::fprintf(stderr, "%s has %zu images, not %zu\n", finish_path.c_str(), other.capture.num_images(), n_img);
+      return 2;
+    }
+    other.capture.intrinsics = cap.intrinsics;  // the same camera, as one block
+    other.capture.image_intrinsics.clear();
+    other.capture.focal_unknown = cap.focal_unknown;
+    other.capture.image_size = cap.image_size;
+    std::printf("  finished with %s: %zu pairs\n", finish_path.c_str(), other.capture.pairs.size());
+  }
+  const demo::Capture& final_capture = finish_path.empty() ? cap : other.capture;
+  const demo::Reconstruction batch = mapper.run(final_capture);
+  const demo::Reconstruction fin = sess.finish(final_capture);
+  auto count = [](const std::vector<char>& v) {
+    std::size_t n = 0;
+    for (char g : v) n += g != 0;
+    return n;
+  };
+  std::printf("  focal: given %.1f px; live %.1f, batch %.1f, finish %.1f\n", demo::median_focal(cap.model, cap.intrinsics),
+              demo::median_focal(cap.model, sess.intrinsics()),
+              batch.ok() ? demo::median_focal(batch.problem.model, batch.problem.intrinsics) : 0.0,
+              fin.ok() ? demo::median_focal(fin.problem.model, fin.problem.intrinsics) : 0.0);
+  std::printf("  batch run: %zu placed, %zu points, %.3f px, %.2f s%s%s\n", count(batch.registered),
+              batch.problem.num_points(), batch.mean_error_px, batch.time.total, batch.ok() ? "" : "; ",
+              batch.error.c_str());
+  std::printf("  finish:    %zu placed, %zu points, %.3f px, %.2f s, %d start images left out%s%s\n",
+              count(fin.registered), fin.problem.num_points(), fin.mean_error_px, fin.time.total, fin.start_left_out,
+              fin.ok() ? "" : "; ", fin.error.c_str());
+  if (!c.export_dir.empty()) {
+    export_model((std::filesystem::path(c.export_dir) / "batch").string(), batch, file.names, file.image_size);
+    export_model((std::filesystem::path(c.export_dir) / "finish").string(), fin, file.names, file.image_size);
+  }
+  auto agree = [](const char* label, const demo::PoseAgreement& a) {
+    std::printf("  %-22s %3zu images: rotation median %.3f°, max %.3f°; centre median %.3f %%, max %.3f %% of the extent\n",
+                label, a.common, a.rot_median_deg, a.rot_max_deg, a.centre_median_pct, a.centre_max_pct);
+  };
+  // How far apart two batch runs of the same file land, their RANSAC seeds differing:
+  // what agreement to expect of anything compared with a batch run.
+  demo::MapperOptions mo2 = mo;
+  mo2.seed = mo.seed + 1;
+  const demo::Reconstruction batch2 = demo::Mapper(mo2).run(final_capture);
+  if (batch.ok() && batch2.ok())
+    agree("batch, seed + 1", demo::compare_poses(batch2.registered, batch2.poses, batch.registered, batch.poses));
+  if (batch.ok() && !finish_path.empty()) {
+    const demo::Reconstruction live_batch = mapper.run(cap);
+    if (live_batch.ok())
+      agree("batch, live pairs", demo::compare_poses(live_batch.registered, live_batch.poses, batch.registered, batch.poses));
+  }
+  if (batch.ok()) {
+    agree("largest piece vs batch", demo::compare_poses(live_registered, live_poses, batch.registered, batch.poses));
+    if (fin.ok()) agree("finish vs batch", demo::compare_poses(fin.registered, fin.poses, batch.registered, batch.poses));
+  }
+  if (!file.reference.empty()) {
+    agree("largest piece vs ref.",
+          demo::compare_poses(live_registered, live_poses, file.reference.registered, file.reference.poses));
+    if (fin.ok())
+      agree("finish vs ref.", demo::compare_poses(fin.registered, fin.poses, file.reference.registered, file.reference.poses));
+    if (batch.ok())
+      agree("batch vs ref.",
+            demo::compare_poses(batch.registered, batch.poses, file.reference.registered, file.reference.poses));
+  }
+  return fin.ok() ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -489,6 +669,7 @@ int main(int argc, char** argv) {
   try {
     if (command == "synth") return synth(args);
     if (command == "run") return run(args);
+    if (command == "session") return session(args);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "jba_demo: %s\n", e.what());
     return 2;

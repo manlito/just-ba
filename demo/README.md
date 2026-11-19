@@ -73,6 +73,37 @@ images to their priors: the result is in the priors' frame, units and axes
 (`Reconstruction::aligned`). `jba_demo synth --priors sigma` checks it on the generated
 scenes; `jba_demo run --no-priors` ignores them.
 
+## Sessions: a map that grows while the capture is taken
+
+`demo::Session` (D153) grows a map image by image, for a capture that reconstructs as
+it is taken. `add(SessionImage)` takes an image's keypoints, its matches to earlier
+images of the session and an optional position prior. The matches are verified and
+added to the tracks; once the map has started (a pair reaching 16 degrees of median
+triangulation angle, or 8, 4 after `start_patience` images each without one), the
+image is placed by PnP, its new points triangulated and a window of the latest
+`window` images adjusted with the older ones that see their points held. An image
+that can't be placed is tried again as the map grows; after more than
+`restart_after` of them in a row the map is put aside as a piece and a new one
+started from images in none (an image whose pairs link to an earlier piece goes back to it, which becomes the current one again); a young piece that started from a narrow pair is started
+again once a wider one comes (`rebuild_within`). `snapshot()` is the map now (every
+point with its track, stable as the map grows), `piece(k)` and `largest_piece()` the
+pieces, `keypoint_points(i)` the landmarks of image `i`, `retry(pairs, new_piece)` tries the last image again with more pairs (added with
+`defer_split`, no new piece starts until then), and `finish(capture)` reconstructs the whole capture (any pairs, normally
+more of them, matched more thoroughly) from the live map with
+`Mapper::run_from(capture, StartFrom)`. `run_from` keeps the start's poses, but leaves
+out start images whose relative rotations disagree with their verified pairs by a
+median of over 5 degrees, and registers them again like any other image.
+
+```sh
+build/demo/demo/jba_demo session live.jbc --finish all.jbc --window 8
+```
+
+feeds `live.jbc`'s images in order with their pairs to earlier images, as a capture in
+progress would, finishes with `all.jbc`'s pairs (the same images), and compares the
+largest piece and the finish with a batch run of `all.jbc` (and two batch runs with
+different seeds, for the spread to expect). `demo_session` checks it on the generated
+scenes.
+
 ## Against COLMAP
 
 The comparison of milestone 7 (document 05, level 3): both systems start from the same
