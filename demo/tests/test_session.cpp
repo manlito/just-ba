@@ -248,6 +248,52 @@ int main() {
     std::printf("coming back: %zu pieces, the first holds %zu frames again\n", s.num_pieces(), placed);
   }
 
+  // Trying again with more pairs: the orbit cut after image 7, image 8 added with its
+  // pairs to the second half only (none yet), not placed; again with its pairs to the
+  // first half, it is placed in the one piece. A Shoot now that can't be placed starts
+  // a piece at once.
+  {
+    const demo::Scene scene = demo::make_scene("orbit");
+    demo::MapperOptions mo;
+    demo::thresholds_for_noise(scene.noise_px, mo);
+    demo::Mapper mapper(mo);
+    const demo::Capture& c = scene.capture;
+    demo::Session s(mapper, c.model, c.intrinsics, false, static_cast<std::int32_t>(scene.width),
+                    static_cast<std::int32_t>(scene.height));
+    auto pairs_of = [&](std::int32_t i, bool first_half) {
+      std::vector<demo::Pair> out;
+      for (demo::Pair p : c.pairs) {
+        if (p.a > p.b) std::swap(p.a, p.b), std::swap(p.ka, p.kb);
+        if (p.b == i && (p.a < 8) == first_half) out.push_back(p);
+      }
+      return out;
+    };
+    for (std::int32_t i = 0; i < 8; ++i) {
+      demo::SessionImage im;
+      im.keypoints = c.keypoints[static_cast<std::size_t>(i)];
+      im.pairs = pairs_of(i, true);
+      s.add(im);
+    }
+    demo::SessionImage im;
+    im.keypoints = c.keypoints[8];
+    im.defer_split = true;
+    const demo::SessionStep first = s.add(im);
+    check(first.ok() && first.placed.empty(), "retry: without pairs, not placed");
+    const demo::SessionStep again = s.retry(pairs_of(8, true));
+    check(again.ok() && std::find(again.placed.begin(), again.placed.end(), 8) != again.placed.end(),
+          "retry: with its pairs to the first half, placed");
+    check(s.num_pieces() == 1, "retry: still one piece");
+    // A Shoot now with nothing to link to: a new piece at once (none can start from one
+    // image, so the session goes on with the first; the rule is what is checked here).
+    demo::SessionImage lone;
+    lone.keypoints = c.keypoints[12];
+    lone.defer_split = true;
+    s.add(lone);
+    const demo::SessionStep forced = s.retry({}, true);
+    check(forced.ok() && s.num_pieces() == 1, "retry: a lone Shoot now has no pair to start a piece from");
+    std::printf("retry: image 8 placed on its second try; %zu piece\n", s.num_pieces());
+  }
+
   // Bad input: a pair naming a later image, or a keypoint that does not exist, is left
   // out and said so; the image still joins, so the caller's numbering holds.
   {

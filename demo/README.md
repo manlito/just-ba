@@ -87,7 +87,8 @@ that can't be placed is tried again as the map grows; after more than
 started from images in none (an image whose pairs link to an earlier piece goes back to it, which becomes the current one again); a young piece that started from a narrow pair is started
 again once a wider one comes (`rebuild_within`). `snapshot()` is the map now (every
 point with its track, stable as the map grows), `piece(k)` and `largest_piece()` the
-pieces, `keypoint_points(i)` the landmarks of image `i`, and `finish(capture)` reconstructs the whole capture (any pairs, normally
+pieces, `keypoint_points(i)` the landmarks of image `i`, `retry(pairs, new_piece)` tries the last image again with more pairs (added with
+`defer_split`, no new piece starts until then), and `finish(capture)` reconstructs the whole capture (any pairs, normally
 more of them, matched more thoroughly) from the live map with
 `Mapper::run_from(capture, StartFrom)`. `run_from` keeps the start's poses, but leaves
 out start images whose relative rotations disagree with their verified pairs by a

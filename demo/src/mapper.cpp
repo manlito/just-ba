@@ -1657,6 +1657,7 @@ struct Session::State {
   std::vector<Piece> pieces;
   std::vector<char> in_piece;  // per image: registered in some piece, the current one included
   std::vector<char> in_earlier;  // per image: registered in a piece put aside
+  std::vector<std::size_t> image_first_pair;  // per image: its first pair in c.pairs
   double start_floor = 0.0;    // the angle floor the current piece started from
   int last_placed = -1;        // the newest image placed in the current piece
   double focal_factor = 1.0;
@@ -1946,6 +1947,28 @@ struct Session::State {
     return false;
   }
 
+  // Image st.image not placed: with more than restart_after images in a row not placed
+  // (or `force`, a caller's Shoot now), a new piece from images in none, if a pair of
+  // them is fit to start from. False when poselib-gpu fails.
+  bool split(SessionStep& st, bool force) {
+    const std::size_t i = static_cast<std::size_t>(st.image);
+    if (m.registered[i]) return true;
+    const bool due = force || (so.restart_after > 0 && static_cast<int>(i) - last_placed > so.restart_after);
+    if (!due) return true;
+    SessionStep restart;
+    restart.image = st.image;
+    const bool ok = try_start(restart, Start::NewPiece);
+    if (restart.started) {
+      st.started = true;
+      st.placed = restart.placed;
+      st.window = restart.window;
+      st.held = restart.held;
+      st.mean_error_px = restart.mean_error_px;
+    }
+    if (!restart.ok()) st.error = restart.error;
+    return ok;
+  }
+
   // The bookkeeping after a step: which images are in a piece, the newest placed.
   void placed(const SessionStep& st) {
     for (std::int32_t i : st.placed) {
@@ -2020,6 +2043,7 @@ SessionStep Session::add(const SessionImage& image) {
     c.prior_sigma.insert(c.prior_sigma.end(), image.prior_sigma, image.prior_sigma + 2);
   }
   const std::size_t first_pair = c.pairs.size();
+  s.image_first_pair.push_back(first_pair);
   for (Pair p : image.pairs) {
     p.b = static_cast<std::int32_t>(i);
     bool ok = p.a >= 0 && static_cast<std::size_t>(p.a) < i && p.ka.size() == p.kb.size();
@@ -2054,22 +2078,8 @@ SessionStep Session::add(const SessionImage& image) {
     }
     // Not placed, but linked to an earlier piece: that piece takes it, and grows on.
     if (ok && !m.registered[i] && !s.pieces.empty()) s.rejoin(st, first_pair);
-    // Lost: images in a row not placed. A new piece, from images in none, if a pair of
-    // them is fit to start from.
-    if (ok && s.so.restart_after > 0 && !m.registered[i] &&
-        static_cast<int>(i) - s.last_placed > s.so.restart_after) {
-      SessionStep restart;
-      restart.image = st.image;
-      ok = s.try_start(restart, State::Start::NewPiece);
-      if (restart.started) {
-        st.started = true;
-        st.placed = restart.placed;
-        st.window = restart.window;
-        st.held = restart.held;
-        st.mean_error_px = restart.mean_error_px;
-      }
-      if (!restart.ok()) st.error = restart.error;
-    }
+    // Lost: a new piece, unless the caller tries more pairs first (Session::retry).
+    if (ok && !image.defer_split) ok = s.split(st, false);
   }
   // A young piece that started from a narrow pair, again from a wider one of its images
   // once there is one: a map from a narrow pair bends.
@@ -2095,6 +2105,55 @@ SessionStep Session::add(const SessionImage& image) {
   if (s.started) st.points_seen = points_seen_in(m, i);
   if (st.mean_error_px == 0.0) st.mean_error_px = s.last.mean_error_px;
   (void)ok;
+  s.update_snapshot();
+  st.seconds = seconds_since(t0);
+  return st;
+}
+
+SessionStep Session::retry(const std::vector<Pair>& more, bool new_piece) {
+  const auto t0 = Clock::now();
+  State& s = *s_;
+  Capture& c = s.c;
+  Map& m = s.m;
+  SessionStep st;
+  if (c.num_images() == 0) {
+    st.error = "no image to try again";
+    return st;
+  }
+  const std::size_t i = c.num_images() - 1;
+  st.image = static_cast<std::int32_t>(i);
+  const std::size_t first_new = c.pairs.size();
+  for (Pair p : more) {
+    p.b = static_cast<std::int32_t>(i);
+    bool ok = p.a >= 0 && static_cast<std::size_t>(p.a) < i && p.ka.size() == p.kb.size();
+    for (std::size_t k = 0; ok && k < p.ka.size(); ++k)
+      ok = p.ka[k] >= 0 && p.kb[k] >= 0 && static_cast<std::size_t>(p.ka[k]) < c.keypoints[p.a].size() / 2 &&
+           static_cast<std::size_t>(p.kb[k]) < c.keypoints[i].size() / 2;
+    if (!ok) {
+      st.error = "a pair names an image or a keypoint that does not exist";
+      continue;
+    }
+    c.pairs.push_back(std::move(p));
+  }
+  bool ok = true;
+  if (!s.started) {
+    ok = s.try_start(st, State::Start::First);
+  } else if (!m.registered[i]) {
+    ok = verify_pairs(s.mapper->ctx_, c, s.o(), m.cams.intrinsics, first_new, s.pair_results, s.pair_inliers,
+                      s.pair_kept);
+    if (!ok) st.error = std::string("relative pose: ") + jpo_last_error();
+    if (ok) {
+      extend_tracks(m, verified_of(c, s.pair_inliers, s.pair_kept, first_new));
+      ok = s.place(st);
+    }
+    if (ok && !m.registered[i] && !s.pieces.empty()) s.rejoin(st, s.image_first_pair[i]);
+    if (ok) ok = s.split(st, new_piece);
+  }
+  if (ok) s.placed(st);
+  if (s.started) st.piece = static_cast<int>(s.pieces.size());
+  for (std::size_t k = first_new; k < c.pairs.size() && k < s.pair_kept.size(); ++k) st.pairs_kept += s.pair_kept[k];
+  if (s.started) st.points_seen = points_seen_in(m, i);
+  if (st.mean_error_px == 0.0) st.mean_error_px = s.last.mean_error_px;
   s.update_snapshot();
   st.seconds = seconds_since(t0);
   return st;

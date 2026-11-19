@@ -362,6 +362,9 @@ struct SessionImage {
   // MapperOptions' defaults. Only the camera centre is used for now.
   double prior_position[3] = {std::nan(""), std::nan(""), std::nan("")};
   double prior_sigma[2] = {std::nan(""), std::nan("")};
+  // Not placed, the caller will try more pairs (Session::retry) before a new piece may
+  // start: the restart rule waits for retry.
+  bool defer_split = false;
 };
 
 // What Session::add did.
@@ -403,6 +406,11 @@ class Session {
   Session& operator=(Session&&) noexcept;
 
   SessionStep add(const SessionImage& image);
+  // The last image added again, with more pairs (to earlier images, a: the earlier
+  // one), when it wasn't placed: they are verified and tracked, the image placed if it
+  // now can be (into an earlier piece too), and then the restart rule applies, or a
+  // new piece starts at once when `new_piece` (a caller's Shoot now).
+  SessionStep retry(const std::vector<Pair>& more, bool new_piece = false);
 
   std::size_t num_images() const;
   bool started() const;
