@@ -231,6 +231,7 @@ async function liveStep() {
       if (found) {
         S.reference = found.r;
         S.before = null;
+        S.lastOverlap2 = null;
         S.twoBack = false;
         clearPicker();
         S.speed.rebase();
@@ -238,10 +239,17 @@ async function liveStep() {
         relocalized = true;
       }
     }
+    // The keyframe before last (redundancy): every frame on a computer; every other frame
+    // on a phone, where each live match is ~160 ms, keeping the last measure in between.
+    // Without it a phone capture chained keyframes to their neighbour only (pairs two
+    // apart had 2-21 matches) and broke into pieces.
     if (S.settings.redundant && S.before?.feat) {
-      const m2 = await measure(S.before, f, kp.xy, w, h);
-      S.twoBack ||= m2.overlap > G.REDUNDANT_OVERLAP;
-      overlap2 = m2.overlap;
+      if (!phone || S.stats.frames % 2 === 0 || S.lastOverlap2 == null || relocalized) {
+        const m2 = await measure(S.before, f, kp.xy, w, h);
+        S.twoBack ||= m2.overlap > G.REDUNDANT_OVERLAP;
+        S.lastOverlap2 = m2.overlap;
+      }
+      overlap2 = S.lastOverlap2;
     }
   }
   const tRules = performance.now();
@@ -304,6 +312,7 @@ async function keep(c, why, shoot) {
     S.before = S.reference;
     S.reference = kf;
     S.twoBack = false;
+    S.lastOverlap2 = null;
     S.speed.rebase();
     const anchors = S.keyframes.filter((k) => G.usableReference(k.xy));
     const keepIt = G.hold(anchors.map((k) => k.seq));
@@ -872,7 +881,7 @@ async function reset() {
   for (const k of S.keyframes) k.feat?.destroy();
   clearPicker();
   Object.assign(S, {
-    keyframes: [], reference: null, before: null, twoBack: false, held: [], cursor: 0, jobs: [], links: new Set(),
+    keyframes: [], reference: null, before: null, twoBack: false, lastOverlap2: null, held: [], cursor: 0, jobs: [], links: new Set(),
     map: null, lastStep: null, result: null, done: false, session: null,
     picker: new G.Picker(), speed: new G.Speed(), blur: new G.Blur(), stats: { frameMs: 0, mapMs: 0, frames: 0, kpMs: 0, describeMs: 0, matchMs: 0, loopMs: 0 },
   });
@@ -950,9 +959,6 @@ async function boot() {
     return;
   }
   S.supported = true;
-  // A phone measures each frame against the last keyframe only: the redundancy check is a
-  // second live match a frame (330 ms for both on a Pixel 9a, against ~165 for one).
-  if (phone) S.settings.redundant = false;
   S.precision = adapter.features.has('shader-f16') ? 'fp16' : 'fp32';
   const i = adapter.info ?? {};
   $('gpu-info').textContent = `GPU: ${[i.vendor, i.architecture, i.description].filter(Boolean).join(' / ') || 'WebGPU adapter'}; ` +
