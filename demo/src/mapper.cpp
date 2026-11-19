@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 #include "align.h"
@@ -89,6 +90,7 @@ struct Map {
   std::vector<char> obs_filtered;               // per observation: dropped from its track's point by the filter
   std::vector<std::int64_t> split_tried;        // per track: leftovers at its last failed split
   bool aligned = false;                         // in the frame of the position priors (D150)
+  int aligned_with = 0;                         // registered images with a prior at the last (re)alignment
   std::size_t n_images() const { return registered.size(); }
 };
 
@@ -570,10 +572,16 @@ int choose_first_pair(const Capture& c, const Reconstruction& r, const MapperOpt
 }
 
 // Moving a model into the frame of its position priors (D150): the similarity of the
-// registered images' camera centres onto their priors, from the triples that agree
-// with the most (within prior_inlier_sigmas), refitted on those. False, and the map
-// unchanged, while fewer than prior_min_images agree or their priors lie too close to
-// a line to set the rotation about it.
+// registered images' camera centres onto their priors. The fit is the triple's whose
+// distances to the priors have the smallest median (least median: no threshold, and up
+// to half the priors may be wrong), refitted on the centres within prior_inlier_sigmas
+// of their prior. Distances are in the priors' sigmas, scaled up by the model's own
+// error where that is the larger (precise priors next to a model of a few images): the
+// median distance over that of a 3-D normal's length. False, and the map unchanged,
+// while fewer than prior_min_images agree, or their priors spread across their line by
+// less than prior_min_spread of those scaled sigmas, too little to set the rotation
+// about it. Called again as the model grows, it refits an aligned model (near the
+// identity when the two agree).
 bool align_to_priors(Map& m, const MapperOptions& o) {
   const Capture& c = *m.capture;
   std::vector<int> images;
@@ -602,24 +610,28 @@ bool align_to_priors(Map& m, const MapperOptions& o) {
     fit_similarity(from, to, sim.R, sim.t, &sim.s);
     return std::isfinite(sim.s) && sim.s > 0.0;
   };
-  auto inliers_of = [&](const Sim& sim) {
-    std::vector<std::size_t> in;
+  auto distances = [&](const Sim& sim) {
+    std::vector<double> d(n);
     for (std::size_t q = 0; q < n; ++q) {
       double Y[3];
       const double zero[3] = {0, 0, 0};
       apply(sim.R, zero, &centres[3 * q], Y);
       const double X[3] = {sim.s * Y[0] + sim.t[0], sim.s * Y[1] + sim.t[1], sim.s * Y[2] + sim.t[2]};
-      if (prior_distance(c, o, static_cast<std::size_t>(images[q]), X) < o.prior_inlier_sigmas) in.push_back(q);
+      d[q] = prior_distance(c, o, static_cast<std::size_t>(images[q]), X);
     }
-    return in;
+    return d;
   };
   // Triples: all of them when few, else 200 drawn with the run's seed.
-  std::vector<std::size_t> best_in;
+  Sim sim;
+  double best_median = std::numeric_limits<double>::infinity();
   auto try_triple = [&](std::size_t x, std::size_t y, std::size_t z) {
-    Sim sim;
-    if (!fit({x, y, z}, sim)) return;
-    std::vector<std::size_t> in = inliers_of(sim);
-    if (in.size() > best_in.size()) best_in = std::move(in);
+    Sim f;
+    if (!fit({x, y, z}, f)) return;
+    const double med = median(distances(f));
+    if (med < best_median) {
+      best_median = med;
+      sim = f;
+    }
   };
   if (n <= 12) {
     for (std::size_t x = 0; x < n; ++x)
@@ -634,21 +646,42 @@ bool align_to_priors(Map& m, const MapperOptions& o) {
       if (x != y && y != z && x != z) try_triple(x, y, z);
     }
   }
-  Sim sim;
-  for (int round = 0; round < 3 && best_in.size() >= need; ++round) {
-    if (!fit(best_in, sim)) return false;
-    std::vector<std::size_t> in = inliers_of(sim);
-    if (in == best_in) break;
-    best_in = std::move(in);
+  if (!std::isfinite(best_median)) return false;
+  // The inliers of a fit, and the scale of its distances: 1 (the priors' sigmas) or
+  // more, from the median of the distances given (a 3-D normal's length has median
+  // 1.538 sigma).
+  constexpr double kNormal3Median = 1.5382;
+  double scale = 1.0;
+  auto inliers_of = [&](const Sim& f) {
+    const std::vector<double> d = distances(f);
+    scale = std::max(1.0, median(d) / kNormal3Median);
+    std::vector<std::size_t> in;
+    for (std::size_t q = 0; q < n; ++q)
+      if (d[q] < o.prior_inlier_sigmas * scale) in.push_back(q);
+    return in;
+  };
+  std::vector<std::size_t> in = inliers_of(sim);
+  for (int round = 0; round < 3 && in.size() >= need; ++round) {
+    if (!fit(in, sim)) return false;
+    std::vector<std::size_t> next = inliers_of(sim);
+    if (next == in) break;
+    in = std::move(next);
   }
-  if (best_in.size() < need || !fit(best_in, sim)) return false;
+  if (in.size() < need || !fit(in, sim)) return false;
+  // The scale over the inliers of the final fit.
+  {
+    const std::vector<double> d = distances(sim);
+    std::vector<double> din;
+    for (std::size_t q : in) din.push_back(d[q]);
+    scale = std::max(1.0, median(din) / kNormal3Median);
+  }
   std::vector<double> in_priors;
   std::vector<int> in_images;
-  for (std::size_t q : best_in) {
+  for (std::size_t q : in) {
     in_priors.insert(in_priors.end(), &priors[3 * q], &priors[3 * q] + 3);
     in_images.push_back(images[q]);
   }
-  if (spread_across_line(in_priors) < o.prior_min_spread * median_sigma_h(c, o, in_images)) return false;
+  if (spread_across_line(in_priors) < o.prior_min_spread * scale * median_sigma_h(c, o, in_images)) return false;
 
   // X' = s R X + t. A pose (Rc, tc) becomes (Rc R^T, s tc - Rc R^T t): the same camera,
   // its coordinates scaled by s.
@@ -673,6 +706,7 @@ bool align_to_priors(Map& m, const MapperOptions& o) {
     for (int k = 0; k < 3; ++k) m.X[3 * t + k] = sim.s * Y[k] + sim.t[k];
   }
   m.aligned = true;
+  m.aligned_with = static_cast<int>(n);
   return true;
 }
 
@@ -972,8 +1006,14 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
   };
   auto timed_adjust = [&](int iterations) {
     const auto t = Clock::now();
-    // Into the priors' frame as soon as enough registered images have one (D150).
-    if (!m.aligned && uses_priors(c, o)) align_to_priors(m, o);
+    // Into the priors' frame as soon as enough registered images have one, and refitted
+    // each time their number has grown by half (D150): an early alignment from a few
+    // images is corrected by the later ones.
+    if (uses_priors(c, o)) {
+      int with = 0;
+      for (std::size_t i = 0; i < n_img; ++i) with += m.registered[i] && c.has_prior(i);
+      if (!m.aligned || with >= m.aligned_with + std::max(3, m.aligned_with / 2)) align_to_priors(m, o);
+    }
     Adjusted a = adjust(m, o, iterations, on_iteration);
     ++run.adjustments;
     run.time.adjust += seconds_since(t);
@@ -1104,6 +1144,8 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     }
 
     // -- 5. Final adjustment: complete the tracks, adjust, filter, and adjust what is left.
+    // An aligned model is refitted to all its priors first (D150).
+    if (m.aligned && uses_priors(c, o)) align_to_priors(m, o);
     timed_points(true);
     last = timed_adjust(o.final_iterations);
     if (stopped) return false;
