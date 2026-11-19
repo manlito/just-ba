@@ -43,6 +43,9 @@ struct Capture {
   // positive for an image: MapperOptions' defaults.
   std::vector<double> prior_position;
   std::vector<double> prior_sigma;
+  // Per block: its images' width and height in pixels (the capture file's camera.size);
+  // empty: unknown, and MapperOptions::min_pair_coverage does not apply (D151).
+  std::vector<std::int32_t> image_size;
   std::size_t num_images() const { return keypoints.size(); }
   std::int32_t block(std::size_t image) const { return image_intrinsics.empty() ? 0 : image_intrinsics[image]; }
   bool has_prior(std::size_t image) const {
@@ -65,6 +68,11 @@ struct MapperOptions {
   // COLMAP's defaults where it has one.
   std::uint32_t min_pair_inliers = 30;     // a pair's inliers go to the tracks from this many
   double min_pair_inlier_ratio = 0.25;     // and this share of its matches
+  // ...and when the convex hull of its inliers covers at least this share of each of its
+  // two images (D151): matches bunched in one corner fix a relative pose poorly and are
+  // the likeliest to come from a repeated or a false match. 0: no such rule; it needs
+  // Capture::image_size.
+  double min_pair_coverage = 0.0;
   std::uint32_t min_first_pair_inliers = 100;
   std::uint32_t min_pnp_inliers = 15;      // COLMAP: 30; the generated scenes are small
   double min_pnp_inlier_ratio = 0.25;
@@ -223,6 +231,34 @@ struct Reconstruction {
   std::vector<std::uint32_t> pair_offsets;
   std::vector<char> pair_kept;
   int pairs_ok = 0, pairs_degenerate = 0, pairs_failed = 0, pairs_kept = 0;
+  // Per pair: the share of its images the convex hull of its inliers covers, the smaller
+  // of the two (D151); NaN without Capture::image_size. pairs_narrow: pairs with enough
+  // inliers left out by min_pair_coverage.
+  std::vector<float> pair_coverage;
+  int pairs_narrow = 0;
+
+  // Every model grown, in the order grown (D151); `kept_model` indexes the one returned.
+  // The others are what a capture that falls apart is made of: each in its own frame
+  // (the first pair's, or the priors' when it was aligned), not merged with the rest.
+  struct Model {
+    std::vector<char> registered;  // per image of the capture
+    std::vector<double> poses;     // 7 per image of the capture; meaningful where registered
+    std::vector<double> points;    // 3 per point of its last adjustment
+    std::size_t observations = 0;
+    double mean_error_px = 0.0;
+    int first_pair = -1;           // index into Capture::pairs
+    bool aligned = false;
+  };
+  std::vector<Model> all_models;
+  int kept_model = -1;
+  // Per image of the capture, in the model returned (D151): the distinct points of it the
+  // image sees, the inliers of its last PnP that was rejected (-1: none was), and the
+  // mean reprojection error of its observations after the last adjustment (NaN where
+  // not registered). Why an image was left out follows from them and the pairs: in no
+  // kept pair; fewer points seen than min_pnp_inliers; or a pose rejected.
+  std::vector<std::int32_t> image_points_seen;
+  std::vector<std::int32_t> image_pnp_inliers;
+  std::vector<double> image_error_px;
 
   std::size_t tracks = 0;  // built from the matches, before any split
   int first_a = -1, first_b = -1;

@@ -113,6 +113,10 @@ after the best similarity, as a share of the extent of COLMAP's camera centres; 
 which keypoints each side groups into which point (points split or joined, and why
 the reference's observations are missing from ours). `--two-view-tracks` and
 `--tri-angle deg` undo two of COLMAP's rules, for experiments.
+`--min-pair-inliers n` and `--min-pair-coverage share` set the pair rules (D151): a
+pair's inliers go to the tracks from n of them, and only if their convex hull covers
+that share of each image (0, the default, turns the coverage rule off; the capture file
+needs `camera.size`). With more than one model grown, every model is listed.
 `--export dir` writes our model in COLMAP's text format next to it, and `--json file`
 the figures, which `demo/tools/colmap_table.py` gathers over several scenes. With a
 ground truth in the capture file (`colmap_capture.py --truth`, as ETH3D's

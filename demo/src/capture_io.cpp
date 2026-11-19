@@ -63,6 +63,7 @@ CaptureFile read_capture(const std::string& path) {
   const std::int64_t blocks = static_cast<std::int64_t>(c.intrinsics.size()) / np;
   if (blocks < 1) fail(path, "no intrinsics");
   f.image_size = get<std::int32_t>(s, path, "camera.size", {blocks, 2}, false);
+  c.image_size = f.image_size;  // the mapper's coverage rule (D151)
 
   const auto kp_begin = get<std::int64_t>(s, path, "keypoint.begin", {-1});
   if (kp_begin.size() < 2 || kp_begin.front() != 0) fail(path, "keypoint.begin needs at least one image, from 0");
