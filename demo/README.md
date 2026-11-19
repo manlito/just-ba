@@ -94,6 +94,13 @@ more of them, matched more thoroughly) from the live map with
 out start images whose relative rotations disagree with their verified pairs by a
 median of over 5 degrees, and registers them again like any other image.
 
+A session can also start from a model (D154): `Session(mapper, model, intrinsics,
+width, height, SessionSeed, options)` takes images already placed (their keypoints
+and poses) and the model's points with the keypoints that observe them, one track per
+point. The map has started with them; they and the intrinsics are held while new
+images join, so a capture goes on into a finished reconstruction without moving it;
+`num_seeded()` says how many there are.
+
 ```sh
 build/demo/demo/jba_demo session live.jbc --finish all.jbc --window 8
 ```
