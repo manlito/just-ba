@@ -531,12 +531,13 @@ struct Step {
   std::vector<double> points;
   std::vector<std::int32_t> point_track;
   double mean_error_px = 0.0;
+  bool aligned = false;
 };
 
 void report(std::vector<Step>* steps, const char* stage, const std::vector<std::int32_t>& added, const Map& m,
             const Adjusted& a) {
   if (!steps) return;
-  steps->push_back({stage, added, m.cams.poses, m.registered, a.problem.points, a.track_of, a.mean_error_px});
+  steps->push_back({stage, added, m.cams.poses, m.registered, a.problem.points, a.track_of, a.mean_error_px, m.aligned});
 }
 
 // Choosing the first pair: among pairs with status OK and enough inliers, the one with
@@ -1007,6 +1008,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     s.points = last.problem.points;
     s.point_track = last.track_of;
     s.mean_error_px = last.mean_error_px;
+    s.aligned = m.aligned;
     return progress(stage, &s);
   };
   auto grow = [&](int first, std::vector<Step>* steps) -> bool {
@@ -1166,6 +1168,7 @@ Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const 
     s.points = st.points;
     s.point_track = st.point_track;
     s.mean_error_px = st.mean_error_px;
+    s.aligned = st.aligned;
     on_step(s);
   }
   finish(best_map, std::move(best_last));

@@ -158,6 +158,7 @@ struct Snapshot {
   std::vector<double> points;              // 3 per triangulated point
   std::vector<std::int32_t> point_track;   // per point: its track, the same across steps
   double mean_error_px = 0.0;
+  bool aligned = false;                    // in the frame of the position priors (D150)
 };
 using StepCallback = std::function<void(const Snapshot&)>;
 
