@@ -560,10 +560,13 @@ EMSCRIPTEN_KEEPALIVE void demo_session_free() {
 // A live frame's matches to a kept frame checked against a relative pose, on the CPU
 // (Like Recon's capture loop: a camera guessed at 1.2 times the longer side, inliers
 // within max_px). xy_a, xy_b: 2 floats per match, just-keypoints' convention; the size
-// is both frames'. Writes one byte per match to mask (1: inlier) and returns the
-// inliers, or -1 (the reason in the JSON of demo_last_error()).
+// is both frames'. Writes one byte per match to mask (1: inlier) and the inliers' median
+// triangulation angle to *angle_deg (0 when the pose has no baseline: the camera turned
+// on the spot), and returns the inliers, or -1 (the reason in the JSON of
+// demo_last_error()).
 EMSCRIPTEN_KEEPALIVE int demo_pair_inliers(int n, const float* xy_a, const float* xy_b, int width, int height,
-                                          double max_px, std::uint8_t* mask) {
+                                          double max_px, std::uint8_t* mask, double* angle_deg) {
+  *angle_deg = 0.0;
   if (n < 5) {
     for (int k = 0; k < n; ++k) mask[k] = 0;
     return 0;
@@ -600,6 +603,7 @@ EMSCRIPTEN_KEEPALIVE int demo_pair_inliers(int n, const float* xy_a, const float
     for (int k = 0; k < n; ++k) mask[k] = 0;
     return 0;
   }
+  *angle_deg = r.median_tri_angle_deg;
   return static_cast<int>(r.n_inliers);
 }
 
