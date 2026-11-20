@@ -22,7 +22,7 @@ not, and a default build does not look for it.
 | `web/demo_wasm.cpp`, `web/index.html`, `web/demo.js` | The live demo (D156): the WebAssembly entry points, the page and its script. |
 | `web/samples/` | The live demo's sample set: 44 images of ETH3D's *delivery_area* and `samples.json` (their focal lengths). |
 | `tools/fetch_match_web.sh` | The live demo's keypoints and matcher modules, from just-keypoints' and just-matching's sites. |
-| `web/capture.html`, `web/capture.js`, `web/capture_worker.js`, `web/weights_worker.js` | The live capture (D157): the page, its camera loop, the mapper session in a worker, FlexGlue's weights from the visitor's checkpoint. |
+| `web/capture.html`, `web/capture.js`, `web/capture_worker.js`, `web/weights_worker.js` | The live capture (D157): the page, its camera loop, the mapper session in a worker (which matches LightGlue's and LighterGlue's map pairs too, D159), FlexGlue's weights from the visitor's checkpoint. |
 | `web/gates.js`, `web/gates.test.mjs` | The live capture's keep rules, ported from Like Recon, and their tests (`node --test demo/web/gates.test.mjs`). |
 | `web/view.js` | The live capture's 3D view. |
 
