@@ -10,3 +10,5 @@ dist/
 wheelhouse/
 # The live demo's keypoints and matcher modules (demo/tools/fetch_match_web.sh).
 /third_party/match-web/
+# LightGlue's weights for the pipeline test (tests/pipeline/fetch_weights.py).
+/tests/data/weights/
