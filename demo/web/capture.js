@@ -46,8 +46,6 @@ const APPEARANCE_PARTNERS = 4;   // more keyframes for one the map can't place (
 const FINISH_SHORTLIST = 10;     // pairs per keyframe for the finish (FlexGlue's shortlist)
 const FINISH_SEQUENTIAL = 5;     // LightGlue's finish: each keyframe with the five before it
 const MIN_FINISH_MATCHES = 15;
-// Under this median triangulation angle to the last keyframe, the camera is turning on the spot.
-const TURN_DEG = 2.5;
 
 // A phone: LightGlue by default (FlexGlue's backbone is ~1 GB of GPU memory and takes ~2 s a
 // frame on a Pixel 9a), a 640 px working image (ALIKED 136 ms there) and 1,024 keypoints.
@@ -126,43 +124,40 @@ function startWorker() {
 
 // ---- a frame's matches checked against a relative pose (on the CPU, this thread)
 
-// The verified matches [i, j], and the inliers' median triangulation angle as .angle.
 function verified(refXy, curXy, matches, w, h) {
   const M = S.live;
   const n = matches.length / 2;
-  if (n < G.MIN_INLIERS) return Object.assign([], { angle: null });
+  if (n < G.MIN_INLIERS) return [];
   const a = new Float32Array(2 * n), b = new Float32Array(2 * n);
   for (let k = 0; k < n; k++) {
     const i = matches[2 * k], j = matches[2 * k + 1];
     a[2 * k] = refXy[2 * i]; a[2 * k + 1] = refXy[2 * i + 1];
     b[2 * k] = curXy[2 * j]; b[2 * k + 1] = curXy[2 * j + 1];
   }
-  const pa = M._malloc(8 * n), pb = M._malloc(8 * n), pm = M._malloc(n), pg = M._malloc(8);
+  const pa = M._malloc(8 * n), pb = M._malloc(8 * n), pm = M._malloc(n);
   try {
     M.HEAPF32.set(a, pa >> 2);
     M.HEAPF32.set(b, pb >> 2);
-    const got = M._demo_pair_inliers(n, pa, pb, w, h, G.INLIER_PX, pm, pg);
+    const got = M._demo_pair_inliers(n, pa, pb, w, h, G.INLIER_PX, pm);
     if (got < 0) throw new Error(JSON.parse(M.UTF8ToString(M._demo_last_error())).error);
     const mask = M.HEAPU8.subarray(pm, pm + n);
     const seen = [];
     for (let k = 0; k < n; k++) if (mask[k]) seen.push([matches[2 * k], matches[2 * k + 1]]);
-    seen.angle = M.HEAPF64[pg >> 3];
     return seen;
   } finally {
-    M._free(pa); M._free(pb); M._free(pm); M._free(pg);
+    M._free(pa); M._free(pb); M._free(pm);
   }
 }
 
 // The frame (features f, keypoints xy, size w x h) against keyframe r.
 async function measure(r, f, xy, w, h) {
-  if (!r.feat || !xy.length || !r.xy.length) return { overlap: 0, support: { inliers: 0, coverage: 0 }, seen: [], angle: null };
+  if (!r.feat || !xy.length || !r.xy.length) return { overlap: 0, support: { inliers: 0, coverage: 0 }, seen: [] };
   const m = await S.matcher.match(r.feat, r.xy, f, xy, LIVE[S.matcherKind]);
   const seen = verified(r.xy, xy, m.matches, w, h);
   return {
     overlap: seen.length >= G.MIN_INLIERS ? G.overlap(r.xy, xy, seen, w, h) : 0,
     support: G.supportOf(r.xy, xy, seen, w, h),
     seen,
-    angle: seen.length >= G.MIN_INLIERS ? seen.angle : null,
   };
 }
 
@@ -282,11 +277,7 @@ async function liveStep() {
 
   drawOverlay(kp.xy, now?.seen, w, h);
   const gate = pick ? 'kept' : verdict.gate === 'kept' ? 'waiting' : verdict.gate;
-  // Turning on the spot: the view moved on from the keyframe (overlap under 0.8) with no
-  // baseline to it. A capture's pieces break where it does (the replay of a walk on a
-  // phone: 1-4 degrees between neighbouring keyframes at its two splits).
-  const turning = now?.angle != null && overlapNow < 0.8 && now.angle < TURN_DEG;
-  showGate(gate, pick?.why, overlapNow, G.slowDown(speed, blurry && S.settings.rejectBlur), relocalized, turning);
+  showGate(gate, pick?.why, overlapNow, G.slowDown(speed, blurry && S.settings.rejectBlur), relocalized);
   const ms = performance.now() - t0;
   const avg = (old, v) => (S.stats.frames ? 0.8 * old + 0.2 * v : v);
   S.stats.frameMs = avg(S.stats.frameMs, ms);
@@ -506,13 +497,12 @@ const GATES = {
 };
 const WHY = { first: 'first', shoot: 'shot', target: '', support: 'matches thinning', redundancy: 'two back leaving',
               lost: 'kept before losing it' };
-function showGate(gate, why, overlap, slow, relocalized, turning) {
+function showGate(gate, why, overlap, slow, relocalized) {
   let text = GATES[gate] ?? gate;
   if (gate === 'kept' && WHY[why]) text += ` (${WHY[why]})`;
   if (gate !== 'kept' && slow) text = 'Slow down';
-  if (turning) text = 'Turning on the spot: step sideways';
   if (relocalized) text = 'Found an earlier keyframe again';
-  showChip(text, gate === 'kept' && !turning ? 'kept' : gate === 'lost' || slow || turning ? 'warn' : '');
+  showChip(text, gate === 'kept' ? 'kept' : gate === 'lost' || slow ? 'warn' : '');
   const m = $('meter');
   m.hidden = overlap == null;
   if (overlap != null) {
