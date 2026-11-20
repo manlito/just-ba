@@ -62,10 +62,10 @@ if(EMSCRIPTEN)
   target_link_options(
     jba_demo_wasm PRIVATE
     -sJSPI
-    "-sJSPI_EXPORTS=demo_reconstruct,demo_backends,demo_session_new,demo_session_add,demo_session_retry,demo_session_finish"
+    "-sJSPI_EXPORTS=demo_reconstruct,demo_backends,demo_session_new,demo_session_add,demo_session_retry,demo_session_finish,demo_capture_reconstruct"
     "-sEXPORTED_FUNCTIONS=_demo_reconstruct,_demo_backends,_demo_points,_demo_tracks,_demo_colour_obs,_malloc,_free,\
 _demo_session_new,_demo_session_add,_demo_session_retry,_demo_session_snapshot,_demo_session_finish,_demo_session_free,\
-_demo_pair_inliers,_demo_last_error"
+_demo_pair_inliers,_demo_last_error,_demo_capture_reconstruct"
     "-sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8,HEAP32,HEAPF32,HEAPF64,UTF8ToString"
     -sMODULARIZE
     -sEXPORT_ES6

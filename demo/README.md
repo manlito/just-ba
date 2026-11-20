@@ -265,7 +265,10 @@ by appearance (the shortlist) and tried again (`demo_session_retry`). Finish mat
 shortlist over every keyframe (LightGlue: each with the five before it) and runs
 `demo_session_finish` (`Session::finish`, `Mapper::run_from` from the live map), with
 progress and Stop; the points are coloured from the keyframes and can be downloaded as
-PLY. The session takes Like Recon's settings: a window of 8, a new piece after 10
+PLY. **Reconstruct again** matches the keyframes again with the matcher chosen then
+(FlexGlue: its shortlist and the three before each; LightGlue: the five before each) and
+runs the mapper from scratch (`demo_capture_reconstruct`), without the camera or the live
+map: a capture made with LightGlue on a phone can be reconstructed with FlexGlue. The session takes Like Recon's settings: a window of 8, a new piece after 10
 keyframes in a row not placed, 15 verified matches for an online pair, the map starting
 from the widest pair it can. Keyframes after a turn, which see too few of the map's points
 for PnP, are placed from their best pair to the map (`register_from_pairs`, D158; also

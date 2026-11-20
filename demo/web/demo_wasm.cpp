@@ -364,6 +364,39 @@ std::string step_json(const demo::SessionStep& st) {
   return j.str();
 }
 
+// Pairs with both images given (a, b), then n_pairs + 1 offsets into matches.
+void add_pairs(demo::Capture& c, int n_pairs, const std::int32_t* pair_images, const std::int32_t* pair_begin,
+               const std::int32_t* matches) {
+  for (int p = 0; p < n_pairs; ++p) {
+    demo::Pair pr;
+    pr.a = pair_images[2 * p];
+    pr.b = pair_images[2 * p + 1];
+    for (std::int32_t m = pair_begin[p]; m < pair_begin[p + 1]; ++m) {
+      pr.ka.push_back(matches[2 * m]);
+      pr.kb.push_back(matches[2 * m + 1]);
+    }
+    c.pairs.push_back(std::move(pr));
+  }
+}
+
+// Progress to the page (Module.onProgress), at most four times a second and at every new stage.
+demo::ProgressCallback progress_reporter(std::chrono::steady_clock::time_point t0) {
+  auto last = std::make_shared<std::chrono::steady_clock::time_point>(t0 - std::chrono::seconds(1));
+  auto last_stage = std::make_shared<std::string>();
+  return [=](const demo::Progress& p) {
+    const auto now = std::chrono::steady_clock::now();
+    if (p.stage == *last_stage && now - *last < std::chrono::milliseconds(250)) return true;
+    *last = now;
+    *last_stage = p.stage;
+    std::ostringstream j;
+    j << "{\"stage\": \"" << p.stage << "\", \"registered\": " << p.registered << ", \"images\": " << p.images
+      << ", \"iteration\": " << p.iteration << ", \"seconds\": ";
+    num(j, std::chrono::duration<double>(now - t0).count());
+    j << "}";
+    return demo_report(j.str().c_str()) != 0;
+  };
+}
+
 // The registered images of a model and their poses, JSON.
 void write_cameras(std::ostringstream& j, const std::vector<char>& registered, const std::vector<double>& poses) {
   j << "[";
@@ -376,6 +409,33 @@ void write_cameras(std::ostringstream& j, const std::vector<char>& registered, c
     first = false;
   }
   j << "]";
+}
+
+// A reconstruction of capture c as JSON, its points to demo_points(), their tracks to
+// demo_tracks(), per point an observation to demo_colour_obs().
+std::string result_json(const demo::Reconstruction& r, const demo::Capture& c) {
+  for (double v : r.problem.points) step_points.push_back(static_cast<float>(v));
+  step_tracks = r.point_track;
+  colour_of(r);
+  int registered = 0;
+  for (char g : r.registered) registered += g ? 1 : 0;
+  std::ostringstream j;
+  j << "{\"ok\": " << (r.ok() ? "true" : "false") << ", \"cancelled\": " << (r.cancelled ? "true" : "false")
+    << ", \"error\": \"" << escape(r.error) << "\", \"images\": " << c.num_images() << ", \"pairs\": " << c.pairs.size()
+    << ", \"registered\": " << registered << ", \"points\": " << r.problem.points.size() / 3
+    << ", \"observations\": " << r.problem.obs_point.size() << ", \"models\": " << r.models << ", \"mean_error_px\": ";
+  num(j, r.mean_error_px);
+  j << ", \"intrinsics\": [";
+  for (std::size_t k = 0; k < r.problem.intrinsics.size(); ++k) {
+    if (k) j << ",";
+    num(j, r.problem.intrinsics[k]);
+  }
+  j << "], \"cameras\": ";
+  write_cameras(j, r.registered, r.poses);
+  j << ", \"seconds\": ";
+  num(j, r.time.total);
+  j << "}";
+  return j.str();
 }
 
 }  // namespace
@@ -510,53 +570,52 @@ EMSCRIPTEN_KEEPALIVE const char* demo_session_finish(int n_pairs, const std::int
     fo.refine_intrinsics = jba::kFocal | jba::kDistortion;
     session_mapper->set_options(fo);
     demo::Capture c = session->capture();
-    for (int p = 0; p < n_pairs; ++p) {
-      demo::Pair pr;
-      pr.a = pair_images[2 * p];
-      pr.b = pair_images[2 * p + 1];
-      for (std::int32_t m = pair_begin[p]; m < pair_begin[p + 1]; ++m) {
-        pr.ka.push_back(matches[2 * m]);
-        pr.kb.push_back(matches[2 * m + 1]);
-      }
-      c.pairs.push_back(std::move(pr));
-    }
+    add_pairs(c, n_pairs, pair_images, pair_begin, matches);
     const auto t0 = std::chrono::steady_clock::now();
-    auto last = t0 - std::chrono::seconds(1);
-    std::string last_stage;
-    const demo::Reconstruction r = session->finish(c, [&](const demo::Progress& p) {
-      const auto now = std::chrono::steady_clock::now();
-      if (p.stage == last_stage && now - last < std::chrono::milliseconds(250)) return true;
-      last = now;
-      last_stage = p.stage;
-      std::ostringstream j;
-      j << "{\"stage\": \"" << p.stage << "\", \"registered\": " << p.registered << ", \"images\": " << p.images
-        << ", \"iteration\": " << p.iteration << ", \"seconds\": ";
-      num(j, std::chrono::duration<double>(now - t0).count());
-      j << "}";
-      return demo_report(j.str().c_str()) != 0;
-    });
-    for (double v : r.problem.points) step_points.push_back(static_cast<float>(v));
-    step_tracks = r.point_track;
-    colour_of(r);
-    int registered = 0;
-    for (char g : r.registered) registered += g ? 1 : 0;
-    std::ostringstream j;
-    j << "{\"ok\": " << (r.ok() ? "true" : "false") << ", \"cancelled\": " << (r.cancelled ? "true" : "false")
-      << ", \"error\": \"" << escape(r.error) << "\", \"images\": " << c.num_images() << ", \"pairs\": " << c.pairs.size()
-      << ", \"registered\": " << registered << ", \"points\": " << r.problem.points.size() / 3
-      << ", \"observations\": " << r.problem.obs_point.size() << ", \"models\": " << r.models << ", \"mean_error_px\": ";
-    num(j, r.mean_error_px);
-    j << ", \"intrinsics\": [";
-    for (std::size_t k = 0; k < r.problem.intrinsics.size(); ++k) {
-      if (k) j << ",";
-      num(j, r.problem.intrinsics[k]);
+    result = result_json(session->finish(c, progress_reporter(t0)), c);
+  } catch (const std::exception& e) {
+    result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
+  }
+  return result.c_str();
+}
+
+// The capture reconstructed again from scratch (D157), with keypoints and matches from the
+// page (the keyframes matched again, by the matcher the visitor chose): Mapper::run on one
+// SIMPLE_RADIAL camera of width x height starting at focal f, searched for, with the live
+// capture's options. n keyframes, kp_begin n + 1 offsets into kp_xy (just-keypoints'
+// convention); pairs as demo_session_finish's. The answer as demo_session_finish's.
+EMSCRIPTEN_KEEPALIVE const char* demo_capture_reconstruct(int n, int width, int height, double f,
+                                                         const std::int32_t* kp_begin, const float* kp_xy, int n_pairs,
+                                                         const std::int32_t* pair_images, const std::int32_t* pair_begin,
+                                                         const std::int32_t* matches, const char* poses) {
+  step_points.clear();
+  step_tracks.clear();
+  colour_obs.clear();
+  try {
+    demo::MapperOptions mo;
+    demo::colmap_thresholds(mo);
+    mo.pose_backend = std::string(poses) == "webgpu" ? JPO_BACKEND_WEBGPU : JPO_BACKEND_CPU;
+    mo.threads = 1;
+    mo.min_pair_inliers = 15;
+    mo.register_from_pairs = true;
+    if (!session_mapper || session_mapper->options().pose_backend != mo.pose_backend) {
+      session.reset();  // it holds the mapper
+      session_mapper = std::make_unique<demo::Mapper>(mo);
     }
-    j << "], \"cameras\": ";
-    write_cameras(j, r.registered, r.poses);
-    j << ", \"seconds\": ";
-    num(j, r.time.total);
-    j << "}";
-    result = j.str();
+    session_mapper->set_options(mo);
+    demo::Capture c;
+    c.model = jba::CameraModel::SimpleRadial;
+    c.intrinsics = {f, 0.5 * width, 0.5 * height, 0.0};
+    c.focal_unknown = {1};
+    c.image_size = {width, height};
+    for (int i = 0; i < n; ++i) {
+      std::vector<double> kp;
+      for (std::int32_t k = 2 * kp_begin[i]; k < 2 * kp_begin[i + 1]; ++k) kp.push_back(static_cast<double>(kp_xy[k]) + 0.5);
+      c.keypoints.push_back(std::move(kp));
+    }
+    add_pairs(c, n_pairs, pair_images, pair_begin, matches);
+    const auto t0 = std::chrono::steady_clock::now();
+    result = result_json(session_mapper->run(c, {}, progress_reporter(t0)), c);
   } catch (const std::exception& e) {
     result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
   }

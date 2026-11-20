@@ -265,7 +265,8 @@ async function liveStep() {
     overlap: G.anticipate(overlapNow, speed), support: now?.support ?? { inliers: 0, coverage: 0 },
     overlap2: S.twoBack ? G.anticipate(overlap2, speed) : null,
   });
-  const cand = { xy: kp.xy, desc: S.matcherKind === 'lightglue' ? kp.desc : null, feat: f, w, h, image: frame.image,
+  // The descriptors are kept whatever the matcher: Reconstruct again may match with LightGlue.
+  const cand = { xy: kp.xy, desc: kp.desc, feat: f, w, h, image: frame.image,
                  overlap: overlapNow, relocalized };
   let pick;
   if (shoot) {
@@ -656,6 +657,69 @@ async function showResult(r) {
   view.set({ cameras: r.cameras, points: r.points, colours, added: new Set() }, { refit: true });
 }
 
+// Reconstruct again: the keyframes matched again by the matcher chosen now (FlexGlue: the
+// shortlist over all of them and the three before each; LightGlue: the five before each),
+// then the mapper from scratch. Needs neither the camera nor the live map.
+async function reconstructAgain() {
+  S.finishing = true;
+  S.cancelFinish = false;
+  setButtons();
+  const feats = [];
+  try {
+    await ensureModules();
+    const kind = S.matcherKind, kfs = S.keyframes, n = kfs.length;
+    for (const [i, k] of kfs.entries()) {
+      if (S.cancelFinish) throw new Error('stopped');
+      setStatus(`Describing keyframe ${i + 1} of ${n}…`);
+      setProgress(i, n);
+      if (kind === 'flexglue') {
+        const bm = await createImageBitmap(k.jpeg);
+        feats.push(await S.matcher.describe(bm));
+        bm.close();
+      } else feats.push(await S.matcher.describeKeypoints({ width: k.w, height: k.h }, k.xy, k.desc));
+    }
+    const wanted = new Set();
+    const add = (a, b) => wanted.add(`${Math.min(a, b)}-${Math.max(a, b)}`);
+    const back = kind === 'flexglue' ? SEQUENTIAL : FINISH_SEQUENTIAL;
+    for (let j = 1; j < n; j++) for (let i = Math.max(0, j - back); i < j; i++) add(i, j);
+    if (kind === 'flexglue') {
+      setStatus('Choosing the pairs to match…');
+      const list = await S.matcher.shortlist(feats, { k: FINISH_SHORTLIST });
+      for (let p = 0; p < list.n; p++) add(list.pairs[2 * p], list.pairs[2 * p + 1]);
+    }
+    const todo = [...wanted].map((s) => s.split('-').map(Number));
+    const pairs = [];
+    for (const [p, [a, b]] of todo.entries()) {
+      if (S.cancelFinish) throw new Error('stopped');
+      if (p % 2 === 0) { setStatus(`Matching pair ${p + 1} of ${todo.length}…`); setProgress(p, todo.length); }
+      const m = await S.matcher.match(feats[a], kfs[a].xy, feats[b], kfs[b].xy, FINISH[kind]);
+      if (m.n >= MIN_FINISH_MATCHES) pairs.push({ a, b, matches: m.matches });
+    }
+    setProgress(null);
+    setStatus('Reconstructing…');
+    const { w, h } = kfs[0];
+    const r = await call('reconstruct', {
+      width: w, height: h, focal: 1.2 * Math.max(w, h), xy: kfs.map((k) => k.xy), pairs,
+      poses: S.backends.poses.includes('webgpu') ? 'webgpu' : 'cpu',
+    });
+    if (r.cancelled) throw new Error('stopped');
+    if (!r.ok) throw new Error(r.error);
+    S.result = r;
+    await showResult(r);
+    setStatus(`Done with ${kind === 'flexglue' ? 'FlexGlue' : 'LightGlue'}: ${r.registered} of ${r.images} keyframes, ` +
+              `${int(r.points.length / 3)} points, ${fmt(r.mean_error_px)} px.`);
+  } catch (e) {
+    setProgress(null);
+    setStatus(e.message === 'stopped' ? 'Stopped. The last model is shown.' : 'Reconstructing failed: ' + e.message,
+              e.message !== 'stopped');
+  } finally {
+    for (const f of feats) f.destroy();
+    S.finishing = false;
+    setButtons();
+    renderNumbers();
+  }
+}
+
 function downloadPly() {
   const r = S.result;
   if (!r) return;
@@ -824,6 +888,9 @@ function setButtons() {
   $('finish').disabled = !(capturing || (S.finishing && !S.cancelFinish)) || (!S.finishing && S.keyframes.length < 2);
   $('finish').textContent = S.finishing ? 'Stop' : 'Finish';
   $('reset').hidden = !(S.done || (S.keyframes.length && !capturing && !S.finishing));
+  // After a capture: match the keyframes again with the matcher chosen, and reconstruct.
+  $('again').hidden = !(S.done && S.keyframes.length >= 2) || S.finishing;
+  $('again').disabled = S.busy || (matcherKind() === 'flexglue' && !S.weightsReady);
   $('download').hidden = !S.result;
   for (const i of document.querySelectorAll('input[name=matcher], input[name=keypoints]')) i.disabled = capturing || S.finishing || S.busy;
   $('pick').disabled = S.busy || !$('accept').checked;
@@ -900,6 +967,7 @@ $('finish').addEventListener('click', () => {
   finish();
 });
 $('reset').addEventListener('click', reset);
+$('again').addEventListener('click', reconstructAgain);
 $('download').addEventListener('click', downloadPly);
 $('camera').addEventListener('change', (e) => { if (!S.running) openCamera(e.target.value).catch((err) => setStatus(err.message, true)); });
 for (const i of document.querySelectorAll('input[name=matcher]')) i.addEventListener('change', refreshWeights);

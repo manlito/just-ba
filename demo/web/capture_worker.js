@@ -10,6 +10,8 @@
 //   add { xy: Float32Array, pairs: [{ earlier, matches: Int32Array }], deferSplit }  -> step + map
 //   retry { pairs, newPiece }              -> step + map
 //   finish { pairs: [{ a, b, matches }] }  -> result with points, tracks, colourObs
+//   reconstruct { width, height, focal, xy: [Float32Array per keyframe], pairs, poses }
+//                                          -> the same, from scratch (Reconstruct again)
 //   free { }
 // A map or a finish's result has its points as a Float32Array (3 per point), tracks as an
 // Int32Array, the finish's colourObs too (an image and a keypoint per point); they are transferred.
@@ -122,6 +124,27 @@ const ops = {
       const pk = packPairs(pairs, true);
       const r = JSON.parse(await M.ccall('demo_session_finish', 'string', ['number', 'number', 'number', 'number'],
         [pairs.length, a.put(pk.images), a.put(pk.begin), a.put(pk.matches)], { async: true }));
+      return r.ok || r.cancelled ? { ...r, ...arrays(r.points, true) } : r;
+    } finally {
+      a.free();
+    }
+  },
+  async reconstruct({ width, height, focal, xy, pairs, poses }) {
+    cancel = false;
+    await module();
+    const a = arena();
+    try {
+      const begin = new Int32Array(xy.length + 1);
+      let total = 0;
+      xy.forEach((k, i) => { begin[i] = total; total += k.length / 2; });
+      begin[xy.length] = total;
+      const all = new Float32Array(2 * total);
+      xy.forEach((k, i) => all.set(k, 2 * begin[i]));
+      const pk = packPairs(pairs, true);
+      const r = JSON.parse(await M.ccall('demo_capture_reconstruct', 'string',
+        ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'string'],
+        [xy.length, width, height, focal, a.put(begin), a.put(all), pairs.length, a.put(pk.images), a.put(pk.begin),
+         a.put(pk.matches), poses], { async: true }));
       return r.ok || r.cancelled ? { ...r, ...arrays(r.points, true) } : r;
     } finally {
       a.free();
