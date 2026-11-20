@@ -1,8 +1,8 @@
 # Live demo
 
 Structure from motion on real photos, in your browser. The demo finds keypoints (ALIKED or
-XFeat, through just-keypoints) and matches every pair of images (LightGlue, or XFeat's
-LighterGlue, through just-matching) on your GPU. Then it reconstructs them incrementally: each pair's matches
+XFeat, through just-keypoints) and matches every pair of images (LightGlue, XFeat's
+LighterGlue, or FlexGlue with ALIKED's keypoints, through just-matching) on your GPU. Then it reconstructs them incrementally: each pair's matches
 are verified by relative pose in RANSAC, the pair with the most inliers and enough parallax
 gives the first two cameras and the first points, and each further image is registered by
 PnP, its new points triangulated, and everything registered is bundle-adjusted with this
@@ -21,7 +21,9 @@ matches come from two more. just-ba itself takes matches that are already verifi
 
 It needs WebGPU and WebAssembly JavaScript Promise Integration, which current Chrome
 and Edge have. The first run downloads LightGlue's weights (24 MB), or LighterGlue's (4.5 MB)
-with XFeat. Your own photos stay
+with XFeat. FlexGlue's weights are not served: as for the live capture, you download
+`flexglue.pth` (567 MB) from FlexGlue's release once and give it to the page, which checks
+it, converts it to half precision and keeps it in the browser for both pages. Your own photos stay
 in the browser: nothing is uploaded.
 ```
 

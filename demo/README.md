@@ -23,6 +23,7 @@ not, and a default build does not look for it.
 | `web/samples/` | The live demo's sample set: 44 images of ETH3D's *delivery_area* and `samples.json` (their focal lengths). |
 | `tools/fetch_match_web.sh` | The live demo's keypoints and matcher modules, from just-keypoints' and just-matching's sites. |
 | `web/capture.html`, `web/capture.js`, `web/capture_worker.js`, `web/weights_worker.js` | The live capture (D157): the page, its camera loop, the mapper session in a worker (which matches LightGlue's and LighterGlue's map pairs too, D159), FlexGlue's weights from the visitor's checkpoint. |
+| `web/flexglue_weights.js` | FlexGlue's weights kept in the browser, shared by the live capture and the live demo (D160). |
 | `web/gates.js`, `web/gates.test.mjs` | The live capture's keep rules, ported from Like Recon, and their tests (`node --test demo/web/gates.test.mjs`). |
 | `web/view.js` | The live capture's 3D view. |
 
@@ -211,7 +212,8 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 Structure from motion on real photos in the browser (D156). The page loads the sample
 set or the visitor's own images, finds ALIKED keypoints with just-keypoints' module and
 matches every pair with LightGlue through just-matching's (both on WebGPU; or XFeat's
-keypoints and LighterGlue, `features=xfeat`), then calls
+keypoints and LighterGlue, `features=xfeat`; or ALIKED's keypoints and FlexGlue from the
+visitor's own weights, `features=flexglue`, D160), then calls
 `demo_reconstruct` with the keypoints and matches: the mapper with COLMAP's thresholds,
 SIMPLE_RADIAL cameras whose focal length and distortion it refines, on the CPU or
 WebGPU. By default it runs once on each and shows the mapper's timings side by side;
