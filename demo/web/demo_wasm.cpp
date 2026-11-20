@@ -401,6 +401,10 @@ EMSCRIPTEN_KEEPALIVE const char* demo_session_new(int width, int height, double 
     mo.ba_backend = *bb;
     mo.threads = 1;
     if (min_pair_inliers > 0) mo.min_pair_inliers = static_cast<std::uint32_t>(min_pair_inliers);
+    // A turn on a walk leaves the next keyframes seeing too few of the map's points for
+    // PnP: they are placed from their best pair to the map instead (D158), live and at
+    // the finish.
+    mo.register_from_pairs = true;
     if (!session_mapper || session_mapper->options().pose_backend != mo.pose_backend)
       session_mapper = std::make_unique<demo::Mapper>(mo);
     session_mapper->set_options(mo);

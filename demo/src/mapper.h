@@ -106,6 +106,17 @@ struct MapperOptions {
   // times the guess (61 steps of 4.7 %), all in one poselib-gpu call, and the factor
   // with the lowest total MSAC score is applied. The adjustments then refine it.
   bool search_focal = false;
+  // When no image sees min_pnp_inliers of the map's points, the image with the most
+  // inliers to a registered one, in a kept pair with at least min_register_pair_inliers
+  // of them, is registered from that pair instead: its rotation the pair's, its centre
+  // along the pair's translation at the map's median spacing of neighbouring cameras;
+  // its points are triangulated and the map adjusted as after a PnP (D158). After a
+  // turn, a capture's next frames match their neighbours by the hundreds yet see almost
+  // none of the map's points (those of the turn, seen only from nearly one place, are
+  // not triangulated), so PnP cannot place them and the model ends there. false: COLMAP's
+  // behaviour, a new model.
+  bool register_from_pairs = false;
+  std::uint32_t min_register_pair_inliers = 100;
 
   // Position priors (Capture::prior_position, D150). With them, a model starts from a
   // pair of images that both have one where such a pair is fit to start from; once
@@ -266,6 +277,7 @@ struct Reconstruction {
   std::uint32_t first_inliers = 0;
   double first_angle_deg = 0.0;
   int pnp_calls = 0, pnp_problems = 0, pnp_rejected = 0, adjustments = 0;
+  int pair_registrations = 0;  // images registered from a pair (D158)
   int start_left_out = 0;             // run_from: start images that disagreed with their pairs
   int models = 0;                     // models grown; the one returned has the most images
   std::string pose_backend;           // what poselib-gpu ran on

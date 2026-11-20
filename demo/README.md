@@ -267,7 +267,9 @@ shortlist over every keyframe (LightGlue: each with the five before it) and runs
 progress and Stop; the points are coloured from the keyframes and can be downloaded as
 PLY. The session takes Like Recon's settings: a window of 8, a new piece after 10
 keyframes in a row not placed, 15 verified matches for an online pair, the map starting
-from the widest pair it can.
+from the widest pair it can. Keyframes after a turn, which see too few of the map's points
+for PnP, are placed from their best pair to the map (`register_from_pairs`, D158; also
+`jba_demo --register-from-pairs`).
 
 FlexGlue's weights come from the visitor: `flexglue.pth` from FlexGlue's release, checked
 against its SHA-256, converted to float16 by just-matching's module (`jmt.convert`) in a

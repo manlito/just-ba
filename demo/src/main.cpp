@@ -32,7 +32,7 @@
 //     capture must have one intrinsics block.
 //
 //   common options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]
-//                   [--refine none|focal|focal+distortion] [--export dir] [-v]
+//                   [--refine none|focal|focal+distortion] [--register-from-pairs] [--export dir] [-v]
 //     --refine: the intrinsics the adjustments refine. Default: focal+distortion with
 //     --thresholds colmap, as COLMAP's mapper; none otherwise.
 #include <algorithm>
@@ -70,7 +70,7 @@ int usage() {
                "                    [--thresholds colmap|demo]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
-               "         [--refine none|focal|focal+distortion] [--export dir] [-v]\n");
+               "         [--refine none|focal|focal+distortion] [--register-from-pairs] [--export dir] [-v]\n");
   return 2;
 }
 
@@ -105,6 +105,7 @@ bool common_option(const std::vector<std::string>& args, std::size_t& i, Common&
   const bool has_value = i + 1 < args.size();
   if (a == "-v") c.verbose = true;
   else if (a == "--threads" && has_value) c.mapper.threads = std::atoi(args[++i].c_str());
+  else if (a == "--register-from-pairs") c.mapper.register_from_pairs = true;
   else if (a == "--export" && has_value) c.export_dir = args[++i];
   else if (a == "--poses" && has_value) *bad = !pose_backend_from_name(args[++i], &c.mapper.pose_backend);
   else if (a == "--refine" && has_value) *bad = !refine_from_name(args[++i], &c.refine);
@@ -374,6 +375,8 @@ int run(const std::vector<std::string>& args) {
   if (no_priors) mo.use_position_priors = false;
   if (tri_angle >= 0.0) mo.tri_max_angle_error_deg = tri_angle;
   if (min_pair_inliers >= 0) mo.min_pair_inliers = static_cast<std::uint32_t>(min_pair_inliers);
+  if (const char* e = std::getenv("JBA_MIN_TRI")) mo.min_tri_angle_deg = std::atof(e);
+  if (const char* e = std::getenv("JBA_MIN_PNP")) mo.min_pnp_inliers = std::atoi(e);
   if (min_pair_coverage >= 0.0) mo.min_pair_coverage = min_pair_coverage;
   if (!available(mo)) return 2;
 
