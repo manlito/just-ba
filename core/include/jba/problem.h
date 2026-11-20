@@ -56,10 +56,11 @@ struct Problem {
   // (k - target) / sigma, without a robust loss. intrinsics_prior_sigma is in each
   // parameter's own units (pixels for focal lengths and the principal point); +inf,
   // or a parameter that is not free, means no prior on it; empty means no prior at
-  // all. intrinsics_prior is the target; empty means the intrinsics given to solve(),
-  // which writes the target it used back here (so later solves anchor to the same
-  // values). A target needs a sigma. set_intrinsics_prior (priors.h) fills both by
-  // group.
+  // all. intrinsics_prior is the target; empty, or NaN for a parameter, means the
+  // intrinsics given to solve(). solve() writes the target it used back here for the
+  // blocks it regularized (others keep what they had, NaN for an empty target), so
+  // later solves anchor to the same values. A target needs a sigma; 1 / sigma must be
+  // finite. set_intrinsics_prior (priors.h) fills both by group.
   std::vector<double> intrinsics_prior;
   std::vector<double> intrinsics_prior_sigma;
 

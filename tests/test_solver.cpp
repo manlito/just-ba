@@ -261,6 +261,30 @@ int main() {
       else EXPECT(rep.intrinsics_prior_cost > 0 && rep.intrinsics_prior_param.size() == 1 &&
                   rep.intrinsics_prior_param[0] >= 0 && rep.intrinsics_prior_norm[0] > 0);
     }
+    // Write-back covers the blocks that got a prior only: sigma with nothing freed
+    // leaves the target empty; with two blocks, the fixed one keeps NaN (its value at
+    // a later solve) and the regularized one gets its resolved target. A NaN entry
+    // in a given target means that parameter's starting value.
+    {
+      auto q = start;
+      q.intrinsics_free.clear();
+      q.intrinsics_prior_sigma = p.intrinsics_prior_sigma;
+      jba::solve(q, o);
+      EXPECT(q.intrinsics_prior.empty());
+      auto two = start;
+      two.intrinsics.insert(two.intrinsics.end(), start.intrinsics.begin(), start.intrinsics.end());
+      two.image_intrinsics.assign(two.num_images(), 0);
+      for (std::size_t i = 5; i < two.num_images(); ++i) two.image_intrinsics[i] = 1;
+      two.intrinsics_free = {jba::kFocal, 0};
+      two.intrinsics_prior_sigma.assign(10, 1.0);
+      two.intrinsics_prior.assign(10, std::nan(""));
+      two.intrinsics_prior[0] = start.intrinsics[0] + 3;  // focal of block 0 given
+      const auto two_start = two.intrinsics;
+      jba::solve(two, o);
+      EXPECT(two.intrinsics_prior[0] == start.intrinsics[0] + 3);
+      for (std::size_t a = 1; a < 5; ++a) EXPECT(two.intrinsics_prior[a] == two_start[a]);
+      for (std::size_t a = 5; a < 10; ++a) EXPECT(std::isnan(two.intrinsics_prior[a]));
+    }
     // A second solve from the result anchors to the first target, not to where it is.
     auto again = p;
     jba::solve(again, o);

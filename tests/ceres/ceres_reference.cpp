@@ -657,15 +657,17 @@ Result solve(jba::Problem& p, const Options& o) {
     // moves K).
     if (!p.intrinsics_prior_sigma.empty() && static_cast<int>(constant.size()) < np) {
       const std::size_t at = static_cast<std::size_t>(np) * c;
-      const double* target = p.intrinsics_prior.empty() ? K : &p.intrinsics_prior[at];
-      std::vector<double> w(static_cast<std::size_t>(np), 0.0);
+      std::vector<double> target(K, K + np), w(static_cast<std::size_t>(np), 0.0);
+      for (int a = 0; a < np && !p.intrinsics_prior.empty(); ++a)
+        if (!std::isnan(p.intrinsics_prior[at + static_cast<std::size_t>(a)]))
+          target[static_cast<std::size_t>(a)] = p.intrinsics_prior[at + static_cast<std::size_t>(a)];
       bool any = false;
       for (int a = 0; a < np; ++a) {
         const double sigma = p.intrinsics_prior_sigma[at + static_cast<std::size_t>(a)];
         if ((mask & jba::intrinsics_group(p.model, a)) && std::isfinite(sigma)) w[static_cast<std::size_t>(a)] = 1 / sigma;
         any = any || w[static_cast<std::size_t>(a)] != 0;
       }
-      if (any) problem.AddResidualBlock(make_intrinsics_prior_cost(target, w.data(), np), nullptr, K);
+      if (any) problem.AddResidualBlock(make_intrinsics_prior_cost(target.data(), w.data(), np), nullptr, K);
     }
     ordering->AddElementToGroup(K, 1);
   }

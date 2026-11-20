@@ -391,17 +391,19 @@ std::string validate(const Problem& p) {
     if (p.intrinsics_prior_sigma.size() != p.intrinsics.size())
       return "intrinsics_prior_sigma must hold " + std::to_string(np) + " values per intrinsics block";
     for (std::size_t i = 0; i < p.intrinsics_prior_sigma.size(); ++i)
-      if (!(p.intrinsics_prior_sigma[i] > 0))  // NaN fails too; +inf is no prior
+      // NaN fails too; +inf is no prior; so small that 1 / sigma overflows is refused.
+      if (!(p.intrinsics_prior_sigma[i] > 0) || !std::isfinite(1 / p.intrinsics_prior_sigma[i]))
         return "intrinsics block " + std::to_string(i / static_cast<std::size_t>(np)) +
-               " has a prior sigma that is not positive";
+               " has a prior sigma that is not positive (or too small)";
   }
   if (!p.intrinsics_prior.empty()) {
     if (p.intrinsics_prior_sigma.empty()) return "intrinsics_prior needs intrinsics_prior_sigma";
     if (p.intrinsics_prior.size() != p.intrinsics.size())
       return "intrinsics_prior must hold " + std::to_string(np) + " values per intrinsics block";
-    if (const auto i = first_not_finite(p.intrinsics_prior); i < p.intrinsics_prior.size())
-      return "intrinsics block " + std::to_string(i / static_cast<std::size_t>(np)) +
-             " has a prior target that is not finite";
+    for (std::size_t i = 0; i < p.intrinsics_prior.size(); ++i)  // NaN: the starting value
+      if (std::isinf(p.intrinsics_prior[i]))
+        return "intrinsics block " + std::to_string(i / static_cast<std::size_t>(np)) +
+               " has a prior target that is infinite";
   }
   if (const auto i = first_not_finite(p.poses); i < p.poses.size())
     return "image " + std::to_string(i / 7) + " has a pose value that is not finite";

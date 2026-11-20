@@ -573,8 +573,9 @@ Candidates for later: FULL_OPENCV, THIN_PRISM_FISHEYE, EUCM.
 
     without a robust loss, sigma in the parameter's own units (pixels for focal
     lengths and the principal point; a focal length within 1 % is sigma = 0.01 f).
-    The target defaults to the intrinsics given to `solve()`, which writes it back
-    to `intrinsics_prior` so later solves keep the same anchor; `refine()` anchors
+    The target defaults (empty, or NaN per parameter) to the intrinsics given to
+    `solve()`, which writes it back to `intrinsics_prior` for the blocks it
+    regularized so later solves keep the same anchor; `refine()` anchors
     every round to the caller's values. The cost counts in the reprojection type.
     `set_intrinsics_prior(problem, focal_fraction, principal_point_sigma,
     distortion_sigma)` fills the sigmas by group.

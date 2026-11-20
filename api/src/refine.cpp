@@ -228,7 +228,11 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   if (auto err = validate(base); !err.empty()) throw std::invalid_argument("refine: invalid scene: " + err);
   // The intrinsics prior anchors to the caller's values in every round (D161), not to
   // the previous round's result.
-  if (!base.intrinsics_prior_sigma.empty() && base.intrinsics_prior.empty()) base.intrinsics_prior = base.intrinsics;
+  if (!base.intrinsics_prior_sigma.empty()) {
+    if (base.intrinsics_prior.empty()) base.intrinsics_prior = base.intrinsics;
+    for (std::size_t a = 0; a < base.intrinsics_prior.size(); ++a)
+      if (std::isnan(base.intrinsics_prior[a])) base.intrinsics_prior[a] = base.intrinsics[a];
+  }
 
   RefineResult out;
   const PoseInitialization init = initialize_poses(base, o.solver.prior_defaults);

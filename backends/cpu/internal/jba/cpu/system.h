@@ -219,8 +219,8 @@ struct System {
   std::vector<std::uint8_t> depth_fixed_cols;   // per image: bit 0 scale, bit 1 offset
   std::vector<DepthPrior> depth_priors;
   std::vector<IntrinsicsPrior> intrinsics_priors;
-  // The intrinsics prior's target as resolved at construction (Problem's, or the
-  // starting intrinsics), written back by write_back; empty without a prior (D161).
+  // The intrinsics prior's target to write back (D161): resolved for the blocks with a
+  // factor, the caller's (or NaN) elsewhere; empty when no factor was built.
   std::vector<double> intr_prior_target;
 
   // Poses whose heading is held by the gauge (D83): rotation tangent basis, from the

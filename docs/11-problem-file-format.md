@@ -58,7 +58,7 @@ per block for the camera model.
 | `camera.model` | i32 | [1] | yes | COLMAP model id: 0 SIMPLE_PINHOLE, 1 PINHOLE, 2 SIMPLE_RADIAL, 3 RADIAL, 4 OPENCV, 5 OPENCV_FISHEYE |
 | `intrinsics` | f64 | [B, P] | yes | Parameters in COLMAP order (document 02) |
 | `intrinsics.free` | u8 | [B] | no | Bit mask of freed groups: 1 focal length, 2 principal point, 4 distortion. Absent: all fixed (D26) |
-| `intrinsics.prior` | f64 | [B, P] | no | Target of the prior on free intrinsics (D161). Needs `intrinsics.prior_sigma`. Absent: the intrinsics as given; a solve writes the target it used here |
+| `intrinsics.prior` | f64 | [B, P] | no | Target of the prior on free intrinsics (D161). Needs `intrinsics.prior_sigma`. Absent, or NaN for a parameter: the intrinsics as given; a solve writes the target it used here for the blocks it regularized |
 | `intrinsics.prior_sigma` | f64 | [B, P] | no | Standard deviation of each parameter's prior, in its units (pixels for focal lengths and the principal point); positive, +inf for none; only freed parameters are regularized. Absent: no prior (D161) |
 | `image.pose` | f64 | [N, 7] | yes | World to camera: qw, qx, qy, qz, tx, ty, tz. Unit quaternion. Camera axes x right, y down, z forward |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Intrinsics block of each image. Absent: every image uses block 0 |

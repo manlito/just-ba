@@ -57,9 +57,9 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
         const std::size_t at = static_cast<std::size_t>(np) * c + static_cast<std::size_t>(a);
         const double sigma = p.intrinsics_prior_sigma[at];
         if (!(mask & intrinsics_group(p.model, a)) || !std::isfinite(sigma)) continue;
-        const double v = (p.intrinsics[at] - target[at]) / sigma;
+        const double v = std::isnan(target[at]) ? 0.0 : (p.intrinsics[at] - target[at]) / sigma;
         r.intrinsics_prior_cost += 0.5 * v * v;
-        if (std::abs(v) >= r.intrinsics_prior_norm[c]) {
+        if (r.intrinsics_prior_param[c] < 0 || std::abs(v) > r.intrinsics_prior_norm[c]) {
           r.intrinsics_prior_norm[c] = std::abs(v);
           r.intrinsics_prior_param[c] = a;
         }

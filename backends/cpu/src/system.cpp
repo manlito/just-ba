@@ -306,7 +306,12 @@ void System::build_factors(const Problem& p, const SolverOptions& o) {
   // sigma on a free parameter. Nothing is built without sigma, so such problems
   // solve exactly as before.
   if (!p.intrinsics_prior_sigma.empty()) {
-    intr_prior_target = p.intrinsics_prior.empty() ? p.intrinsics : p.intrinsics_prior;
+    // The target per parameter: the caller's, or for an empty target or a NaN entry
+    // the intrinsics given to solve(). Written back for the blocks that get a factor
+    // only, so a block that is fixed, unseen or without a finite sigma now is not
+    // pinned to its current (perhaps placeholder) values for later solves.
+    std::vector<double> written = p.intrinsics_prior;
+    if (written.empty()) written.assign(p.intrinsics.size(), std::nan(""));
     FactorSet iprior = make_set(FactorKind::IntrinsicsPrior, np, {np});
     iprior.grain = std::size_t(1) << 20;  // inline
     for (std::size_t c = 0; c < intr_off.size(); ++c) {
@@ -316,7 +321,7 @@ void System::build_factors(const Problem& p, const SolverOptions& o) {
       bool any = false;
       for (int a = 0; a < np; ++a) {
         const std::size_t at = static_cast<std::size_t>(np) * c + static_cast<std::size_t>(a);
-        f.k0[a] = intr_prior_target[at];
+        f.k0[a] = std::isnan(written[at]) ? p.intrinsics[at] : written[at];
         const double sigma = p.intrinsics_prior_sigma[at];
         const bool free = !(intr_fixed_cols[c] & (1u << a));
         f.w[a] = free && std::isfinite(sigma) ? 1 / sigma : 0.0;
@@ -326,8 +331,12 @@ void System::build_factors(const Problem& p, const SolverOptions& o) {
       add_factor(iprior, {{intr_off[c], -1}}, Loss{});
       iprior.slot_mask.back() = static_cast<std::uint8_t>(intr_fixed_cols[c]);
       intrinsics_priors.push_back(f);
+      std::copy_n(f.k0, np, &written[static_cast<std::size_t>(np) * c]);
     }
-    if (iprior.count > 0) fsets.push_back(std::move(iprior));
+    if (iprior.count > 0) {
+      fsets.push_back(std::move(iprior));
+      intr_prior_target = std::move(written);
+    }
   }
 
   if (frame_dof > 0) {

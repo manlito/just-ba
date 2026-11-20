@@ -105,6 +105,12 @@ int main() {
     bad = p;
     bad.intrinsics_prior_sigma.assign(5, inf);  // all +inf: valid, no prior
     EXPECT(jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior_sigma[0] = 1e-320;  // 1 / sigma overflows
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior[2] = std::nan("");  // NaN: that parameter's starting value
+    EXPECT(jba::validate(bad).empty());
   }
 
   // Pose priors: every prior section, both weight forms, several sets.

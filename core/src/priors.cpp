@@ -92,7 +92,8 @@ void set_intrinsics_prior(Problem& p, double focal_fraction, double principal_po
       case kPrincipalPoint: s = principal_point_sigma; break;
       case kDistortion: s = distortion_sigma; break;
     }
-    if (!(s > 0)) throw std::invalid_argument("set_intrinsics_prior: a focal length of 0");
+    if (!(s > 0) || !std::isfinite(1 / s))
+      throw std::invalid_argument("set_intrinsics_prior: a sigma of 0 or too small (a focal length of 0?)");
   }
 }
 

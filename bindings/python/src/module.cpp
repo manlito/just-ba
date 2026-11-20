@@ -291,8 +291,8 @@ NB_MODULE(_core, m) {
           },
           [](jba::Problem& p, nb::handle h) { p.intrinsics_prior = intrinsics_like(p, h, "intrinsics_prior"); },
           nb::for_getter(nb::rv_policy::move),
-          "Target of the prior on free intrinsics (D161), shaped like intrinsics; empty ([]): the intrinsics given to "
-          "solve(), which writes the target it used back here.")
+          "Target of the prior on free intrinsics (D161), shaped like intrinsics; empty ([]) or NaN for a parameter: "
+          "the intrinsics given to solve(), which writes the target it used back here for the blocks it regularized.")
       .def_prop_rw(
           "intrinsics_prior_sigma",
           [](const jba::Problem& p) {
