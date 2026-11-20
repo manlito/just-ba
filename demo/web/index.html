@@ -165,6 +165,15 @@
             thread of WebAssembly.</p>
         </div>
         <div class="field">
+          <span class="label">Features</span>
+          <div class="seg">
+            <label><input type="radio" name="features" value="aliked" checked>ALIKED + LightGlue</label>
+            <label><input type="radio" name="features" value="xfeat">XFeat + LighterGlue</label>
+          </div>
+          <p class="hint">XFeat and LighterGlue are a light pair: a 4.5 MB download instead of 24 MB, and keypoints in
+            about a third of ALIKED's time. LighterGlue's matching is slower in the browser for now.</p>
+        </div>
+        <div class="field">
           <span class="label">Keypoints per image</span>
           <div class="seg">
             <label><input type="radio" name="keypoints" value="1024">1024</label>
@@ -180,7 +189,7 @@
           </div>
           <p class="hint">Larger images are scaled down before anything else.</p>
         </div>
-        <p class="hint">Changing the images or these two settings finds keypoints and matches again; changing only where to
+        <p class="hint">Changing the images or these three settings finds keypoints and matches again; changing only where to
           reconstruct reuses them.</p>
       </section>
 
@@ -225,8 +234,8 @@
 
   <p class="credits">Sample images: 44 of ETH3D's <em>delivery_area</em> (Schöps et al., "A Multi-View Stereo Benchmark
     with High-Resolution Images and Multi-Camera Videos", CVPR 2017; CC BY-NC-SA 4.0, non-commercial), undistorted
-    DSLR images scaled down and re-encoded as JPEG. Keypoints: ALIKED (BSD-3-Clause) through just-keypoints. Matches:
-    LightGlue (weights Apache-2.0) through just-matching. Pose estimation: poselib-gpu. Bundle adjustment: just-ba.</p>
+    DSLR images scaled down and re-encoded as JPEG. Keypoints: ALIKED (BSD-3-Clause) or XFeat (Apache-2.0) through
+    just-keypoints. Matches: LightGlue or LighterGlue (weights Apache-2.0) through just-matching. Pose estimation: poselib-gpu. Bundle adjustment: just-ba.</p>
 </main>
 
 <script type="module" src="demo.js"></script>

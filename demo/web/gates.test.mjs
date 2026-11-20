@@ -159,6 +159,7 @@ test('a soft frame is blurry next to the sharp level', () => {
 test('only confident keypoints count', () => {
   assert.equal(confident([]), 0);
   assert.equal(confident([0.05, 0.19, 0.2, 0.9, 0.31]), 3);
+  assert.equal(confident([0.05, 0.079, 0.08, 0.19, 0.31], 'xfeat'), 3);
   const scores = new Float32Array(2048).fill(0.05);
   scores.fill(0.5, 0, 300);
   const v = decide(defaultSettings(), floorOf(), { ...facts(0.5), keypoints: confident(scores) });

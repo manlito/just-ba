@@ -210,7 +210,8 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 
 Structure from motion on real photos in the browser (D156). The page loads the sample
 set or the visitor's own images, finds ALIKED keypoints with just-keypoints' module and
-matches every pair with LightGlue through just-matching's (both on WebGPU), then calls
+matches every pair with LightGlue through just-matching's (both on WebGPU; or XFeat's
+keypoints and LighterGlue, `features=xfeat`), then calls
 `demo_reconstruct` with the keypoints and matches: the mapper with COLMAP's thresholds,
 SIMPLE_RADIAL cameras whose focal length and distortion it refines, on the CPU or
 WebGPU. By default it runs once on each and shows the mapper's timings side by side;
@@ -252,8 +253,9 @@ scaled the same way.
 
 The visitor's camera, captured and reconstructed as it goes (D157): `web/capture.html`,
 in the same folder as the live demo. Per camera frame, on the page's thread: ALIKED
-keypoints (just-keypoints), the matcher's features (FlexGlue's dense features, or
-LightGlue's of the keypoints), the matches to the last keyframe at the live depth
+keypoints (just-keypoints; XFeat's with LighterGlue, whose confident keypoints start at
+0.08 instead of 0.2), the matcher's features (FlexGlue's dense features, or LightGlue's or
+LighterGlue's of the keypoints), the matches to the last keyframe at the live depth
 (FlexGlue's layer-0 head), checked against a relative pose on the CPU
 (`demo_pair_inliers`), and Like Recon's keep rules (`web/gates.js`: overlap, support,
 redundancy, confident keypoints, blur against a decaying sharp level, the best frame of
@@ -278,7 +280,7 @@ FlexGlue's weights come from the visitor: `flexglue.pth` from FlexGlue's release
 against its SHA-256, converted to float16 by just-matching's module (`jmt.convert`) in a
 worker that ends afterwards, and kept in the origin's private file system
 (`flexglue-fp16.jmtw`, 284 MB). Phones default to LightGlue, 1,024 keypoints and a
-960 px working image. URL parameters: `matcher=flexglue|lightglue`, `keypoints=1024|2048`,
+960 px working image. URL parameters: `matcher=flexglue|lightglue|lighterglue`, `keypoints=1024|2048`,
 `side=<px>`, `debug=1`, and for testing without a camera `video=<url>` (a recorded video
 instead, `rate=` its playback rate).
 
@@ -286,7 +288,12 @@ Tried in Chrome 156 on an M5 Pro with house-04's 41 keyframes made into a video
 (ffmpeg's motion interpolation, 12 frames a second, played at half speed): FlexGlue kept
 27 keyframes, 26 placed live, and the finish registered all 27 (4,040 points, 1.32 px);
 LightGlue kept 23 and registered 12. FlexGlue's live frames took 150–850 ms (the
-interpolated frames are not a camera's; try the page with a real one).
+interpolated frames are not a camera's; try the page with a real one). LighterGlue, on
+house-05's 78 keyframes as a 3-frame-a-second video at half speed (no interpolation, the
+pane hidden): 19 keyframes, all 19 in the live map and registered by the finish (4,585
+points, 1.30 px); LightGlue on the same video kept 31 and registered 20. Reconstruct again
+keeps the capture's keypoints: XFeat's take LighterGlue or FlexGlue, ALIKED's LightGlue or
+FlexGlue.
 
 ## What it checks
 
