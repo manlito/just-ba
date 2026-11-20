@@ -375,8 +375,6 @@ int run(const std::vector<std::string>& args) {
   if (no_priors) mo.use_position_priors = false;
   if (tri_angle >= 0.0) mo.tri_max_angle_error_deg = tri_angle;
   if (min_pair_inliers >= 0) mo.min_pair_inliers = static_cast<std::uint32_t>(min_pair_inliers);
-  if (const char* e = std::getenv("JBA_MIN_TRI")) mo.min_tri_angle_deg = std::atof(e);
-  if (const char* e = std::getenv("JBA_MIN_PNP")) mo.min_pnp_inliers = std::atoi(e);
   if (min_pair_coverage >= 0.0) mo.min_pair_coverage = min_pair_coverage;
   if (!available(mo)) return 2;
 

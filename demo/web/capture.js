@@ -248,8 +248,9 @@ async function liveStep() {
     // on a phone, where each live match is ~160 ms, keeping the last measure in between.
     // Without it a phone capture chained keyframes to their neighbour only (pairs two
     // apart had 2-21 matches) and broke into pieces.
-    // Only below EARLY_MAX_OVERLAP can it make a keep (decide), so above it the match is skipped.
-    if (S.settings.redundant && S.before?.feat && now.overlap <= G.EARLY_MAX_OVERLAP) {
+    // Also above EARLY_MAX_OVERLAP, where it can't make a keep: it is what arms the rule
+    // (twoBack), which a keyframe kept late would otherwise never do.
+    if (S.settings.redundant && S.before?.feat) {
       if (!phone || S.stats.frames % 2 === 0 || S.lastOverlap2 == null || relocalized) {
         const m2 = await measure(S.before, f, kp.xy, w, h);
         S.twoBack ||= m2.overlap > G.REDUNDANT_OVERLAP;
@@ -470,8 +471,10 @@ async function loop() {
       if (fresh) S.stats.loopMs = S.stats.frames > 1 ? 0.8 * S.stats.loopMs + 0.2 * (performance.now() - tLoop) : performance.now() - tLoop;
     } catch (e) {
       console.error(e);
-      setStatus('Something went wrong: ' + e.message, true);
+      setStatus('Something went wrong: ' + e.message + '. Finish what was kept, or start a new capture.', true);
       S.running = false;
+      keepAwake(false);
+      setButtons();
       break;
     }
     await nextFrame();
@@ -578,7 +581,9 @@ async function finish() {
     }
     const n = S.keyframes.length;
     if (n < 2) throw new Error('fewer than two keyframes');
-    // The live features go: the pairs are matched with features made afresh (matchKeyframes).
+    // The live features go, the Picker's held frames too (before the matcher that made them):
+    // the pairs are matched with features made afresh (matchKeyframes).
+    clearPicker();
     for (const k of S.keyframes) { k.feat?.destroy(); k.feat = null; }
     let r;
     if (S.matcherKind === 'lightglue') {
@@ -940,18 +945,22 @@ async function useCheckpoint(file) {
 function setButtons() {
   const capturing = S.running, ready = S.supported && !S.busy && !S.finishing;
   const weightsOk = matcherKind() !== 'flexglue' || S.weightsReady;
-  $('start').disabled = !ready || capturing || !weightsOk || S.done;
+  // A capture that stopped (finished, or the loop failed) is finished or put away with New capture first.
+  $('start').disabled = !ready || capturing || !weightsOk || S.done || S.keyframes.length > 0;
   $('start').textContent = capturing ? 'Capturing…' : S.stream ? 'Start capture' : 'Start';
   $('shoot').disabled = !capturing;
-  $('finish').disabled = !(capturing || (S.finishing && !S.cancelFinish)) || (!S.finishing && S.keyframes.length < 2);
+  const stopped = !capturing && !S.finishing && !S.done && S.keyframes.length >= 2;  // the loop failed
+  $('finish').disabled = !(capturing || stopped || (S.finishing && !S.cancelFinish)) || (!S.finishing && S.keyframes.length < 2);
   $('finish').textContent = S.finishing ? 'Stop' : 'Finish';
-  $('reset').hidden = !(S.done || (S.keyframes.length && !capturing && !S.finishing));
+  $('reset').hidden = !(S.done || (S.keyframes.length && !capturing)) || S.finishing;
   // After a capture: match the keyframes again with the matcher chosen, and reconstruct.
   $('again').hidden = !(S.done && S.keyframes.length >= 2) || S.finishing;
   $('again').disabled = S.busy || (matcherKind() === 'flexglue' && !S.weightsReady);
   $('download').hidden = !S.result;
   for (const i of document.querySelectorAll('input[name=matcher], input[name=keypoints]')) i.disabled = capturing || S.finishing || S.busy;
   $('pick').disabled = S.busy || !$('accept').checked;
+  // The weights can't go while the matcher made from them is at work.
+  $('remove').disabled = capturing || S.finishing || S.busy;
 }
 
 async function start() {

@@ -106,6 +106,8 @@ else()
     # without metadata: searched for, then refined (D144).
     add_test(NAME demo_synth_focal COMMAND jba_demo synth --focal-error 1.2)
     add_test(NAME demo_synth_priors COMMAND jba_demo synth --priors 0.002)
+    # D158: images placed from their pair when none sees enough of the map; the scenes still pass.
+    add_test(NAME demo_synth_pairs COMMAND jba_demo synth --register-from-pairs)
     # The progress callback (D146): continuing changes nothing, returning false cancels.
     add_executable(test_demo_cancel tests/test_cancel.cpp)
     target_link_libraries(test_demo_cancel PRIVATE jba_demo_mapper jba_warnings)

@@ -118,7 +118,6 @@ const ops = {
     }
   },
   async finish({ pairs, fromScratch }) {
-    cancel = false;
     const a = arena();
     try {
       const pk = packPairs(pairs, true);
@@ -130,7 +129,6 @@ const ops = {
     }
   },
   async reconstruct({ width, height, focal, xy, pairs, poses }) {
-    cancel = false;
     await module();
     const a = arena();
     try {
@@ -169,7 +167,8 @@ onmessage = ({ data }) => {
   }
   queue = queue.then(async () => {
     try {
-      const result = await ops[data.op](data);
+      // A Stop holds until the next finish or reconstruct, which it ends; any op clears it after.
+      const result = await ops[data.op](data).finally(() => { if (data.op === 'finish' || data.op === 'reconstruct') cancel = false; });
       const transfer = [];
       for (const v of [result?.map?.points, result?.map?.tracks, result?.points, result?.tracks, result?.colourObs])
         if (v?.buffer) transfer.push(v.buffer);

@@ -918,9 +918,9 @@ namespace {
 // registered cameras to their nearest neighbour (the pair fixes no scale; for a pair
 // without a baseline the direction is noise, and the step small next to the scene). Its
 // pose is set and it is marked registered; -1 when there is no such image. Each image is
-// tried once a model (`tried`).
+// tried once a model (`tried`), and not one whose PnP was rejected (`failed_with` >= 0).
 int register_from_pair(const Capture& c, const std::vector<jpo_pose_result>& results, const std::vector<char>& kept,
-                       const MapperOptions& o, Map& m, std::vector<char>& tried) {
+                       const MapperOptions& o, Map& m, const std::vector<int>& failed_with, std::vector<char>& tried) {
   int best_pair = -1;
   std::uint32_t best_n = 0;
   for (std::size_t q = 0; q < c.pairs.size(); ++q) {
@@ -930,7 +930,10 @@ int register_from_pair(const Capture& c, const std::vector<jpo_pose_result>& res
     const auto a = static_cast<std::size_t>(c.pairs[q].a), b = static_cast<std::size_t>(c.pairs[q].b);
     if (static_cast<bool>(m.registered[a]) == static_cast<bool>(m.registered[b])) continue;
     const std::size_t other = m.registered[a] ? b : a;
-    if (tried[other] || r.n_inliers < o.min_register_pair_inliers || r.n_inliers <= best_n) continue;
+    // Only an image no PnP was tried on: one whose PnP was rejected saw enough points, and
+    // the rejection stands.
+    if (tried[other] || (other < failed_with.size() && failed_with[other] >= 0)) continue;
+    if (r.n_inliers < o.min_register_pair_inliers || r.n_inliers <= best_n) continue;
     best_pair = static_cast<int>(q);
     best_n = r.n_inliers;
   }
@@ -1379,7 +1382,8 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
         // D158: no image sees enough of the map; one that matches a registered image
         // well is placed from that pair.
         const int image =
-            o.register_from_pairs ? register_from_pair(c, run.pair_results, run.pair_kept, o, m, from_pair_tried) : -1;
+            o.register_from_pairs ? register_from_pair(c, run.pair_results, run.pair_kept, o, m, failed_with, from_pair_tried)
+                                  : -1;
         if (image < 0) break;
         ++run.pair_registrations;
         timed_points(false);
@@ -1842,7 +1846,8 @@ struct Session::State {
       if (seen.empty()) {
         // D158, as run's step 4: an image no PnP can place, from its best pair to the map.
         const int image =
-            opt.register_from_pairs ? register_from_pair(c, pair_results, pair_kept, opt, m, from_pair_tried) : -1;
+            opt.register_from_pairs ? register_from_pair(c, pair_results, pair_kept, opt, m, failed_with, from_pair_tried)
+                                    : -1;
         if (image < 0) return true;
         update_points(m, opt, false);
         adjust_window({image}, st);

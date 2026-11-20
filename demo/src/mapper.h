@@ -108,7 +108,8 @@ struct MapperOptions {
   bool search_focal = false;
   // When no image sees min_pnp_inliers of the map's points, the image with the most
   // inliers to a registered one, in a kept pair with at least min_register_pair_inliers
-  // of them, is registered from that pair instead: its rotation the pair's, its centre
+  // of them, and on which no PnP was tried (one rejected stays rejected), is registered
+  // from that pair instead: its rotation the pair's, its centre
   // along the pair's translation at the map's median spacing of neighbouring cameras;
   // its points are triangulated and the map adjusted as after a PnP (D158). After a
   // turn, a capture's next frames match their neighbours by the hundreds yet see almost
