@@ -575,35 +575,9 @@ async function finish() {
     }
     const n = S.keyframes.length;
     if (n < 2) throw new Error('fewer than two keyframes');
-    // More pairs: the shortlist over every keyframe (FlexGlue), or each with the five before it.
-    const wanted = [];
-    if (S.matcherKind === 'flexglue') {
-      for (const [i, k] of S.keyframes.entries()) {
-        if (S.cancelFinish) throw new Error('stopped');
-        if (k.feat) continue;
-        setStatus(`Describing keyframe ${i + 1} of ${n} again…`);
-        setProgress(i, n);
-        const bm = await imageOf(k);
-        k.feat = await S.matcher.describe(bm);
-        bm.close();
-      }
-      setStatus('Choosing the pairs to match…');
-      const list = await S.matcher.shortlist(S.keyframes.map((k) => k.feat), { k: FINISH_SHORTLIST });
-      for (let p = 0; p < list.n; p++) wanted.push([Math.min(list.pairs[2 * p], list.pairs[2 * p + 1]), Math.max(list.pairs[2 * p], list.pairs[2 * p + 1])]);
-    } else {
-      for (let j = 1; j < n; j++) for (let i = Math.max(0, j - FINISH_SEQUENTIAL); i < j; i++) wanted.push([i, j]);
-    }
-    const todo = wanted.filter(([a, b]) => !S.links.has(`${a}-${b}`));
-    const pairs = [];
-    for (const [p, [a, b]] of todo.entries()) {
-      if (S.cancelFinish) throw new Error('stopped');
-      if (p % 2 === 0) { setStatus(`Matching pair ${p + 1} of ${todo.length}…`); setProgress(p, todo.length); }
-      const A = S.keyframes[a], B = S.keyframes[b];
-      for (const K of [A, B])
-        if (!K.feat) K.feat = await S.matcher.describeKeypoints({ width: K.w, height: K.h }, K.xy, K.desc);
-      const m = await S.matcher.match(A.feat, A.xy, B.feat, B.xy, FINISH[S.matcherKind]);
-      if (m.n >= MIN_FINISH_MATCHES) pairs.push({ a, b, matches: m.matches });
-    }
+    // The live features go: the pairs are matched with features made afresh (matchKeyframes).
+    for (const k of S.keyframes) { k.feat?.destroy(); k.feat = null; }
+    const pairs = await matchKeyframes(S.matcherKind, S.links);
     setProgress(null);
     setStatus('Finishing from the live map…');
     const r = await call('finish', { pairs });
@@ -657,44 +631,74 @@ async function showResult(r) {
   view.set({ cameras: r.cameras, points: r.points, colours, added: new Set() }, { refit: true });
 }
 
-// Reconstruct again: the keyframes matched again by the matcher chosen now (FlexGlue: the
-// shortlist over all of them and the three before each; LightGlue: the five before each),
-// then the mapper from scratch. Needs neither the camera nor the live map.
+// The pairs of keyframes for the finish and Reconstruct again, matched with `kind`, leaving
+// out those in `skip` ("a-b"). FlexGlue on a computer: every keyframe described, the
+// shortlist over all of them and the three before each. Otherwise (LightGlue, or a phone):
+// each keyframe with the five before it, described as they come and only those six held:
+// on a Pixel 9a, FlexGlue's features of every keyframe at once and the shortlist over them
+// crashed the browser's GPU process.
+async function matchKeyframes(kind, skip) {
+  const kfs = S.keyframes, n = kfs.length;
+  const describeOne = async (k) => {
+    if (kind === 'lightglue') return S.matcher.describeKeypoints({ width: k.w, height: k.h }, k.xy, k.desc);
+    const bm = await createImageBitmap(k.jpeg);
+    try { return await S.matcher.describe(bm); } finally { bm.close(); }
+  };
+  const feats = new Map();
+  const pairs = [];
+  const match = async (a, b) => {
+    if (skip.has(`${a}-${b}`)) return;
+    const m = await S.matcher.match(feats.get(a), kfs[a].xy, feats.get(b), kfs[b].xy, FINISH[kind]);
+    if (m.n >= MIN_FINISH_MATCHES) pairs.push({ a, b, matches: m.matches });
+  };
+  try {
+    if (kind === 'flexglue' && !phone) {
+      for (let i = 0; i < n; i++) {
+        if (S.cancelFinish) throw new Error('stopped');
+        setStatus(`Describing keyframe ${i + 1} of ${n}…`);
+        setProgress(i, n);
+        feats.set(i, await describeOne(kfs[i]));
+      }
+      const wanted = new Set();
+      const add = (a, b) => wanted.add(`${Math.min(a, b)}-${Math.max(a, b)}`);
+      for (let j = 1; j < n; j++) for (let i = Math.max(0, j - SEQUENTIAL); i < j; i++) add(i, j);
+      setStatus('Choosing the pairs to match…');
+      const list = await S.matcher.shortlist([...feats.values()], { k: FINISH_SHORTLIST });
+      for (let p = 0; p < list.n; p++) add(list.pairs[2 * p], list.pairs[2 * p + 1]);
+      const todo = [...wanted].map((x) => x.split('-').map(Number));
+      for (const [p, [a, b]] of todo.entries()) {
+        if (S.cancelFinish) throw new Error('stopped');
+        if (p % 2 === 0) { setStatus(`Matching pair ${p + 1} of ${todo.length}…`); setProgress(p, todo.length); }
+        await match(a, b);
+      }
+    } else {
+      for (let j = 0; j < n; j++) {
+        if (S.cancelFinish) throw new Error('stopped');
+        setStatus(`Matching keyframe ${j + 1} of ${n} with the ones before it…`);
+        setProgress(j, n);
+        feats.set(j, await describeOne(kfs[j]));
+        for (let i = Math.max(0, j - FINISH_SEQUENTIAL); i < j; i++) await match(i, j);
+        const old = j - FINISH_SEQUENTIAL;
+        if (feats.has(old)) { feats.get(old).destroy(); feats.delete(old); }
+      }
+    }
+  } finally {
+    for (const f of feats.values()) f.destroy();
+    setProgress(null);
+  }
+  return pairs;
+}
+
+// Reconstruct again: the keyframes matched again by the matcher chosen now
+// (matchKeyframes), then the mapper from scratch. Needs neither the camera nor the live map.
 async function reconstructAgain() {
   S.finishing = true;
   S.cancelFinish = false;
   setButtons();
-  const feats = [];
   try {
     await ensureModules();
-    const kind = S.matcherKind, kfs = S.keyframes, n = kfs.length;
-    for (const [i, k] of kfs.entries()) {
-      if (S.cancelFinish) throw new Error('stopped');
-      setStatus(`Describing keyframe ${i + 1} of ${n}…`);
-      setProgress(i, n);
-      if (kind === 'flexglue') {
-        const bm = await createImageBitmap(k.jpeg);
-        feats.push(await S.matcher.describe(bm));
-        bm.close();
-      } else feats.push(await S.matcher.describeKeypoints({ width: k.w, height: k.h }, k.xy, k.desc));
-    }
-    const wanted = new Set();
-    const add = (a, b) => wanted.add(`${Math.min(a, b)}-${Math.max(a, b)}`);
-    const back = kind === 'flexglue' ? SEQUENTIAL : FINISH_SEQUENTIAL;
-    for (let j = 1; j < n; j++) for (let i = Math.max(0, j - back); i < j; i++) add(i, j);
-    if (kind === 'flexglue') {
-      setStatus('Choosing the pairs to match…');
-      const list = await S.matcher.shortlist(feats, { k: FINISH_SHORTLIST });
-      for (let p = 0; p < list.n; p++) add(list.pairs[2 * p], list.pairs[2 * p + 1]);
-    }
-    const todo = [...wanted].map((s) => s.split('-').map(Number));
-    const pairs = [];
-    for (const [p, [a, b]] of todo.entries()) {
-      if (S.cancelFinish) throw new Error('stopped');
-      if (p % 2 === 0) { setStatus(`Matching pair ${p + 1} of ${todo.length}…`); setProgress(p, todo.length); }
-      const m = await S.matcher.match(feats[a], kfs[a].xy, feats[b], kfs[b].xy, FINISH[kind]);
-      if (m.n >= MIN_FINISH_MATCHES) pairs.push({ a, b, matches: m.matches });
-    }
+    const kind = S.matcherKind, kfs = S.keyframes;
+    const pairs = await matchKeyframes(kind, new Set());
     setProgress(null);
     setStatus('Reconstructing…');
     const { w, h } = kfs[0];
@@ -713,7 +717,6 @@ async function reconstructAgain() {
     setStatus(e.message === 'stopped' ? 'Stopped. The last model is shown.' : 'Reconstructing failed: ' + e.message,
               e.message !== 'stopped');
   } finally {
-    for (const f of feats) f.destroy();
     S.finishing = false;
     setButtons();
     renderNumbers();
