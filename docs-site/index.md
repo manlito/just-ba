@@ -25,6 +25,7 @@ backends
 cli
 file-format
 demo
+python-pipeline
 ```
 
 ```{toctree}

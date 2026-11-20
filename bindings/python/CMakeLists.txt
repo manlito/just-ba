@@ -61,4 +61,12 @@ if(JBA_BUILD_TESTS)
   add_test(NAME real_captures COMMAND ${Python_EXECUTABLE} -m pytest -q -s ${PROJECT_SOURCE_DIR}/tests/real)
   set_tests_properties(real_captures PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}"
                        LABELS "python;real")
+  # The live demo's pipeline from Python (tests/pipeline, D162): skipped without
+  # just-keypoints, just-matching, poselib-gpu, Pillow and LightGlue's weights, and on
+  # Windows. Minutes on the CPU (all 44 images: 7 on an M5 Pro, 40 on an i7-9750H), so
+  # "slow", with an hour's timeout instead of ctest's 25 minutes: CI runs it in a job of
+  # its own, on fewer images (JBA_PIPELINE_IMAGES).
+  add_test(NAME python_pipeline COMMAND ${Python_EXECUTABLE} -m pytest -q -s ${PROJECT_SOURCE_DIR}/tests/pipeline)
+  set_tests_properties(python_pipeline PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}"
+                       LABELS "python;pipeline;slow" TIMEOUT 3600)
 endif()

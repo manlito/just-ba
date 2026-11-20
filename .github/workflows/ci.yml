@@ -59,6 +59,43 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure -LE "gpu|slow"
       # GPU tests are run by hand (D40), Metal included (D110): bench/gpu_check.py.
 
+  # The live demo's whole pipeline from Python (D162): just-keypoints, just-matching and
+  # poselib-gpu from PyPI, just-ba built here, LightGlue's weights from their release
+  # (cached), on the CPU. The first 16 sample images in quick mode (120 pairs, about a
+  # minute of matching on an M5 Pro's CPU), 24 in full mode (276 pairs). All 44 (946
+  # pairs, 7 minutes on the M5 Pro, 40 on an i7-9750H) would take a hosted runner's
+  # 4 CPUs an hour or more. Not on Windows; Metal and CUDA are run by hand.
+  pipeline:
+    name: Python pipeline (CPU)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: "3.12"
+      - name: Install requirements
+        run: python -m pip install -r bindings/python/requirements.txt pillow just-keypoints just-matching poselib-gpu
+      - name: Cache LightGlue's weights
+        uses: actions/cache@v4
+        with:
+          path: tests/data/weights
+          key: weights-${{ hashFiles('tests/pipeline/fetch_weights.py') }}
+      - name: Fetch LightGlue's weights
+        run: python tests/pipeline/fetch_weights.py
+      - name: Configure
+        run: >
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DJBA_BUILD_PYTHON=ON
+          -DPython_EXECUTABLE="${{ steps.py.outputs.python-path }}"
+      - name: Build
+        run: cmake --build build --parallel --target _core
+      - name: Test
+        env:
+          JBA_PIPELINE_IMAGES: ${{ inputs.full && '24' || '16' }}
+          JBA_PIPELINE_REQUIRE: cpu
+        run: ctest --test-dir build --output-on-failure -V -R '^python_pipeline$' --no-tests=error
+
   ceres:
     name: Ceres reference (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
