@@ -21,7 +21,7 @@ FILES=(
   "jkp https://just-keypoints.pages.dev/lib aliked-n16.jkpw 8002a58d4f374335b58941dd3eac210daa2d19270105932c60fbf6ae2d33f3a8"
   "jmt https://just-matching.pages.dev/lib jmt.js 481d6a5c383bd22f02f5f4701f6a1899e3f974bcd5a4d5882399d65c382eed14"
   "jmt https://just-matching.pages.dev/lib jmt_wasm.js 18718e16d4af9b0966e9605404286bef30d9356fcce175a607bcfb9ac3ad2015"
-  "jmt https://just-matching.pages.dev/lib jmt_wasm.wasm 55c36c54c359ab1e399d26b68c4cec5ec976b78acf83077b31e3eb2b0557e1ff"
+  "jmt https://just-matching.pages.dev/lib jmt_wasm.wasm 69f1da090b7eab2b0fb435d9376649ea266ee577902bc3d1804caa1c2e7e6082"
   "jmt https://just-matching.pages.dev/lib lightglue-aliked-fp16.jmtw 3541ba0088b4578f7009b97c54468c0712d6b98dd39fa50c52d7f33bfc5b5b97"
   "jkp https://just-keypoints.pages.dev/lib xfeat.jkpw c67999d3f9cc647d9ad03258b5df758cb4269ece10270f14168249d06ced3434"
   "jmt https://just-matching.pages.dev/lib lightglue-xfeat.jmtw 61df510fb7b4e00878075f7e6e1486351112820b9002acec92754cc55c4e7a7c"
