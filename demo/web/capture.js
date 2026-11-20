@@ -430,7 +430,10 @@ function takeMap(step, map, ms) {
     k.thumb?.classList.toggle('unplaced', !k.placed && k.index < map.images);
   }
   $('empty').hidden = map.cameras.length > 0;
-  view.set({ cameras: map.cameras, points: map.points, colours: null, added: new Set(step?.placed ?? []) });
+  // A new piece (or the current one started again) is a new frame: the view fits afresh.
+  const fresh = step?.started || step?.rejoined || step?.piece !== S.viewPiece;
+  S.viewPiece = step?.piece;
+  view.set({ cameras: map.cameras, points: map.points, colours: null, added: new Set(step?.placed ?? []) }, { refit: fresh });
   renderNumbers();
 }
 

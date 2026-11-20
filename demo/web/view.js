@@ -48,22 +48,31 @@ export class ModelView {
   set(model, { refit = false } = {}) {
     this.model = model;
     if (refit) this.touched = false;
-    if (!this.touched && model?.cameras?.length) this.fit();
+    // Fitted afresh on demand (a new piece, the finish); otherwise eased toward the new
+    // fit with the view's direction kept, so a growing map doesn't jump.
+    if (!this.touched && model?.cameras?.length) this.fit(refit || !this.v.R);
     this.draw();
   }
 
-  fit() {
+  // fresh: the view's direction from the cameras (their mean up, from behind them) and a
+  // new frame. Otherwise the direction stays and the frame moves a third of the way to
+  // the new one, so a growing map doesn't jump.
+  fit(fresh = true) {
     const { cameras: cams, points: P } = this.model;
-    let up = [0, 0, 0], fwd = [0, 0, 0];
-    for (const c of cams) {
-      const p = c.pose;
-      up = sub(up, [p[6], p[7], p[8]]);
-      fwd = [fwd[0] + p[9], fwd[1] + p[10], fwd[2] + p[11]];
-    }
-    up = norm(up);
-    fwd = norm(sub(fwd, up.map((x) => x * dot(fwd, up))));
     const v = this.v;
-    v.R = [cross(fwd, up), up, [-fwd[0], -fwd[1], -fwd[2]]];
+    if (fresh) {
+      let up = [0, 0, 0], fwd = [0, 0, 0];
+      for (const c of cams) {
+        const p = c.pose;
+        up = sub(up, [p[6], p[7], p[8]]);
+        fwd = [fwd[0] + p[9], fwd[1] + p[10], fwd[2] + p[11]];
+      }
+      up = norm(up);
+      fwd = norm(sub(fwd, up.map((x) => x * dot(fwd, up))));
+      v.R = [cross(fwd, up), up, [-fwd[0], -fwd[1], -fwd[2]]];
+      v.yaw = 0;
+      v.pitch = 0.45;
+    }
     const disp = (q) => [dot(v.R[0], q), dot(v.R[1], q), dot(v.R[2], q)];
     const xs = [[], [], []];
     const n = P ? P.length / 3 : 0, every = Math.max(1, Math.floor(n / 4000));
@@ -76,14 +85,16 @@ export class ModelView {
       for (let k = 0; k < 3; k++) xs[k].push(d[k]);
     }
     const lo = xs.map((a) => quantile(a, 0.05)), hi = xs.map((a) => quantile(a, 0.95));
-    v.target = lo.map((x, d) => 0.5 * (x + hi[d]));
-    v.size = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
-    v.dist = 1.4 * v.size;  // far enough back that the cameras, at the edge of the points, stay in view
+    const target = lo.map((x, d) => 0.5 * (x + hi[d]));
+    const size = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
+    const dist = 1.4 * size;  // far enough back that the cameras, at the edge of the points, stay in view
+    const ease = (a, b) => (fresh ? b : a + (b - a) / 3);
+    v.target = target.map((x, i) => ease(v.target[i], x));
+    v.size = ease(v.size, size);
+    v.dist = ease(v.dist, dist);
     const cs = [0, 1, 2].map((k) => cams.map((c) => c.pose[k]));
     const camSize = Math.hypot(...cs.map((a) => Math.max(...a) - Math.min(...a)));
     v.frustum = Math.max(0.01 * v.size, Math.min(0.04 * v.size, 0.08 * camSize || 0.03 * v.size));
-    v.yaw = 0;
-    v.pitch = 0.45;
   }
 
   draw() {

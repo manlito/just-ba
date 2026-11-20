@@ -405,6 +405,11 @@ EMSCRIPTEN_KEEPALIVE const char* demo_session_new(int width, int height, double 
     // PnP: they are placed from their best pair to the map instead (D158), live and at
     // the finish.
     mo.register_from_pairs = true;
+    // The focal length is searched for once, when the map starts, and held while
+    // capturing: refined in windows of a few keyframes it wandered (a phone walk: 541
+    // live, 645 refined over the whole capture) and the map's scale with it. The finish
+    // refines it (demo_session_finish).
+    mo.refine_intrinsics = 0;
     if (!session_mapper || session_mapper->options().pose_backend != mo.pose_backend)
       session_mapper = std::make_unique<demo::Mapper>(mo);
     session_mapper->set_options(mo);
@@ -500,6 +505,10 @@ EMSCRIPTEN_KEEPALIVE const char* demo_session_finish(int n_pairs, const std::int
   colour_obs.clear();
   try {
     if (!session) throw std::runtime_error("no session");
+    // The finish refines focal length and distortion, as COLMAP's mapper (held live).
+    demo::MapperOptions fo = session_mapper->options();
+    fo.refine_intrinsics = jba::kFocal | jba::kDistortion;
+    session_mapper->set_options(fo);
     demo::Capture c = session->capture();
     for (int p = 0; p < n_pairs; ++p) {
       demo::Pair pr;
