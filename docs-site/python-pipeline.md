@@ -8,10 +8,11 @@ Four packages, each on the CPU, on Apple GPUs (Metal) or on NVIDIA GPUs (CUDA):
 | Keypoints | just-keypoints | ALIKED keypoints and descriptors, 2048 per image |
 | Matches | just-matching | LightGlue on every pair of images |
 | Poses | poselib-gpu | Each pair verified by relative pose; images registered by PnP |
-| Reconstruction | just-ba | Points triangulated, everything bundle-adjusted |
+| Bundle adjustment | just-ba | Cameras, points, focal length and distortion adjusted together |
 
-The reconstruction is an incremental mapper of about 500 lines of Python, below, with the
-live demo's rules (COLMAP's thresholds). The test suite runs this on the demo's 44 sample
+Between them sits an incremental mapper of about 550 lines of Python and NumPy, below,
+with the live demo's rules (COLMAP's thresholds): it builds the tracks, triangulates the
+points, chooses the images to register and filters the model after each adjustment. The test suite runs this on the demo's 44 sample
 images, ETH3D's *delivery_area*, on each backend (`tests/pipeline`).
 
 ## Install
@@ -80,7 +81,7 @@ print(f"{r.registered.sum()} of {n} images, {len(r.points)} points, "
 ```
 
 `r.poses` are world-to-camera poses (`qw qx qy qz tx ty tz`, OpenCV axes) of the
-registered images, `r.problem` the last adjustment's {py:class}`just_ba.Problem`. It can be
+registered images, `r.problem` the final model as a {py:class}`just_ba.Problem` (the last adjustment's values, after its filter). It can be
 written with {py:func}`just_ba.write_problem` or exported for COLMAP with
 {py:func}`just_ba.export_colmap`.
 
@@ -97,13 +98,13 @@ reprojection error).
 
 | Backend | Machine | Registered | Points | Median error | Keypoints | Matching | Reconstruction |
 |---|---|---|---|---|---|---|---|
-| CPU | M5 Pro | 40 of 44 | 9,963 | 0.36 px | 9.6 s | 405 s | 10.4 s |
-| Metal | M5 Pro | 40 of 44 | 9,924 | 0.35 px | 1.2 s | 25 s | 10.0 s |
-| CUDA | RTX 2070 Max-Q | 40 of 44 | 9,925 | 0.35 px | 2.6 s | 29 s | 33 s |
+| CPU | M5 Pro | 40 of 44 | 9,568 | 0.37 px | 10 s | 389 s | 4.0 s |
+| Metal | M5 Pro | 40 of 44 | 9,561 | 0.37 px | 1.2 s | 25 s | 1.6 s |
+| CUDA | RTX 2070 Max-Q | 40 of 44 | 9,557 | 0.37 px | 2.6 s | 28 s | 5.4 s |
 
 The refined focal length is within 0.1 % of ETH3D's calibration on each. Most of the
-reconstruction's time is the mapper's own NumPy (triangulation and track splitting); the
-solves take 1 to 4 s of it.
+reconstruction's time is its 15 bundle adjustments; matching every pair is most of the
+whole, and on the CPU nearly all of it.
 
 ## The mapper
 

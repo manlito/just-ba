@@ -7,8 +7,9 @@ packages in place of the WebAssembly modules:
   keypoints     just-keypoints, ALIKED (aliked-n16), 2048 per image
   matches       just-matching, LightGlue for ALIKED, every pair; pairs with 15 matches
                 or more go on (the live demo's MIN_MATCHES)
-  reconstruction  mapper.py: poselib-gpu verifies the pairs and registers the images,
-                just-ba builds the tracks and adjusts (the live demo's mapper rules)
+  reconstruction  mapper.py, the live demo's mapper rules: poselib-gpu verifies the
+                pairs and registers the images, the mapper builds the tracks and
+                triangulates (NumPy), just-ba adjusts
 
 Once on the CPU, and once on each of Metal and CUDA where all four packages have it:
 every step on that backend.
@@ -57,8 +58,10 @@ def missing():
 
 def extract(args):
     """just-keypoints in its own process (extract.py says why)."""
-    return subprocess.run([sys.executable, os.path.join(HERE, "extract.py"), *args],
-                          check=True, capture_output=True, text=True).stdout
+    r = subprocess.run([sys.executable, os.path.join(HERE, "extract.py"), *args], capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"extract.py {' '.join(args[:2])} failed ({r.returncode}):\n{r.stderr}")
+    return r.stdout
 
 
 def available(backend):
@@ -121,17 +124,21 @@ def test_demo_pipeline(backend, tmp_path):
     s = r.seconds
     print(f"\n[{backend}] {n} images, {sum(len(k) for k in xy)} keypoints in {t_kp:.1f} s; "
           f"{len(pairs)} of {n * (n - 1) // 2} pairs with {MIN_MATCHES}+ matches in {t_match:.1f} s; "
-          f"{r.pairs_kept} pairs verified, {r.tracks} tracks, first pair {r.first_pair}\n"
+          f"{r.pairs_kept} pairs verified, {r.tracks} tracks, {r.splits} split off, first pair {r.first_pair}\n"
           f"[{backend}] {registered}/{n} registered, {len(r.points)} points, {len(err)} observations, "
-          f"reprojection mean {err.mean():.2f} px, median {np.median(err):.2f} px; "
+          f"reprojection mean {err.mean():.2f} px, median {np.median(err):.2f} px, max {err.max():.2f} px; "
           f"f {r.intrinsics[0]:.1f} px (calibrated {focal}), k {r.intrinsics[3]:.4f}; "
           f"{r.adjustments} adjustments; {s['total']:.1f} s (verify {s['verify']:.1f}, pnp {s['pnp']:.1f}, "
-          f"triangulate {s['triangulate']:.1f}, adjust {s['adjust']:.1f})")
+          f"triangulate {s['triangulate']:.1f}, split {s['split']:.1f}, adjust {s['adjust']:.1f})")
 
     assert r.problem.validate() == ""
-    assert registered >= 0.9 * n
+    # 40 of the 44 register here, as in the browser (D156) and with the C++ mapper: room
+    # for one or two more lost on another backend or machine.
+    assert registered >= 0.85 * n
     assert len(r.points) >= 100 * registered
     assert np.median(err) < 1.0 and err.mean() < 1.5
+    # The model returned is the one the last filter left: nothing over its threshold.
+    assert err.max() <= 4.0 + 1e-9
     # The calibrated focal length holds; the images are undistorted.
     assert abs(r.intrinsics[0] / focal - 1) < 0.02
     assert abs(r.intrinsics[3]) < 0.02

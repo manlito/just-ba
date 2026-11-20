@@ -61,11 +61,14 @@ jobs:
 
   # The live demo's whole pipeline from Python (D162): just-keypoints, just-matching and
   # poselib-gpu from PyPI, just-ba built here, LightGlue's weights from their release
-  # (cached), on the CPU. The first 16 sample images in quick mode (120 pairs), all 44
-  # in full mode. Not on Windows; Metal and CUDA are run by hand.
+  # (cached), on the CPU. The first 16 sample images in quick mode (120 pairs, about a
+  # minute of matching on an M5 Pro's CPU), 24 in full mode (276 pairs). All 44 (946
+  # pairs, 7 minutes on the M5 Pro, 40 on an i7-9750H) would take a hosted runner's
+  # 4 CPUs an hour or more. Not on Windows; Metal and CUDA are run by hand.
   pipeline:
     name: Python pipeline (CPU)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -89,7 +92,7 @@ jobs:
         run: cmake --build build --parallel --target _core
       - name: Test
         env:
-          JBA_PIPELINE_IMAGES: ${{ inputs.full && '44' || '16' }}
+          JBA_PIPELINE_IMAGES: ${{ inputs.full && '24' || '16' }}
           JBA_PIPELINE_REQUIRE: cpu
         run: ctest --test-dir build --output-on-failure -V -R '^python_pipeline$' --no-tests=error
 

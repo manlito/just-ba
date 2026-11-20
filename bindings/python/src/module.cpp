@@ -545,7 +545,7 @@ NB_MODULE(_core, m) {
       .def_ro("intrinsics_prior_cost", &jba::ResidualReport::intrinsics_prior_cost,
               "Priors on free intrinsics; the solver's reprojection entry is reprojection_cost plus this.")
       .def_prop_ro("intrinsics_prior_norm", [](const jba::ResidualReport& r) { return to_numpy(r.intrinsics_prior_norm); },
-                   "Per intrinsics block: largest |k - target| / sigma over its regularized parameters.",
+                   "Per intrinsics block: largest abs(k - target) / sigma over its regularized parameters.",
                    nb::rv_policy::move)
       .def_prop_ro("intrinsics_prior_param",
                    [](const jba::ResidualReport& r) {

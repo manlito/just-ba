@@ -5,7 +5,7 @@ It follows the rules of the demo's mapper (demo/src/mapper.cpp) with the thresho
 live demo gives it (demo::colmap_thresholds), shortened where the test does not need
 the rest: one model, no focal length search, no position priors. Given the same
 keypoints and matches it registers the same images as the C++ mapper, with as many
-points to within a few percent.
+points to within a percent.
 
   1. Verify every pair: poselib-gpu's relative pose (LO-RANSAC, 4 px). A pair's inliers
      go on when it has 15 or more of them and a quarter of its matches.
@@ -15,13 +15,14 @@ points to within a few percent.
      it (REPAIR).
   3. First pair: the most inliers (100 or more) with a median triangulation angle of
      16 degrees, else 8, 4, 2; its points triangulated.
-  4. Register: the unregistered images that see the most points, four at a time, by
-     poselib-gpu's PnP (12 px); kept with 30 inliers and a quarter of the points. After
-     each, new points are triangulated, existing ones continued, everything adjusted by
-     just_ba (Cauchy at 4 px, focal length and distortion refined), filtered
-     (reprojection over 4 px, behind the camera, under 1.5 degrees of triangulation),
-     and tracks whose point leaves keypoints of three images unused split.
-  5. A final adjustment, filter and split, twice.
+  4. Register: the unregistered images that see the most points, up to four at a time
+     (those that see half as many as the best), by poselib-gpu's PnP (12 px); kept with
+     30 inliers and a quarter of the points. After each, new points are triangulated,
+     existing ones continued, and everything adjusted by just_ba (Cauchy at 4 px, focal
+     length and distortion refined) and filtered (reprojection over 4 px, behind the
+     camera, under 1.5 degrees of triangulation). Before the next PnP, tracks whose
+     point leaves keypoints of three images unused are split.
+  5. The finish: points and splits once more, then two adjustments, each filtered.
 
 Points are triangulated robustly from pairs of rays and take keypoints within 2 degrees
 of their ray (COLMAP's create and continue max_angle_error); a keypoint the filter
@@ -73,7 +74,7 @@ class Result:
     poses: np.ndarray                 # (n, 7) world to camera; meaningful where registered
     intrinsics: np.ndarray            # (4,) f, cx, cy, k, refined
     points: np.ndarray                # (P, 3)
-    problem: jba.Problem              # the last adjustment's problem, solved
+    problem: jba.Problem              # the final model: the last adjustment's values, after its filter
     reprojection_px: np.ndarray       # (K,) per observation of the final model
     pairs_kept: int = 0
     tracks: int = 0                   # built from the matches
@@ -176,11 +177,11 @@ class Mapper:
             cos = (self._world_rays(k) * v).sum(axis=1) / np.linalg.norm(v, axis=1)
         return np.arccos(np.clip(np.nan_to_num(cos, nan=-1.0), -1.0, 1.0))
 
-    def _triangulate(self, idx):
+    def _triangulate(self, idx, min_inliers=2):
         """Points for the tracks of observations idx (sorted by track), robustly, as the
         library's triangulate_robust: the pair of rays (from different images) whose
         midpoint has the most rays within tri_max_angle_error_deg, then a DLT on those,
-        at most one per image (the closest). A point needs two such rays and
+        at most one per image (the closest). A point needs min_inliers such rays and
         min_tri_angle_deg between them. Returns (tracks, X, inlier observations)."""
         max_err = np.radians(self.o.tri_max_angle_error_deg)
         cos_min_tri = np.cos(np.radians(self.o.min_tri_angle_deg))
@@ -194,24 +195,26 @@ class Mapper:
             C = self.C[img]
 
             def errors(X):  # (G, ..., 3) points against every ray of their track: (G, ..., L)
-                v = X[..., None, :] - C.reshape((G,) + (1,) * (X.ndim - 2) + (L, 3))
-                cos = (v * d.reshape(v.shape[:1] + (1,) * (X.ndim - 2) + (L, 3))).sum(-1)
-                with np.errstate(divide="ignore", invalid="ignore"):
+                with np.errstate(divide="ignore", invalid="ignore", over="ignore"):  # X may be inf
+                    v = X[..., None, :] - C.reshape((G,) + (1,) * (X.ndim - 2) + (L, 3))
+                    cos = (v * d.reshape(v.shape[:1] + (1,) * (X.ndim - 2) + (L, 3))).sum(-1)
                     cos = np.nan_to_num(cos / np.linalg.norm(v, axis=-1), nan=-1.0)
                 return np.arccos(np.clip(cos, -1.0, 1.0))
 
-            def one_per_image(inl, err):  # the closest inlier of each image
-                same = img[:, :, None] == img[:, None, :]
-                order = np.arange(L)
-                closer = (err[:, None, :] < err[:, :, None]) | \
-                         ((err[:, None, :] == err[:, :, None]) & (order[None, :] < order[:, None]))
-                return inl & ~(same & inl[:, None, :] & closer).any(axis=2)
+            def one_per_image(inl, err):  # the closest inlier of each image (the first on a tie)
+                g = np.repeat(np.arange(G), L)
+                order = np.lexsort((np.where(inl, err, np.inf).ravel(), img.ravel(), g))
+                key = g[order] * self.n + img.ravel()[order]
+                first = np.zeros(G * L, bool)
+                first[order[np.r_[True, key[1:] != key[:-1]]]] = True
+                return inl & first.reshape(G, L)
 
-            # Hypotheses: midpoints of pairs of rays.
-            pa, pb = np.triu_indices(L, 1)
-            if len(pa) > self.o.tri_hypotheses:
-                pick = np.sort(rng.choice(len(pa), self.o.tri_hypotheses, replace=False))
-                pa, pb = pa[pick], pb[pick]
+            # Hypotheses: midpoints of pairs of rays, all pairs or tri_hypotheses of them.
+            if L * (L - 1) // 2 <= self.o.tri_hypotheses:
+                pa, pb = np.triu_indices(L, 1)
+            else:
+                pa = rng.integers(0, L, self.o.tri_hypotheses)
+                pb = (pa + rng.integers(1, L, self.o.tri_hypotheses)) % L
             da, db, w = d[:, pa], d[:, pb], C[:, pa] - C[:, pb]
             b = (da * db).sum(-1)
             e, f = (da * w).sum(-1), (db * w).sum(-1)
@@ -232,18 +235,22 @@ class Mapper:
             P = np.concatenate([self.R[img], self.t[img][..., None]], axis=3)
             A = np.concatenate([x[..., 0:1] * P[:, :, 2] - P[:, :, 0], x[..., 1:2] * P[:, :, 2] - P[:, :, 1]], axis=1)
             A *= np.tile(inl, 2)[..., None]
-            V = np.linalg.svd(A)[2][:, -1]
+            V = np.linalg.eigh(np.einsum("gri,grj->gij", A, A))[1][:, :, 0]  # least-squares null vector
             with np.errstate(divide="ignore", invalid="ignore"):
                 X = V[:, :3] / V[:, 3:4]
             err = errors(X[:, None, :])[:, 0]
             inl = one_per_image(err <= max_err, err)
-            # Two inliers or more, a wide enough angle between them.
-            v = X[:, None, :] - C
-            with np.errstate(divide="ignore", invalid="ignore"):
+            # Enough inliers, a wide enough angle between two of them. The inliers (one an
+            # image) first, so the angles are over at most as many rays as images.
+            K = max(int(inl.sum(1).max()), 1)
+            first = np.argsort(~inl, axis=1, kind="stable")[:, :K]
+            m = np.take_along_axis(inl, first, 1)
+            with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+                v = X[:, None, :] - np.take_along_axis(C, first[..., None], 1)
                 v /= np.linalg.norm(v, axis=2, keepdims=True)
-            cos = np.nan_to_num(np.einsum("gai,gbi->gab", v, v), nan=1.0)
-            cos[~(inl[:, :, None] & inl[:, None, :])] = 1.0
-            ok &= (inl.sum(1) >= 2) & (cos.min(axis=(1, 2)) < cos_min_tri) & np.isfinite(X).all(1)
+                cos = np.nan_to_num(np.einsum("gai,gbi->gab", v, v), nan=1.0)
+            cos[~(m[:, :, None] & m[:, None, :])] = 1.0
+            ok &= (inl.sum(1) >= min_inliers) & (cos.min(axis=(1, 2)) < cos_min_tri) & np.isfinite(X).all(1)
             out_t.append(t[ok])
             out_X.append(X[ok])
             out_obs.append(k[ok][inl[ok]])
@@ -251,9 +258,13 @@ class Mapper:
             return np.zeros(0, int), np.zeros((0, 3)), np.zeros(0, int)
         return np.concatenate(out_t), np.concatenate(out_X), np.concatenate(out_obs)
 
-    def _update_points(self):
+    def _update_points(self, split=False):
+        """New points for tracks without one, new keypoints for points that exist, from
+        the images registered so far; with `split`, then tracks split (_split). Split
+        only right after an adjustment, as a split is never undone and poses fresh from
+        PnP could agree on a duplicate of a point (the demo's update_points)."""
         t0 = time.perf_counter()
-        reg = self.registered[self.o_image]
+        reg = self.registered[self.o_image] & ~self.obs_dead
         # Continue the points: each registered image without an inlier gets its closest
         # keypoint within tri_max_angle_error_deg; one the filter dropped only within
         # max_reproj_px (COLMAP's complete_max_reproj_error).
@@ -278,60 +289,79 @@ class Mapper:
         self.has_point[tracks] = True
         self.obs_in[obs] = True
         self.seconds["triangulate"] += time.perf_counter() - t0
+        if split:
+            self._split()
 
     def _split(self):
-        """A point that leaves keypoints of three registered images or more unused (in
-        images it has no keypoint of) may be two points joined by a wrong match, or a
-        repeated pattern: those keypoints are triangulated on their own and, if they make
-        a point, move to a track of their own (the demo's split_leftovers, D140). After
-        adjustments only, as a split is never undone."""
+        """A point that leaves keypoints of three registered images or more unused may
+        be two points joined by a wrong match, or a repeated pattern: those keypoints are
+        triangulated on their own and, if three or more of them make a point, those
+        become a track of their own and are dead in the old one (the demo's
+        split_leftovers, D140). A track whose leftovers made no point is tried again
+        only once it has more of them."""
         t0 = time.perf_counter()
-        try:
-            self._split_leftovers()
-        finally:
-            self.seconds["split"] += time.perf_counter() - t0
-
-    def _split_leftovers(self):
-        k = np.flatnonzero(self.registered[self.o_image] & self.has_point[self.o_track] & ~self.obs_in)
+        T0, n0 = len(self.track_views), len(self.o_track)
+        k = np.flatnonzero(self.registered[self.o_image] & self.has_point[self.o_track] & ~self.obs_in & ~self.obs_dead)
+        if len(k):
+            images = np.bincount(np.unique(self.o_track[k] * self.n + self.o_image[k]) // self.n, minlength=T0)
+            count = np.bincount(self.o_track[k], minlength=T0)
+            split = np.flatnonzero((images >= 3) & (count > self.split_tried))
+            k = k[np.isin(self.o_track[k], split)]
         if not len(k):
+            self.seconds["split"] += time.perf_counter() - t0
             return
-        pairs = np.unique(self.o_track[k] * self.n + self.o_image[k])
-        views = np.bincount(pairs // self.n, minlength=len(self.track_views))
-        split = np.flatnonzero(views >= 3)
-        if not len(split):
-            return
-        k = k[np.isin(self.o_track[k], split)]
-        old = self.o_track[k].copy()
-        new_id = np.full(len(self.track_views), -1)
-        new_id[split] = len(self.track_views) + np.arange(len(split))
-        self.o_track[k] = new_id[old]
-        order = np.argsort(self.o_track[k], kind="stable")
-        k, old = k[order], old[order]
-        tracks, X, obs = self._triangulate(k)
-        made = np.zeros(len(self.track_views) + len(split), bool)
+        # The leftovers, copied as observations of new tracks (ids T0.., in order: k is
+        # sorted by track), then triangulated.
+        new_id = np.full(T0, -1)
+        new_id[split] = T0 + np.arange(len(split))
+        self._append(k, new_id[self.o_track[k]])
+        rows = n0 + np.arange(len(k))
+        tracks, X, obs = self._triangulate(rows, min_inliers=3)
+        made = np.zeros(T0 + len(split), bool)
         made[tracks] = True
-        back = ~made[self.o_track[k]]
-        self.o_track[k[back]] = old[back]
-        kept = split[made[new_id[split]]]
-        if not len(kept):
-            return
-        # Renumber the tracks made so they follow the existing ones without gaps.
-        final = np.full(len(made), -1)
-        final[new_id[kept]] = len(self.track_views) + np.arange(len(kept))
-        moved = k[~back]
-        self.o_track[moved] = final[self.o_track[moved]]
-        self.track_views = np.r_[self.track_views, views[kept]]
-        self.has_point = np.r_[self.has_point, np.ones(len(kept), bool)]
-        self.X = np.r_[self.X, X[np.argsort(final[tracks])]]
+        self.split_tried[split[~made[new_id[split]]]] = count[split[~made[new_id[split]]]]
+        # Keep the copies that are the new points' inliers, renumbered without gaps;
+        # their originals are dead in the old tracks.
+        final = np.full(T0 + len(split), -1)
+        final[np.sort(tracks)] = T0 + np.arange(len(tracks))
+        self.obs_dead[k[obs - n0]] = True
+        keep = np.ones(len(self.o_track), bool)
+        keep[rows] = False
+        keep[obs] = True
+        self.o_track[obs] = final[self.o_track[obs]]
         self.obs_in[obs] = True
-        split = kept
-        # Observations stay sorted by track for _groups.
-        order = np.argsort(self.o_track, kind="stable")
-        for name in ("o_track", "o_image", "o_xy", "obs_in", "obs_filtered"):
-            setattr(self, name, getattr(self, name)[order])
-        self.splits += len(split)
+        for name in ("o_track", "o_image", "o_xy", "obs_in", "obs_filtered", "obs_dead"):
+            setattr(self, name, getattr(self, name)[keep])
+        # Track sizes for the two-view rule: the images an old track still spans, and
+        # the new tracks' inliers.
+        old = np.unique(split[made[new_id[split]]])
+        live = ~self.obs_dead & np.isin(self.o_track, old)
+        self.track_views[old] = 0
+        spans = np.unique(self.o_track[live] * self.n + self.o_image[live]) // self.n
+        np.add.at(self.track_views, spans, 1)
+        new_views = np.bincount(self.o_track[self.o_track >= T0] - T0, minlength=len(tracks))
+        self.track_views = np.r_[self.track_views, new_views]
+        self.has_point = np.r_[self.has_point, np.ones(len(tracks), bool)]
+        self.X = np.r_[self.X, X[np.argsort(final[tracks])]]
+        self.split_tried = np.r_[self.split_tried, np.zeros(len(tracks), np.int64)]
+        self.splits += len(tracks)
+        self.seconds["split"] += time.perf_counter() - t0
+
+    def _append(self, like, track):
+        """New observations, out of no point: copies of observations `like` (indices),
+        in tracks `track`."""
+        self.o_track = np.r_[self.o_track, track]
+        self.o_image = np.r_[self.o_image, self.o_image[like]]
+        self.o_xy = np.r_[self.o_xy, self.o_xy[like]]
+        none = np.zeros(len(like), bool)
+        self.obs_in = np.r_[self.obs_in, none]
+        self.obs_filtered = np.r_[self.obs_filtered, none]
+        self.obs_dead = np.r_[self.obs_dead, none]
 
     def _filter(self):
+        """Observations over max_reproj_px or behind the camera are dropped (and come
+        back only within max_reproj_px); points left with fewer than two, or under
+        min_tri_angle_deg, are removed, their tracks free to be triangulated again."""
         k = np.flatnonzero(self.obs_in)
         err, z = self._project(k, self.X[self.o_track[k]])
         out = k[(err > self.o.max_reproj_px) | (z <= 0)]
@@ -345,7 +375,9 @@ class Mapper:
                 narrow = self._max_angle_deg(k[rows], self.X[t]) < self.o.min_tri_angle_deg
                 drop[t[narrow]] = True
         self.has_point[drop] = False
-        self.obs_in[drop[self.o_track]] = False
+        gone = drop[self.o_track]
+        self.obs_in[gone] = False
+        self.obs_filtered[gone] = False
 
     # -- adjustment
 
@@ -364,6 +396,7 @@ class Mapper:
         return p, images, tracks
 
     def _adjust(self, iterations):
+        """Bundle adjustment of everything registered, then the filter (_filter)."""
         t0 = time.perf_counter()
         p, images, tracks = self._problem()
         o = jba.SolverOptions()
@@ -379,7 +412,7 @@ class Mapper:
         self._sync()
         self.adjustments += 1
         self.seconds["adjust"] += time.perf_counter() - t0
-        return p
+        self._filter()
 
     # -- the run
 
@@ -431,6 +464,8 @@ class Mapper:
         self.X = np.zeros((n_tracks, 3))
         self.obs_in = np.zeros(len(self.o_track), bool)
         self.obs_filtered = np.zeros(len(self.o_track), bool)  # dropped by a filter once
+        self.obs_dead = np.zeros(len(self.o_track), bool)      # moved to a track split off
+        self.split_tried = np.zeros(n_tracks, np.int64)        # leftovers when a split last failed
         self.seconds["tracks"] = time.perf_counter() - t0
 
     def _first_pair(self):
@@ -442,36 +477,42 @@ class Mapper:
                 return int(np.flatnonzero(ok)[np.argmax(r.n_inliers[ok])])
         raise RuntimeError("no pair to start from")
 
-    def _register(self, failed_at):
-        """One round of PnP; the images registered (may be empty: then those tried are
-        marked in failed_at with the points they saw)."""
-        k = np.flatnonzero(self.has_point[self.o_track] & ~self.registered[self.o_image])
-        seen = np.bincount(self.o_image[k], minlength=self.n)
+    def _register(self, failed_with):
+        """One round of PnP: the images that see the most points (distinct points, at
+        least min_pnp_inliers), up to pnp_batch of them and only those that see at least
+        half as many as the best (a weakly connected image is better registered later,
+        against a larger map). An image whose PnP failed is tried again only once it sees
+        more points than it did then (failed_with). Returns the images registered (may be
+        empty), or None when no image is left to try."""
+        k = np.flatnonzero(self.has_point[self.o_track] & ~self.registered[self.o_image] & ~self.obs_dead)
+        seen = np.bincount(np.unique(self.o_image[k] * len(self.track_views) + self.o_track[k]) // len(self.track_views),
+                           minlength=self.n)
         order = [int(i) for i in np.argsort(-seen, kind="stable")
-                 if not self.registered[i] and seen[i] >= self.o.min_pnp_inliers and seen[i] > 1.2 * failed_at[i]]
-        cands = order[:self.o.pnp_batch]
-        if not cands:
+                 if not self.registered[i] and seen[i] >= self.o.min_pnp_inliers and seen[i] > failed_with[i]]
+        if not order:
             return None
+        cands = order[:1]
+        for i in order[1:self.o.pnp_batch]:
+            if 2 * seen[i] < seen[order[0]]:
+                break
+            cands.append(i)
         t0 = time.perf_counter()
         xy, xyz = [], []
         for i in cands:
-            ki = k[self.o_image[k] == i]
-            ki = ki[np.unique(self.o_track[ki], return_index=True)[1]]  # one keypoint per point
+            ki = k[self.o_image[k] == i]  # every keypoint of a point: a track may hold two of one image
             xy.append(self.o_xy[ki])
             xyz.append(self.X[self.o_track[ki]])
-        r = self.ctx.absolute_pose(xy, xyz, self._camera(), max_error_px=self.o.pnp_max_error_px,
-                                   min_inlier_ratio=self.o.min_pnp_inlier_ratio)
+        r = self.ctx.absolute_pose(xy, xyz, self._camera(), max_error_px=self.o.pnp_max_error_px)
         self.seconds["pnp"] += time.perf_counter() - t0
         added = []
         for c, i in enumerate(cands):
-            m = len(xy[c])
             if r.status[c] == 0 and r.n_inliers[c] >= self.o.min_pnp_inliers and \
-                    r.n_inliers[c] >= self.o.min_pnp_inlier_ratio * m:
+                    r.n_inliers[c] >= self.o.min_pnp_inlier_ratio * seen[i]:
                 self.poses[i] = r.pose[c]
                 self.registered[i] = True
                 added.append(i)
             else:
-                failed_at[i] = seen[i]
+                failed_with[i] = seen[i]
         return added
 
     def run(self) -> Result:
@@ -488,28 +529,24 @@ class Mapper:
         self._sync()
         self._update_points()
         self._adjust(self.o.local_iterations)
-        self._filter()
 
-        failed_at = np.zeros(self.n)
+        failed_with = np.full(self.n, -1)
         while True:
-            added = self._register(failed_at)
+            self._update_points(split=True)  # right after an adjustment
+            added = self._register(failed_with)
             if added is None:
                 break
             if not added:
-                continue
+                continue  # the rejected images wait until the map grows; others get their turn
             self._sync()
             self._update_points()
             self._adjust(self.o.local_iterations)
-            self._filter()
-            self._split()
 
-        # The finish: once more with the points the last adjustment and splits allow.
-        for _ in range(2):
-            self._update_points()
-            self._adjust(self.o.final_iterations)
-            self._filter()
-            self._split()
-        p, _, _ = self._problem()
+        # The finish: complete the tracks, adjust, and adjust what the filter left.
+        self._update_points(split=True)
+        self._adjust(self.o.final_iterations)
+        self._adjust(self.o.final_iterations)
+        p, _, _ = self._problem()  # the model as the last filter left it
         k = np.flatnonzero(self.obs_in & self.registered[self.o_image])
         err, _ = self._project(k, self.X[self.o_track[k]])
         self.seconds["total"] = time.perf_counter() - t_all
