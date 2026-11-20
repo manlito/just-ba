@@ -48,7 +48,10 @@ const FINISH_SEQUENTIAL = 5;     // LightGlue's finish: each keyframe with the f
 const MIN_FINISH_MATCHES = 15;
 
 // A phone: LightGlue by default (FlexGlue's backbone is ~1 GB of GPU memory and takes ~2 s a
-// frame on a Pixel 9a), a 640 px working image (ALIKED 136 ms there) and 1,024 keypoints.
+// frame on a Pixel 9a), a 640 px working image and 1,024 keypoints (ALIKED 140 ms there, a
+// 2-layer LightGlue match 158 ms). 480 px and 768 keypoints save ~80 ms a check but leave
+// the map too few points: on the test video both placed 6 of ~40, so the speed comes from
+// the checks skipped and the overlap anticipated instead.
 const phone = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820;
 const MAX_SIDE = Number(params.get('side')) || (phone ? 640 : 1280);
 const FEATURE_CACHE = phone ? 24 : 48;
@@ -243,7 +246,8 @@ async function liveStep() {
     // on a phone, where each live match is ~160 ms, keeping the last measure in between.
     // Without it a phone capture chained keyframes to their neighbour only (pairs two
     // apart had 2-21 matches) and broke into pieces.
-    if (S.settings.redundant && S.before?.feat) {
+    // Only below EARLY_MAX_OVERLAP can it make a keep (decide), so above it the match is skipped.
+    if (S.settings.redundant && S.before?.feat && now.overlap <= G.EARLY_MAX_OVERLAP) {
       if (!phone || S.stats.frames % 2 === 0 || S.lastOverlap2 == null || relocalized) {
         const m2 = await measure(S.before, f, kp.xy, w, h);
         S.twoBack ||= m2.overlap > G.REDUNDANT_OVERLAP;
@@ -257,7 +261,9 @@ async function liveStep() {
   const speed = S.speed.update(overlapNow);
   const verdict = G.decide(S.settings, S.floor, {
     shoot, hasMatcher: true, hasReference: !!S.reference, keypoints: confidentNow, blurry,
-    overlap: overlapNow, support: now?.support ?? { inliers: 0, coverage: 0 }, overlap2: S.twoBack ? overlap2 : null,
+    // Judged at the next check (G.anticipate): the speed is the drop per check.
+    overlap: G.anticipate(overlapNow, speed), support: now?.support ?? { inliers: 0, coverage: 0 },
+    overlap2: S.twoBack ? G.anticipate(overlap2, speed) : null,
   });
   const cand = { xy: kp.xy, desc: S.matcherKind === 'lightglue' ? kp.desc : null, feat: f, w, h, image: frame.image,
                  overlap: overlapNow, relocalized };
@@ -843,10 +849,11 @@ async function start() {
     S.session = { width: w, height: h };
     // Like Recon's 800 confident keypoints are for a 1280 x 720 frame.
     S.settings.minKeypoints = Math.max(150, Math.round(800 * Math.min(1, (w * h) / (1280 * 720))));
-    // A phone checks ~2 frames a second, so at walking pace the overlap falls ~0.2 between
-    // checks and keyframes were kept far apart: on a Pixel 9a, pairs two keyframes apart
-    // had 4-42 matches and the map broke into pieces. Keeping earlier leaves overlap two back.
-    if (phone) S.settings.targetOverlap = 0.7;
+    // A phone checks a few frames a second: at walking pace the overlap falls ~0.2 between
+    // checks. Before the overlap was anticipated (G.anticipate), keyframes landed far past
+    // the target and pairs two apart had 4-42 matches; a slightly higher target leaves
+    // overlap two back.
+    if (phone) S.settings.targetOverlap = 0.6;
     S.wakeLock = await navigator.wakeLock?.request('screen').catch(() => null);
     S.running = true;
     S.busy = false;

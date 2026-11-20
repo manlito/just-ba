@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
-  Blur, MIN_REFERENCE_KEYPOINTS, Picker, RECENT_KEYFRAMES, SPARSE_KEYFRAMES, Speed, confident, decide,
+  Blur, LOST_OVERLAP, MIN_REFERENCE_KEYPOINTS, anticipate, Picker, RECENT_KEYFRAMES, SPARSE_KEYFRAMES, Speed, confident, decide,
   defaultSettings, floorOf, hold, overlap, sharpness, slowDown, strongest, usableReference,
 } from './gates.js';
 
@@ -257,4 +257,15 @@ test('the strongest matches, in order', () => {
   const s = new Float32Array([0.1, 0.9, 0.5, 0.9]);
   assert.deepEqual([...strongest(m, s, 2)], [1, 1, 3, 3]);
   assert.deepEqual([...strongest(m, s, 0)], [...m]);
+});
+
+test('the overlap is judged at the next check', () => {
+  assert.equal(anticipate(0.7, 0), 0.7);
+  close(anticipate(0.7, 0.2), 0.5, 1e-9);
+  assert.equal(anticipate(0.2, 0.2), LOST_OVERLAP, 'not anticipated into lost');
+  assert.equal(anticipate(0.1, 0.2), 0.1, 'lost stays lost');
+  assert.equal(anticipate(null, 0.2), null);
+  assert.equal(anticipate(0.7, -0.1), 0.7, 'coming back is not anticipated');
+  // At a phone's pace (a drop of 0.2 a check), the frame at 0.7 is kept rather than the next at 0.5.
+  assert.deepEqual(decide(defaultSettings(), floorOf(), { ...facts(anticipate(0.7, 0.2)) }).urge, { kind: 'due', why: 'target' });
 });

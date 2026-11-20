@@ -135,6 +135,18 @@ export class Speed {
   rebase() { this.last = null; }
 }
 
+/**
+ * The overlap the rules judge a frame by: what it will be at the next check, at the
+ * current speed (the smoothed drop per check). A page that checks a frame every few
+ * hundred milliseconds (a phone) otherwise keeps its keyframes past the target, or loses
+ * the last one between two checks. Not anticipated below LOST_OVERLAP (lost is lost) nor
+ * into it.
+ */
+export function anticipate(overlap, drop) {
+  if (overlap == null || overlap < LOST_OVERLAP || !(drop > 0)) return overlap;
+  return Math.max(LOST_OVERLAP, overlap - drop);
+}
+
 /** Whether to ask for slower motion. */
 export function slowDown(drop, blurry) {
   return drop > SLOW_DOWN_DROP || (blurry && drop > SLOW_DOWN_DROP / 2);
