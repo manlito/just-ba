@@ -62,12 +62,51 @@ bool same(const jba::Problem& a, const jba::Problem& b) {
          a.manhattan_frame == b.manhattan_frame && a.manhattan_dof == b.manhattan_dof &&
          same_nan(a.obs_depth, b.obs_depth) && same_nan(a.obs_depth_sigma, b.obs_depth_sigma) &&
          a.depth_kind == b.depth_kind && a.depth_form == b.depth_form && a.depth_correction == b.depth_correction &&
-         a.depth_correction_free == b.depth_correction_free && extra_same;
+         a.depth_correction_free == b.depth_correction_free && a.intrinsics_prior == b.intrinsics_prior &&
+         a.intrinsics_prior_sigma == b.intrinsics_prior_sigma && extra_same;
 }
 
 }  // namespace
 
 int main() {
+  // Intrinsics priors (D161): both sections round-trip, bad ones are refused.
+  {
+    auto p = jba_test::random_problem(jba::CameraModel::Radial, 3, 15, 4);
+    p.intrinsics_free = {jba::kFocal | jba::kDistortion};
+    const double inf = std::numeric_limits<double>::infinity();
+    p.intrinsics_prior_sigma = {5.0, inf, inf, 0.01, 0.02};
+    const auto path = temp_path("intrinsics_prior.jba");
+    jba::write_problem(path, p);  // sigma alone: the target is the starting values
+    EXPECT(same(p, jba::read_problem(path)));
+    p.intrinsics_prior = p.intrinsics;
+    p.intrinsics_prior[0] *= 1.01;
+    jba::write_problem(path, p);
+    EXPECT(same(p, jba::read_problem(path)));
+    fs::remove(path);
+
+    auto bad = p;
+    bad.intrinsics_prior_sigma.pop_back();
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior_sigma[3] = 0;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior_sigma[3] = std::nan("");
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior_sigma.clear();  // a target without sigma
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior[1] = inf;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior.push_back(0);
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_prior_sigma.assign(5, inf);  // all +inf: valid, no prior
+    EXPECT(jba::validate(bad).empty());
+  }
+
   // Pose priors: every prior section, both weight forms, several sets.
   {
     auto p = jba_test::random_problem(jba::CameraModel::Pinhole, 4, 20, 9);

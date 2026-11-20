@@ -55,4 +55,13 @@ double depth_residual_sigma(const Problem& problem, std::size_t k, const PriorDe
 void add_relative_priors_from_poses(Problem& problem, const std::vector<double>& poses,
                                     const std::vector<std::int32_t>& pairs);
 
+// Prior on free intrinsics by group (D161): sets intrinsics_prior to the current
+// intrinsics and intrinsics_prior_sigma per parameter, for every block: focal
+// lengths focal_fraction times their value (0.01 keeps them within about 1 %), the
+// principal point principal_point_sigma pixels, distortion coefficients
+// distortion_sigma. +inf leaves that group fully free. Only groups freed in
+// intrinsics_free are refined at all; the mask stays the caller's.
+void set_intrinsics_prior(Problem& problem, double focal_fraction, double principal_point_sigma,
+                          double distortion_sigma);
+
 }  // namespace jba

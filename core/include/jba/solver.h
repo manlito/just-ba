@@ -173,7 +173,8 @@ struct SolverSummary {
   double final_cost = 0;
   // The same by residual type, indexed like Problem::loss_type (kLossReprojection,
   // relative prior, global prior, gravity, line, depth); each sums to the total up to
-  // rounding. The depth entry includes the priors on free depth corrections.
+  // rounding. The depth entry includes the priors on free depth corrections, the
+  // reprojection entry the priors on free intrinsics (D161).
   std::array<double, kNumLossTypes> initial_cost_by_type{}, final_cost_by_type{};
   int iterations = 0;           // not counting iteration 0
   int accepted_steps = 0;

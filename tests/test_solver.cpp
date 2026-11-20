@@ -5,12 +5,14 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <random>
 #include <tuple>
 #include <vector>
 
 #include "check.h"
 #include "jba/geometry.h"
+#include "jba/priors.h"
 #include "jba/report.h"
 #include "jba/solver.h"
 #include "synthetic.h"
@@ -179,6 +181,91 @@ int main() {
                 p.intrinsics[0]);
     // Gauge fixes scale, so the focal length is recovered exactly up to noise (none).
     EXPECT_NEAR(p.intrinsics[0], truth.intrinsics[0], 1e-6 * truth.intrinsics[0]);
+  }
+
+  // Prior on free intrinsics (D161): no sigma (or all +inf) is exactly the free
+  // solve; a huge sigma is free to rounding, a tiny one fixed; a moderate one lands
+  // between. solve() writes the target back, so a second solve anchors to the same
+  // values. Cost by type: the reprojection entry is the report's reprojection plus
+  // intrinsics prior cost.
+  {
+    const auto truth = jba_test::random_problem(CameraModel::Radial, 10, 300, 51, 0.5);
+    auto start = truth;
+    perturb(start, 52);
+    start.intrinsics_free = {jba::kFocal | jba::kDistortion};
+    start.intrinsics[0] *= 1.05;
+    start.intrinsics[3] += 0.02;
+    jba::SolverOptions o;
+    o.function_tolerance = 1e-12;
+    o.max_iterations = 100;
+    const double inf = std::numeric_limits<double>::infinity();
+    auto solved = [&](const std::vector<double>& sigma, jba::SolverSummary* out = nullptr) {
+      auto p = start;
+      p.intrinsics_prior_sigma = sigma;
+      const auto s = jba::solve(p, o);
+      if (out) *out = s;
+      return p;
+    };
+    jba::SolverSummary s_free, s_inf;
+    const auto free = solved({}, &s_free);
+    const auto all_inf = solved(std::vector<double>(5, inf), &s_inf);
+    EXPECT(all_inf.intrinsics == free.intrinsics && all_inf.poses == free.poses && all_inf.points == free.points);
+    EXPECT(s_inf.final_cost == s_free.final_cost && s_inf.iterations == s_free.iterations);
+    EXPECT(free.intrinsics_prior.empty());
+    // The focal length is weakly determined here (free lands at 511 for a truth of
+    // 520), so two solves that differ only in rounding stop a little apart along that
+    // valley: compare the cost tightly and the intrinsics loosely.
+    jba::SolverSummary s_loose;
+    const auto loose = solved({1e9, 1e9, 1e9, 1e9, 1e9}, &s_loose);
+    std::printf("intrinsics prior: sigma 1e9 cost %.17g iterations %d, free %.17g iterations %d, focal %.9f vs %.9f\n",
+                s_loose.final_cost, s_loose.iterations, s_free.final_cost, s_free.iterations, loose.intrinsics[0],
+                free.intrinsics[0]);
+    EXPECT_NEAR(s_loose.final_cost, s_free.final_cost, 1e-9 * s_free.final_cost);
+    for (int a = 0; a < 5; ++a)
+      EXPECT_NEAR(loose.intrinsics[static_cast<std::size_t>(a)], free.intrinsics[static_cast<std::size_t>(a)],
+                  1e-5 * (1 + std::abs(free.intrinsics[static_cast<std::size_t>(a)])));
+    const auto tight = solved({1e-7, 1e-7, 1e-7, 1e-9, 1e-9});
+    for (int a = 0; a < 5; ++a)
+      EXPECT_NEAR(tight.intrinsics[static_cast<std::size_t>(a)], start.intrinsics[static_cast<std::size_t>(a)],
+                  1e-6 * (1 + std::abs(start.intrinsics[static_cast<std::size_t>(a)])));
+    // Moderate: focal within about 1 % of its start, k1 and k2 near theirs.
+    auto p = start;
+    jba::set_intrinsics_prior(p, 0.01, inf, 0.005);
+    EXPECT(p.intrinsics_prior == start.intrinsics);
+    jba::SolverSummary s;
+    {
+      auto q = start;
+      q.intrinsics_prior_sigma = p.intrinsics_prior_sigma;  // empty target: the start
+      s = jba::solve(q, o);
+      EXPECT(q.intrinsics_prior == start.intrinsics);  // written back
+      p = q;
+    }
+    const double f0 = start.intrinsics[0], f_free = free.intrinsics[0], f = p.intrinsics[0];
+    std::printf("intrinsics prior: focal start %.3f, free %.3f, regularized %.3f, truth %.3f\n", f0, f_free, f,
+                truth.intrinsics[0]);
+    EXPECT(std::abs(f - f0) < std::abs(f_free - f0) && (f - f0) * (f_free - f0) > 0);
+    EXPECT(p.intrinsics[1] == start.intrinsics[1] && p.intrinsics[2] == start.intrinsics[2]);  // principal point fixed
+    for (int when = 0; when < 2; ++when) {
+      const auto& by = when == 0 ? s.initial_cost_by_type : s.final_cost_by_type;
+      const double total = when == 0 ? s.initial_cost : s.final_cost;
+      auto at = when == 0 ? start : p;
+      at.intrinsics_prior = start.intrinsics;
+      at.intrinsics_prior_sigma = p.intrinsics_prior_sigma;
+      const auto rep = jba::evaluate(at, o);
+      double sum = 0;
+      for (double v : by) sum += v;
+      EXPECT_NEAR(sum, total, 1e-12 * total);
+      EXPECT_NEAR(by[jba::kLossReprojection], rep.reprojection_cost + rep.intrinsics_prior_cost,
+                  1e-9 * (1 + by[jba::kLossReprojection]));
+      if (when == 0) EXPECT(rep.intrinsics_prior_cost == 0);
+      else EXPECT(rep.intrinsics_prior_cost > 0 && rep.intrinsics_prior_param.size() == 1 &&
+                  rep.intrinsics_prior_param[0] >= 0 && rep.intrinsics_prior_norm[0] > 0);
+    }
+    // A second solve from the result anchors to the first target, not to where it is.
+    auto again = p;
+    jba::solve(again, o);
+    EXPECT(again.intrinsics_prior == start.intrinsics);
+    EXPECT_NEAR(again.intrinsics[0], p.intrinsics[0], 1e-6 * p.intrinsics[0]);
   }
 
   // Robust loss: with gross outliers, Cauchy lands nearer the truth than no loss.

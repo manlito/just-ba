@@ -76,12 +76,14 @@ struct Corrector {
 // rigid part (6..11), slot 2 the set's scale (12).
 constexpr int kPriorRows = 6;
 constexpr int kPriorCols = 13;
-constexpr int kMaxFactorRows = 6;
+// Intrinsics priors (D161): one row per intrinsics parameter, so up to kMaxParams.
+constexpr int kMaxFactorRows = 8;
+static_assert(kMaxParams <= kMaxFactorRows && kMaxParams <= 8, "slot masks are 8 bits wide");
 constexpr double kIdentityTransform[8] = {1, 0, 0, 0, 0, 0, 0, 1};
 
 enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale, Frame, Depth };
 
-enum class FactorKind : std::uint8_t { PosePrior, Gravity, Line, DepthPrior };
+enum class FactorKind : std::uint8_t { PosePrior, Gravity, Line, DepthPrior, IntrinsicsPrior };
 
 struct PosePrior {
   bool relative = true;
@@ -110,11 +112,22 @@ struct DepthPrior {
   double w[2];  // 1 / sigma of scale and offset; 0 leaves that part out
 };
 
+// Prior on one free intrinsics block (D161): residual (k - k0) * w per parameter.
+struct IntrinsicsPrior {
+  int block = -1;
+  double k0[kMaxParams];
+  double w[kMaxParams];  // 1 / sigma; 0 for no prior or a fixed parameter
+};
+
 struct FactorSet {
   FactorKind kind{};
   int rows = 0, cols = 0, nslots = 0;
   int slot_base[3] = {0, 0, 0}, slot_size[3] = {0, 0, 0};
   std::size_t count = 0;
+  // Smallest range of factors a thread takes in parallel loops over the set. The
+  // intrinsics priors are a few tiny factors, run inline: a thread hand-off per
+  // conjugate gradients product would cost more than the work (D161).
+  std::size_t grain = 16;
   std::vector<int> slot_off;            // nslots per factor: f offset, -1 when fixed or absent
   std::vector<std::uint8_t> slot_mask;  // nslots per factor: columns that are not variables
   std::vector<int> slot_image;          // nslots per factor: image of a pose slot, else -1
@@ -205,6 +218,10 @@ struct System {
   std::vector<int> depth_off;                   // per image, -1 when fixed or unused
   std::vector<std::uint8_t> depth_fixed_cols;   // per image: bit 0 scale, bit 1 offset
   std::vector<DepthPrior> depth_priors;
+  std::vector<IntrinsicsPrior> intrinsics_priors;
+  // The intrinsics prior's target as resolved at construction (Problem's, or the
+  // starting intrinsics), written back by write_back; empty without a prior (D161).
+  std::vector<double> intr_prior_target;
 
   // Poses whose heading is held by the gauge (D83): rotation tangent basis, from the
   // current pose at each linearization, and its index per image (-1 for none).

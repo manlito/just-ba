@@ -79,6 +79,23 @@ void add_relative_priors_from_poses(Problem& p, const std::vector<double>& poses
   }
 }
 
+void set_intrinsics_prior(Problem& p, double focal_fraction, double principal_point_sigma, double distortion_sigma) {
+  for (double v : {focal_fraction, principal_point_sigma, distortion_sigma})
+    if (!(v > 0)) throw std::invalid_argument("set_intrinsics_prior: sigmas must be positive (+inf for none)");
+  const int np = num_params(p.model);
+  p.intrinsics_prior = p.intrinsics;
+  p.intrinsics_prior_sigma.resize(p.intrinsics.size());
+  for (std::size_t at = 0; at < p.intrinsics.size(); ++at) {
+    double& s = p.intrinsics_prior_sigma[at];
+    switch (intrinsics_group(p.model, static_cast<int>(at % static_cast<std::size_t>(np)))) {
+      case kFocal: s = focal_fraction * std::abs(p.intrinsics[at]); break;
+      case kPrincipalPoint: s = principal_point_sigma; break;
+      case kDistortion: s = distortion_sigma; break;
+    }
+    if (!(s > 0)) throw std::invalid_argument("set_intrinsics_prior: a focal length of 0");
+  }
+}
+
 double depth_residual_sigma(const Problem& p, std::size_t k, const PriorDefaults& d) {
   const double reading = p.obs_depth[k];
   const double sigma = p.obs_depth_sigma.empty() ? d.depth_sigma + d.depth_sigma_per_metre * reading : p.obs_depth_sigma[k];

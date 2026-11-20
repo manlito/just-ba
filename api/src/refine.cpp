@@ -226,6 +226,9 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   }
   if (base.num_images() != n_img) throw std::invalid_argument("refine: scene.poses must have one pose per image");
   if (auto err = validate(base); !err.empty()) throw std::invalid_argument("refine: invalid scene: " + err);
+  // The intrinsics prior anchors to the caller's values in every round (D161), not to
+  // the previous round's result.
+  if (!base.intrinsics_prior_sigma.empty() && base.intrinsics_prior.empty()) base.intrinsics_prior = base.intrinsics;
 
   RefineResult out;
   const PoseInitialization init = initialize_poses(base, o.solver.prior_defaults);

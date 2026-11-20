@@ -12,6 +12,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -89,6 +90,16 @@ In<T> as_array(nb::handle h, const char* name) {
 template <typename T>
 std::vector<T> from_optional(const std::optional<In<T>>& a, const std::vector<std::size_t>& tail, const char* name) {
   return a ? from_numpy(*a, tail, name) : std::vector<T>{};
+}
+
+// An array shaped like Problem::intrinsics: (B, num_params) or one 1-d block; an
+// empty array clears it.
+std::vector<double> intrinsics_like(const jba::Problem& p, nb::handle h, const char* name) {
+  const auto a = as_array<double>(h, name);
+  if (a.size() == 0) return {};
+  const auto np = static_cast<std::size_t>(jba::num_params(p.model));
+  if (a.ndim() == 1 && a.shape(0) == np) return std::vector<double>(a.data(), a.data() + np);
+  return from_numpy(a, {np}, name);
 }
 
 jba::CameraModel model_of(const nb::handle& h) {
@@ -273,6 +284,25 @@ NB_MODULE(_core, m) {
           },
           nb::for_getter(nb::rv_policy::move),
           "Intrinsics blocks, (B, num_params(model)); one block (a 1-d array) is the normal case. Set the model first.")
+      .def_prop_rw(
+          "intrinsics_prior",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_prior, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_prior = intrinsics_like(p, h, "intrinsics_prior"); },
+          nb::for_getter(nb::rv_policy::move),
+          "Target of the prior on free intrinsics (D161), shaped like intrinsics; empty ([]): the intrinsics given to "
+          "solve(), which writes the target it used back here.")
+      .def_prop_rw(
+          "intrinsics_prior_sigma",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_prior_sigma, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_prior_sigma = intrinsics_like(p, h, "intrinsics_prior_sigma"); },
+          nb::for_getter(nb::rv_policy::move),
+          "Standard deviation of each intrinsics parameter's prior, shaped like intrinsics, in the parameter's units "
+          "(pixels for focal lengths and the principal point). A freed group with a finite sigma is regularized, "
+          "without one fully free; +inf for none; empty: no prior (D161). See set_intrinsics_prior.")
       .def_prop_ro("num_images", &jba::Problem::num_images)
       .def_prop_ro("num_points", &jba::Problem::num_points)
       .def_prop_ro("num_observations", &jba::Problem::num_observations)
@@ -363,6 +393,12 @@ NB_MODULE(_core, m) {
   m.def("read_problem", &jba::read_problem, "path"_a, "Reads a .jba problem file.");
   m.def("write_problem", &jba::write_problem, "path"_a, "problem"_a, "Writes a .jba problem file.");
   m.def("read_bal", &jba::read_bal, "path"_a, "Reads a Bundle Adjustment in the Large problem.");
+  m.def("set_intrinsics_prior", &jba::set_intrinsics_prior, "problem"_a, "focal_fraction"_a,
+        "principal_point_sigma"_a = std::numeric_limits<double>::infinity(),
+        "distortion_sigma"_a = std::numeric_limits<double>::infinity(),
+        "Regularizes free intrinsics toward their current values (D161): focal lengths within focal_fraction of "
+        "their value, the principal point within principal_point_sigma pixels, distortion within distortion_sigma; "
+        "inf leaves a group fully free. Which groups are refined at all is still intrinsics_free.");
   m.def(
       "add_relative_priors_from_poses",
       [](jba::Problem& p, nb::handle poses, nb::handle pairs) {
@@ -506,6 +542,16 @@ NB_MODULE(_core, m) {
       .def_ro("gravity_cost", &jba::ResidualReport::gravity_cost)
       .def_ro("line_cost", &jba::ResidualReport::line_cost)
       .def_ro("depth_cost", &jba::ResidualReport::depth_cost)
+      .def_ro("intrinsics_prior_cost", &jba::ResidualReport::intrinsics_prior_cost,
+              "Priors on free intrinsics; the solver's reprojection entry is reprojection_cost plus this.")
+      .def_prop_ro("intrinsics_prior_norm", [](const jba::ResidualReport& r) { return to_numpy(r.intrinsics_prior_norm); },
+                   "Per intrinsics block: largest |k - target| / sigma over its regularized parameters.",
+                   nb::rv_policy::move)
+      .def_prop_ro("intrinsics_prior_param",
+                   [](const jba::ResidualReport& r) {
+                     return to_numpy(std::vector<std::int32_t>(r.intrinsics_prior_param.begin(), r.intrinsics_prior_param.end()));
+                   },
+                   "Per intrinsics block: the parameter of intrinsics_prior_norm, -1 for none.", nb::rv_policy::move)
       .def_prop_ro("depth_refined", [](const jba::ResidualReport& r) { return to_numpy(r.depth_refined); },
                    "Per observation: refined depth of its point, NaN without a reading.", nb::rv_policy::move)
       .def_prop_ro("depth_corrected", [](const jba::ResidualReport& r) { return to_numpy(r.depth_corrected); },

@@ -302,6 +302,34 @@ void System::build_factors(const Problem& p, const SolverOptions& o) {
   }
   if (dprior.count > 0) fsets.push_back(std::move(dprior));
 
+  // Priors on free intrinsics (D161): one factor per variable block with a finite
+  // sigma on a free parameter. Nothing is built without sigma, so such problems
+  // solve exactly as before.
+  if (!p.intrinsics_prior_sigma.empty()) {
+    intr_prior_target = p.intrinsics_prior.empty() ? p.intrinsics : p.intrinsics_prior;
+    FactorSet iprior = make_set(FactorKind::IntrinsicsPrior, np, {np});
+    iprior.grain = std::size_t(1) << 20;  // inline
+    for (std::size_t c = 0; c < intr_off.size(); ++c) {
+      if (intr_off[c] < 0) continue;
+      IntrinsicsPrior f;
+      f.block = static_cast<int>(c);
+      bool any = false;
+      for (int a = 0; a < np; ++a) {
+        const std::size_t at = static_cast<std::size_t>(np) * c + static_cast<std::size_t>(a);
+        f.k0[a] = intr_prior_target[at];
+        const double sigma = p.intrinsics_prior_sigma[at];
+        const bool free = !(intr_fixed_cols[c] & (1u << a));
+        f.w[a] = free && std::isfinite(sigma) ? 1 / sigma : 0.0;
+        any = any || f.w[a] != 0;
+      }
+      if (!any) continue;
+      add_factor(iprior, {{intr_off[c], -1}}, Loss{});
+      iprior.slot_mask.back() = static_cast<std::uint8_t>(intr_fixed_cols[c]);
+      intrinsics_priors.push_back(f);
+    }
+    if (iprior.count > 0) fsets.push_back(std::move(iprior));
+  }
+
   if (frame_dof > 0) {
     FactorSet line_set = make_set(FactorKind::Line, 1, {6, frame_dof});
     for (std::size_t k = 0; k < p.num_lines(); ++k) {
@@ -362,6 +390,16 @@ void System::eval_factor(const FactorSet& fs, std::size_t f, const Params& P, do
         J[1] = 0;
         J[2] = 0;
         J[3] = d.w[1];
+      }
+      return;
+    }
+    case FactorKind::IntrinsicsPrior: {
+      const IntrinsicsPrior& q = intrinsics_priors[f];
+      const double* k = &P.intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(q.block)];
+      for (int a = 0; a < np; ++a) rw[a] = (k[a] - q.k0[a]) * q.w[a];
+      if (J) {
+        for (int a = 0; a < np * np; ++a) J[a] = 0;
+        for (int a = 0; a < np; ++a) J[a * np + a] = q.w[a];
       }
       return;
     }
@@ -490,6 +528,7 @@ void System::cost_by_type(double* out) {
         case FactorKind::Gravity: ty = kLossGravity; break;
         case FactorKind::Line: ty = kLossLine; break;
         case FactorKind::DepthPrior: ty = kLossDepth; break;
+        case FactorKind::IntrinsicsPrior: ty = kLossReprojection; break;
       }
       out[ty] += 0.5 * rho[0];
     }
@@ -590,7 +629,7 @@ void System::linearize_factors() {
           }
         }
       }
-    }, 16);
+    }, fs.grain);
   }
 }
 
@@ -607,7 +646,7 @@ void System::scale_factors() {
             for (int c = 0; c < n; ++c) J[row * fs.cols + base + c] *= f_scale[so + c];
         }
       }
-    }, 16);
+    }, fs.grain);
   }
 }
 
@@ -752,6 +791,7 @@ void System::write_back(Problem& problem) const {
   if (frame_dof > 0) problem.manhattan_frame.assign(cur.frame, cur.frame + 4);
   if (!problem.depth_correction.empty() || !problem.depth_correction_free.empty())
     problem.depth_correction = cur.depth;
+  if (!intr_prior_target.empty()) problem.intrinsics_prior = intr_prior_target;
 }
 
 }  // namespace jba::cpu

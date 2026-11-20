@@ -561,7 +561,23 @@ Candidates for later: FULL_OPENCV, THIN_PRISM_FISHEYE, EUCM.
   point, distortion. (COLMAP's GPU backend cannot free focal length and distortion
   separately; ours should.)
 - Images sharing a physical camera share one intrinsics block.
-- An optional prior keeps refined intrinsics near their starting values.
+- An optional prior keeps refined intrinsics near a target (D161), for refining the
+  output of another process. Each group of each block is then in one of three modes:
+  - fixed: its bit clear in `intrinsics_free` (the default), whatever its sigma;
+  - fully free: its bit set and no finite sigma for its parameters;
+  - regularized: its bit set and a finite sigma, with residual per parameter
+
+    ```
+    r_a = (k_a - target_a) / sigma_a
+    ```
+
+    without a robust loss, sigma in the parameter's own units (pixels for focal
+    lengths and the principal point; a focal length within 1 % is sigma = 0.01 f).
+    The target defaults to the intrinsics given to `solve()`, which writes it back
+    to `intrinsics_prior` so later solves keep the same anchor; `refine()` anchors
+    every round to the caller's values. The cost counts in the reprojection type.
+    `set_intrinsics_prior(problem, focal_fraction, principal_point_sigma,
+    distortion_sigma)` fills the sigmas by group.
 
 ## Gauge
 
