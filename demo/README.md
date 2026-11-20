@@ -279,8 +279,8 @@ for PnP, are placed from their best pair to the map (`register_from_pairs`, D158
 FlexGlue's weights come from the visitor: `flexglue.pth` from FlexGlue's release, checked
 against its SHA-256, converted to float16 by just-matching's module (`jmt.convert`) in a
 worker that ends afterwards, and kept in the origin's private file system
-(`flexglue-fp16.jmtw`, 284 MB). Phones default to LightGlue, 1,024 keypoints and a
-960 px working image. URL parameters: `matcher=flexglue|lightglue|lighterglue`, `keypoints=1024|2048`,
+(`flexglue-fp16.jmtw`, 284 MB). Phones default to LighterGlue (XFeat keypoints), 1,024 keypoints and a
+640 px working image. URL parameters: `matcher=flexglue|lightglue|lighterglue`, `keypoints=1024|2048`,
 `side=<px>`, `debug=1`, and for testing without a camera `video=<url>` (a recorded video
 instead, `rate=` its playback rate).
 
