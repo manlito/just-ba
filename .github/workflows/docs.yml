@@ -8,7 +8,10 @@
 #
 # The live demo is the demo app built as WebAssembly. It needs poselib-gpu's sources,
 # a public repository checked out next to this one (main unless poselib_ref says
-# otherwise), and Emscripten and emdawnwebgpu as in ci.yml's WebAssembly job.
+# otherwise), Emscripten and emdawnwebgpu as in ci.yml's WebAssembly job, and the
+# keypoints and matcher modules, fetched from just-keypoints' and just-matching's sites
+# with pinned hashes (demo/tools/fetch_match_web.sh, D156). The live capture's keep rules
+# (demo/web/gates.js, D157) are tested with Node first.
 #
 # Free hosted runner (D39). Deploying needs the repository secrets
 # CLOUDFLARE_API_TOKEN (permission "Cloudflare Pages: Edit") and
@@ -54,6 +57,8 @@ jobs:
       DAWN_RELEASE: v20261113.214538
     steps:
       - uses: actions/checkout@v4
+      - name: Test the live capture's keep rules
+        run: node --test demo/web/gates.test.mjs
       - uses: actions/checkout@v4
         if: env.DEMO == 'true'
         with:
@@ -77,6 +82,9 @@ jobs:
           curl -sSfL -o emdawnwebgpu.zip \
             "https://github.com/google/dawn/releases/download/${DAWN_RELEASE}/emdawnwebgpu_pkg-${DAWN_RELEASE}.zip"
           unzip -q emdawnwebgpu.zip -d third_party/webgpu/emdawnwebgpu
+      - name: Fetch the demo's keypoints and matcher (just-keypoints, just-matching; pinned hashes)
+        if: env.DEMO == 'true'
+        run: demo/tools/fetch_match_web.sh
       - name: Build the live demo
         if: env.DEMO == 'true'
         run: |

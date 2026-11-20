@@ -3,381 +3,232 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Incremental reconstruction demo</title>
+<meta name="color-scheme" content="light dark">
+<title>Live demo · just-ba</title>
+<meta name="description" content="Structure from motion on your photos in the browser: keypoints and matches on WebGPU, then incremental reconstruction with just-ba's bundle adjustment on the CPU or WebGPU, timed side by side.">
+<link rel="modulepreload" href="jba_demo.js">
 <style>
   :root {
-    color-scheme: light;
-    --page: #ffffff; --text: #16181d; --body: #374151; --muted: #4b5563; --line: #e4e7ec; --soft: #f9fafb;
-    --field: #d0d5dd; --accent: #1f4fd1; --on-accent: #ffffff; --warn-bg: #fff4e5; --warn-text: #5c3a00;
-    --point: #6b7280; --point-new: #1f4fd1; --cam: #16181d; --cam-new: #d9480f; --ghost: #c2c8d0; --pass: #0f7a4a; --fail: #b42318;
+    --page: #f9fafb; --panel: #ffffff; --text: #16181d; --body: #374151; --muted: #5b6472; --faint: #8a93a3;
+    --line: #e4e7ec; --field: #d0d5dd; --empty: #eef0f3; --accent: #1f4fd1; --on-accent: #ffffff;
+    --ok: #0f7a4a; --bad: #b42318; --warn-bg: #fff4e5; --warn-text: #5c3a00;
+    --view: #ffffff; --point: #6b7280; --cam: #16181d; --cam-new: #d9480f; --bar: #1f4fd1; --bar-2: #9aa3b2;
     --sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      color-scheme: dark;
-      --page: #0f1115; --text: #eef0f3; --body: #c9ced6; --muted: #9aa3b2; --line: #262b33; --soft: #161a20;
-      --field: #343b46; --accent: #7aa2ff; --on-accent: #0f1115; --warn-bg: #2a1d0c; --warn-text: #f3d9b1;
-      --point: #8a93a3; --point-new: #7aa2ff; --cam: #eef0f3; --cam-new: #ff8a50; --ghost: #3a414c; --pass: #a5d6a7; --fail: #ff8a80;
+      --page: #0f1115; --panel: #161a20; --text: #eef0f3; --body: #c9ced6; --muted: #9aa3b2; --faint: #7c8594;
+      --line: #262b33; --field: #343b46; --empty: #1c2128; --accent: #7aa2ff; --on-accent: #0f1115;
+      --ok: #a5d6a7; --bad: #ff8a80; --warn-bg: #2a1d0c; --warn-text: #f3d9b1;
+      --view: #0b0d11; --point: #8a93a3; --cam: #eef0f3; --cam-new: #ff8a50; --bar: #7aa2ff; --bar-2: #5b6472;
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--page); color: var(--body); font: 14px/1.5 var(--sans); }
-  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
-  h1 { color: var(--text); font-size: 1.25rem; margin: 0 0 4px; }
-  p { margin: 0 0 8px; }
-  .muted { color: var(--muted); }
-  .notice { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 8px 12px; margin: 8px 0; display: none; }
-  .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: end; border: 1px solid var(--line);
-              background: var(--soft); border-radius: 10px; padding: 12px; margin: 12px 0; }
-  .controls label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 2px; }
-  .controls output { font-family: var(--mono); color: var(--text); }
-  select, input[type=number] { font: inherit; color: var(--text); background: var(--page); border: 1px solid var(--field);
-                               border-radius: 6px; padding: 4px 6px; }
-  input[type=number] { width: 5em; }
-  input[type=range] { width: 120px; accent-color: var(--accent); }
-  button { font: inherit; padding: 6px 16px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent);
-           color: var(--on-accent); cursor: pointer; }
-  button.secondary { background: transparent; color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; }
-  @media (max-width: 820px) { .layout { grid-template-columns: minmax(0, 1fr); } }
-  .view { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-  canvas { display: block; width: 100%; height: 520px; touch-action: none; cursor: grab; }
-  @media (max-width: 820px) { canvas { height: 360px; } }
-  .legend { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
-  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin: 0 4px 0 10px; vertical-align: -1px; }
-  .stepbar { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-  .stepbar input { flex: 1; width: auto; }
-  .stepbar span { font-family: var(--mono); font-size: 12px; min-width: 14ch; text-align: right; }
-  .panel h2 { color: var(--text); font-size: .95rem; margin: 0 0 6px; }
-  .panel section { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+  a { color: var(--accent); }
+
+  /* The site's top bar, as on the documentation pages. */
+  .jb-skip { position: absolute; left: -9999px; top: 8px; z-index: 10; }
+  .jb-skip:focus { left: 12px; background: var(--panel); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); }
+  .jb-top { border-bottom: 1px solid var(--line); background: var(--panel); }
+  .jb-top-in { max-width: 1320px; margin: 0 auto; padding: 14px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+  .jb-top a { text-decoration: none; }
+  .jb-top a:hover { text-decoration: underline; }
+  a.jb-brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+  a.jb-brand:hover { text-decoration: none; }
+  .jb-brand svg { color: var(--accent); }
+  .jb-grow { flex: 1 1 60px; }
+  a.jb-toplink { font-size: 14px; color: var(--muted); }
+  a.jb-toplink[aria-current="page"] { color: var(--text); font-weight: 600; }
+
+  main { max-width: 1320px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { color: var(--text); font-size: 22px; margin: 0 0 6px; }
+  h2 { color: var(--text); font-size: 15px; margin: 0 0 10px; }
+  p { margin: 4px 0 10px; }
+  .lede { color: var(--muted); max-width: 90ch; margin-bottom: 18px; }
+  .notice { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 8px 12px; margin: 0 0 14px; }
+  .runbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 16px; }
+  #status { color: var(--text); font-weight: 500; }
+  #status.error { color: var(--bad); }
+  progress { width: 220px; height: 8px; accent-color: var(--accent); }
+  .layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 920px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .field { margin: 0 0 12px; }
+  .field > .label { display: block; color: var(--muted); font-size: 12.5px; margin-bottom: 4px; }
+  .hint { color: var(--faint); font-size: 12.5px; margin: 4px 0 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, select {
+    font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--field); border-radius: 7px; padding: 5px 10px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; padding: 7px 18px; }
+  .seg { display: inline-flex; border: 1px solid var(--field); border-radius: 7px; overflow: hidden; flex-wrap: wrap; }
+  .seg label { padding: 4px 10px; cursor: pointer; border-right: 1px solid var(--field); user-select: none; }
+  .seg label:last-child { border-right: 0; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label:has(input:checked) { background: var(--accent); color: var(--on-accent); }
+  .seg label:has(input:disabled) { opacity: 0.45; cursor: default; }
+  .seg label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 5px; margin: 10px 0 4px; max-height: 330px; overflow-y: auto; }
+  .thumb { position: relative; aspect-ratio: 3 / 2; border-radius: 5px; overflow: hidden; background: var(--empty); }
+  .thumb canvas { width: 100%; height: 100%; display: block; }
+  .thumb span { position: absolute; left: 3px; bottom: 3px; font-size: 10.5px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+                background: rgba(0, 0, 0, 0.6); color: #fff; font-variant-numeric: tabular-nums; }
+  .thumb.out canvas { opacity: 0.3; }
+  .thumb.out::after { content: "not registered"; position: absolute; inset: auto 0 0 0; top: 30%; text-align: center; font-size: 10px; color: var(--bad); font-weight: 600; }
+  .drop { border: 1.5px dashed var(--field); border-radius: 8px; padding: 10px; text-align: center; color: var(--faint); font-size: 12.5px; }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-  td { padding: 2px 0; border-bottom: 1px solid var(--line); }
-  td:last-child { text-align: right; font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+  th, td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: baseline; }
+  th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+  td.n, th.n { text-align: right; font-family: var(--mono); font-size: 12.5px; color: var(--text); padding-right: 0; padding-left: 8px; }
+  th.n { font-family: var(--sans); color: var(--muted); }
   tr:last-child td { border-bottom: 0; }
-  .verdict { font-weight: 600; }
-  .verdict.pass { color: var(--pass); } .verdict.fail { color: var(--fail); }
-  #status { min-height: 1.5em; }
+  tr.total td { font-weight: 600; }
+  td.speed { color: var(--ok); }
+  .muted { color: var(--muted); }
+  .bars { margin-top: 12px; display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; gap: 6px 10px; align-items: center; font-size: 12.5px; }
+  .bars .track { height: 14px; background: var(--empty); border-radius: 4px; overflow: hidden; }
+  .bars .fill { height: 100%; background: var(--bar); border-radius: 4px; }
+  .bars .fill.cpu { background: var(--bar-2); }
+  .bars .v { font-family: var(--mono); color: var(--text); }
+  .view { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--view); }
+  #view { display: block; width: 100%; height: 560px; touch-action: none; cursor: grab; }
+  @media (max-width: 920px) { #view { height: 380px; } }
+  .viewhead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .viewhead h2 { margin: 0; }
+  .overlay { position: absolute; left: 10px; top: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); pointer-events: none; }
+  .stepbar { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+  .stepbar input { flex: 1; accent-color: var(--accent); }
+  .stepbar span { font-family: var(--mono); font-size: 12px; min-width: 22ch; text-align: right; color: var(--muted); }
+  .credits { color: var(--faint); font-size: 12.5px; margin-top: 8px; max-width: 120ch; }
 </style>
 </head>
 <body>
-<main>
-  <h1>Incremental reconstruction in your browser</h1>
-  <p class="muted">A small structure-from-motion run on a generated capture: every pair's matches are verified by
-    relative pose in RANSAC, the first pair gives the first points, and each further image is registered by PnP,
-    triangulated and bundle-adjusted. Both the pose estimation and the bundle adjustment run in WebAssembly, on
-    WebGPU or the CPU. The scene has a known ground truth, so the result is checked against it.</p>
-  <div id="nogpu" class="notice"></div>
-
-  <div class="controls">
-    <label>Scene <select id="scene">
-      <option value="orbit">Orbit (16 images)</option>
-      <option value="wall">Wall walk (14 images)</option>
-      <option value="grid">Camera grid (13 images)</option>
-    </select></label>
-    <label>Seed <input id="seed" type="number" value="0" min="0" max="9999"></label>
-    <label>Keypoint noise <span><input id="noise" type="range" min="0" max="2" step="0.1" value="0.5"> <output id="noise-v">0.5 px</output></span></label>
-    <label>Wrong matches <span><input id="wrong" type="range" min="0" max="0.5" step="0.05" value="0.25"> <output id="wrong-v">25 %</output></span></label>
-    <label>Unrelated pairs <span><input id="false" type="range" min="0" max="30" step="1" value="10"> <output id="false-v">10</output></span></label>
-    <label>Pose estimation <select id="poses"><option value="auto">auto</option><option value="webgpu">webgpu</option><option value="cpu">cpu</option></select></label>
-    <label>Bundle adjustment <select id="ba"><option value="webgpu">webgpu</option><option value="cpu">cpu</option></select></label>
-    <button id="run" disabled>Reconstruct</button>
+<a class="jb-skip" href="#content">Skip to content</a>
+<header class="jb-top">
+  <div class="jb-top-in">
+    <a class="jb-brand" href="../index.html">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2.5"></circle><circle cx="17" cy="5" r="2.5"></circle><circle cx="11" cy="17" r="2.5"></circle><path d="M7.3 6.8 9.6 15M14.9 6.6 12.3 15M7.5 5.8h7"></path></svg>
+      <span>just-ba</span>
+    </a>
+    <span class="jb-grow"></span>
+    <a class="jb-toplink" href="../index.html">Documentation</a>
+    <a class="jb-toplink" href="index.html" aria-current="page">Live demo</a>
+    <a class="jb-toplink" href="capture.html">Live capture</a>
   </div>
-  <div id="status" class="muted">Loading…</div>
+</header>
+
+<main id="content">
+  <h1>just-ba demo</h1>
+  <p class="lede">Your photos to a 3D model in the browser, on the CPU and WebGPU side by side. Nothing is uploaded.</p>
+  <div id="notice" class="notice" hidden></div>
+
+  <div class="runbar">
+    <button id="run" class="primary" disabled>Run</button>
+    <button id="stop" hidden>Stop</button>
+    <span id="status">Loading…</span>
+    <progress id="progress" hidden></progress>
+  </div>
 
   <div class="layout">
     <div>
-      <div class="view">
-        <canvas id="view"></canvas>
-        <div class="legend"><i style="background:var(--cam-new)"></i>added in this step<i style="background:var(--point-new)"></i>new points<i style="background:var(--ghost)"></i>true cameras</div>
-      </div>
-      <div class="stepbar">
-        <button id="play" class="secondary" disabled>Play</button>
-        <input id="step" type="range" min="0" max="0" value="0" disabled>
-        <span id="step-label">no run yet</span>
-      </div>
-      <p class="muted" style="margin-top:6px;font-size:12px">Drag to turn the view, scroll or pinch to zoom.</p>
+      <section class="panel">
+        <h2>Images</h2>
+        <div class="row">
+          <button id="samples">Sample set</button>
+          <button id="add">Add images…</button>
+          <button id="clear">Clear</button>
+          <input id="files" type="file" accept="image/*" multiple hidden>
+        </div>
+        <div id="thumbs" class="thumbs"></div>
+        <div id="drop" class="drop">Or drop images here.</div>
+        <p class="hint">Photos of one scene, taken from different places, each overlapping others. Up to 60; every pair is matched.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Settings</h2>
+        <div class="field">
+          <span class="label">Reconstruct on</span>
+          <div class="seg" id="backends">
+            <label><input type="radio" name="backends" value="both" checked>CPU, then WebGPU</label>
+            <label><input type="radio" name="backends" value="webgpu">WebGPU</label>
+            <label><input type="radio" name="backends" value="cpu">CPU</label>
+          </div>
+          <p class="hint">Pose estimation (poselib-gpu) and bundle adjustment (just-ba) run on the same one. The CPU is one
+            thread of WebAssembly.</p>
+        </div>
+        <div class="field">
+          <span class="label">Keypoints per image</span>
+          <div class="seg">
+            <label><input type="radio" name="keypoints" value="1024">1024</label>
+            <label><input type="radio" name="keypoints" value="2048" checked>2048</label>
+            <label><input type="radio" name="keypoints" value="4096">4096</label>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">Largest image side</span>
+          <div class="seg">
+            <label><input type="radio" name="side" value="1024">1024 px</label>
+            <label><input type="radio" name="side" value="1600" checked>1600 px</label>
+          </div>
+          <p class="hint">Larger images are scaled down before anything else.</p>
+        </div>
+        <p class="hint">Changing the images or these two settings finds keypoints and matches again; changing only where to
+          reconstruct reuses them.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Keypoints and matches</h2>
+        <table id="match-times"><tr><td class="muted">Not run yet.</td></tr></table>
+        <p class="hint" id="gpu-info"></p>
+      </section>
     </div>
-    <div class="panel">
-      <section>
-        <h2>Result <span id="verdict" class="verdict"></span></h2>
-        <table id="metrics"></table>
+
+    <div>
+      <section class="panel">
+        <h2>Reconstruction: CPU and WebGPU</h2>
+        <table id="compare"><tr><td class="muted">Run to compare.</td></tr></table>
+        <div id="bars" class="bars" hidden></div>
+        <p class="hint" id="compare-note"></p>
       </section>
-      <section>
-        <h2>Time</h2>
-        <table id="times"></table>
-      </section>
-      <section>
-        <h2>Matches</h2>
-        <table id="pairs"></table>
+
+      <section class="panel">
+        <div class="viewhead">
+          <h2>Model</h2>
+          <div class="seg" id="shown" hidden>
+            <label><input type="radio" name="shown" value="cpu">CPU's</label>
+            <label><input type="radio" name="shown" value="webgpu">WebGPU's</label>
+          </div>
+        </div>
+        <div class="view">
+          <canvas id="view"></canvas>
+          <div id="overlay" class="overlay"></div>
+          <div id="empty" class="empty">The reconstruction appears here.</div>
+        </div>
+        <div class="stepbar">
+          <button id="play" disabled>Play</button>
+          <input id="step" type="range" min="0" max="0" value="0" disabled aria-label="Step">
+          <span id="step-label">no run yet</span>
+        </div>
+        <p class="hint">Drag to turn, scroll or pinch to zoom. Points take the colour of an image that sees them; cameras
+          added in a step are orange.</p>
       </section>
     </div>
   </div>
+
+  <p class="credits">Sample images: 44 of ETH3D's <em>delivery_area</em> (Schöps et al., "A Multi-View Stereo Benchmark
+    with High-Resolution Images and Multi-Camera Videos", CVPR 2017; CC BY-NC-SA 4.0, non-commercial), undistorted
+    DSLR images scaled down and re-encoded as JPEG. Keypoints: ALIKED (BSD-3-Clause) through just-keypoints. Matches:
+    LightGlue (weights Apache-2.0) through just-matching. Pose estimation: poselib-gpu. Bundle adjustment: just-ba.</p>
 </main>
 
-<script type="module">
-const $ = (id) => document.getElementById(id);
-const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const status = (t) => { $('status').textContent = t; };
-
-// ---- the module -----------------------------------------------------------------------------------------
-let M = null;
-const jspi = typeof WebAssembly.Suspending === 'function';
-if (!jspi) {
-  $('nogpu').style.display = 'block';
-  $('nogpu').textContent = 'This browser cannot run the demo: it needs WebAssembly JavaScript Promise Integration, ' +
-    'which current Chrome and Edge have.';
-  status('');
-} else {
-  try {
-    const { default: createDemo } = await import('./jba_demo.js');
-    M = await createDemo();
-    const b = JSON.parse(await M.ccall('demo_backends', 'string', [], [], { async: true }));
-    for (const [sel, list] of [['poses', b.poses], ['ba', b.ba]])
-      for (const o of $(sel).options) o.disabled = o.value !== 'auto' && !list.includes(o.value);
-    if (!b.ba.includes('webgpu')) {
-      $('ba').value = 'cpu';
-      $('poses').value = 'cpu';
-      $('nogpu').style.display = 'block';
-      $('nogpu').textContent = 'No WebGPU device here: the demo runs on the CPU only.';
-    }
-    $('run').disabled = false;
-    status('Ready. The first run on WebGPU includes starting the device and compiling its kernels.');
-  } catch (e) {
-    status('Could not load the demo: ' + e);
-  }
-}
-
-for (const [id, fmt] of [['noise', (v) => `${v} px`], ['wrong', (v) => `${Math.round(v * 100)} %`], ['false', (v) => v]]) {
-  const update = () => { $(id + '-v').textContent = fmt($(id).value); };
-  $(id).addEventListener('input', update);
-  update();
-}
-
-// ---- the run --------------------------------------------------------------------------------------------
-let run = null;      // the last answer
-let step = 0;
-let playing = null;
-
-$('run').addEventListener('click', async () => {
-  const args = [$('scene').value, +$('seed').value, +$('noise').value, +$('wrong').value, +$('false').value,
-                $('poses').value, $('ba').value];
-  $('run').disabled = true;
-  stop();
-  status('Reconstructing…');
-  await new Promise((r) => setTimeout(r, 20));  // lets the status paint; also runs in a background tab
-  const t0 = performance.now();
-  try {
-    const out = await M.ccall('demo_run', 'string',
-      ['string', 'number', 'number', 'number', 'number', 'string', 'string'], args, { async: true });
-    const r = JSON.parse(out);
-    const wall = (performance.now() - t0) / 1000;
-    if (!r.steps) throw new Error(r.error || 'no answer');
-    run = r;
-    run.wall = wall;
-    fitView();
-    showTables();
-    $('step').max = String(Math.max(0, run.steps.length - 1));
-    $('step').disabled = $('play').disabled = run.steps.length < 2;
-    const why = {
-      'no pair is fit to start from': 'no pair kept 100 verified matches with enough parallax to start from. ' +
-        'Try fewer wrong matches or less noise.',
-    };
-    status(r.ok ? `Done in ${wall.toFixed(2)} s. Poses on ${r.poses_backend}, bundle adjustment on ${r.ba_backend}.`
-                : `Stopped: ${why[r.error] || r.error}`);
-    if (run.steps.length) play();
-    else { step = 0; $('step-label').textContent = 'no step'; draw(); }
-  } catch (e) {
-    status('Failed: ' + e.message);
-  }
-  $('run').disabled = false;
-});
-
-function row(name, value) { return `<tr><td>${name}</td><td>${value}</td></tr>`; }
-function f(v, d = 3) { return Number(v).toFixed(d); }
-function showTables() {
-  const m = run.metrics, t = run.time;
-  $('verdict').textContent = m.pass ? 'pass' : 'fail';
-  $('verdict').className = 'verdict ' + (m.pass ? 'pass' : 'fail');
-  $('verdict').title = m.why || '';
-  $('metrics').innerHTML =
-    row('Images registered', `${m.registered} / ${run.images}`) +
-    row('Points', m.points) +
-    row('Observations', m.observations) +
-    row('Mean reprojection error', `${f(m.mean_error_px)} px`) +
-    row('Rotation error, median', `${f(m.rot_median_deg, 4)}°`) +
-    row('Camera position error, median', `${f(m.centre_median_pct, 4)} %`) +
-    row('Point position error, median', `${f(m.point_median_pct, 4)} %`) +
-    (m.why ? row('Missed', m.why) : '');
-  $('times').innerHTML =
-    row('Verify every pair', `${f(t.verify)} s`) +
-    row('Build tracks', `${f(t.tracks)} s`) +
-    row('Register (PnP)', `${f(t.pnp)} s`) +
-    row('Triangulate', `${f(t.triangulate)} s`) +
-    row(`Bundle adjustment (${run.adjustments}×)`, `${f(t.adjust)} s`) +
-    row('Reconstruction', `${f(t.total)} s`);
-  $('pairs').innerHTML =
-    row('Pairs matched', run.pairs) +
-    row('Matches', run.matches) +
-    row('Pairs kept', `${run.pairs_kept} (${run.pairs_degenerate} without baseline)`) +
-    row('Unrelated pairs kept', run.false_pairs_kept) +
-    row('Kept matches that are right', `${f(100 * m.mask_precision, 1)} %`) +
-    row('Right matches kept', `${f(100 * m.mask_recall, 1)} %`) +
-    row('First pair', `${run.first_pair[0]}–${run.first_pair[1]}, ${f(run.first_angle_deg, 1)}°`);
-}
-
-function setStep(k) {
-  step = k;
-  $('step').value = String(k);
-  const s = run.steps[k];
-  const n = s.cameras.length;
-  $('step-label').textContent = `${s.stage}: ${n} images, ${s.points.length / 3} points`;
-  draw();
-}
-$('step').addEventListener('input', () => { stop(); setStep(+$('step').value); });
-function stop() { if (playing) { clearInterval(playing); playing = null; $('play').textContent = 'Play'; } }
-function play() {
-  stop();
-  setStep(0);
-  $('play').textContent = 'Pause';
-  playing = setInterval(() => {
-    if (step + 1 >= run.steps.length) { stop(); return; }
-    setStep(step + 1);
-  }, 700);
-}
-$('play').addEventListener('click', () => {
-  if (playing) stop();
-  else if (step + 1 >= run.steps.length) play();
-  else { $('play').textContent = 'Pause'; playing = setInterval(() => { if (step + 1 >= run.steps.length) stop(); else setStep(step + 1); }, 700); }
-});
-
-// ---- the 3D view: points and camera frusta, drawn on a 2D canvas -------------------------------------------
-// World axes are the scene's (y down); the view shows y up.
-const canvas = $('view');
-const ctx = canvas.getContext('2d');
-const view = { target: [0, 0, 0], yaw: 0, pitch: 0.3, dist: 10, size: 1 };
-const disp = (p) => [p[0], -p[1], p[2]];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const norm = (a) => { const n = Math.hypot(...a) || 1; return [a[0] / n, a[1] / n, a[2] / n]; };
-
-function fitView() {
-  const pts = run.steps.length ? run.steps[run.steps.length - 1].points : [];
-  const cams = run.truth_cameras;
-  const xs = [];
-  for (let i = 0; i < pts.length; i += 3) xs.push(disp([pts[i], pts[i + 1], pts[i + 2]]));
-  for (const c of cams) xs.push(disp(c));
-  const lo = [0, 1, 2].map((d) => Math.min(...xs.map((p) => p[d])));
-  const hi = [0, 1, 2].map((d) => Math.max(...xs.map((p) => p[d])));
-  view.target = lo.map((v, d) => 0.5 * (v + hi[d]));
-  view.size = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
-  view.dist = 0.85 * view.size;
-  // From behind the cameras, a little above.
-  let fwd = [0, 0, 0];
-  for (const c of cams) fwd = [fwd[0] + c[9], fwd[1] - c[10], fwd[2] + c[11]];
-  const o = norm([-fwd[0], -fwd[1], -fwd[2]]);
-  view.yaw = Math.atan2(o[0], o[2]);
-  view.pitch = Math.max(-1.2, Math.min(1.2, Math.asin(Math.max(-1, Math.min(1, o[1]))) + 0.45));
-}
-
-function camera() {
-  const cp = Math.cos(view.pitch);
-  const eye = [view.target[0] + view.dist * cp * Math.sin(view.yaw), view.target[1] + view.dist * Math.sin(view.pitch),
-               view.target[2] + view.dist * cp * Math.cos(view.yaw)];
-  const fw = norm(sub(view.target, eye));
-  const r = norm(cross(fw, [0, 1, 0]));
-  const u = cross(r, fw);
-  return { eye, fw, r, u };
-}
-
-function draw() {
-  const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-  }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  if (!run) return;
-  const cam = camera();
-  const F = 0.9 * Math.min(w, h);
-  const project = (p) => {
-    const d = sub(disp(p), cam.eye);
-    const z = dot(d, cam.fw);
-    if (z < 1e-3 * view.size) return null;
-    return [w / 2 + F * dot(d, cam.r) / z, h / 2 - F * dot(d, cam.u) / z, z];
-  };
-  const s = run.steps[step] || { points: [], tracks: [], cameras: [], added: [] };
-  // Points: those of the step before, then the ones this step added (by track, which stays the same).
-  const before = new Set(step > 0 ? run.steps[step - 1].tracks : []);
-  const pts = s.points;
-  const colPoint = css('--point'), colNew = css('--point-new');
-  for (let pass = 0; pass < 2; ++pass) {
-    ctx.fillStyle = pass ? colNew : colPoint;
-    ctx.globalAlpha = pass ? 0.9 : 0.55;
-    for (let i = 0; i < s.tracks.length; ++i) {
-      if (before.has(s.tracks[i]) === !!pass) continue;
-      const q = project([pts[3 * i], pts[3 * i + 1], pts[3 * i + 2]]);
-      if (q) ctx.fillRect(q[0] - 1, q[1] - 1, 2, 2);
-    }
-  }
-  ctx.globalAlpha = 1;
-
-  const frustum = (c, colour, width) => {
-    const C = [c[0], c[1], c[2]];
-    const x = [c[3], c[4], c[5]], y = [c[6], c[7], c[8]], z = [c[9], c[10], c[11]];
-    const k = 0.06 * view.size;
-    const corner = (sx, sy) => [0, 1, 2].map((d) => C[d] + k * (z[d] + 0.5 * sx * x[d] + 0.375 * sy * y[d]));
-    const q0 = project(C), qs = [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)].map(project);
-    if (!q0 || qs.some((q) => !q)) return;
-    ctx.strokeStyle = colour;
-    ctx.lineWidth = width;
-    ctx.beginPath();
-    for (const q of qs) { ctx.moveTo(q0[0], q0[1]); ctx.lineTo(q[0], q[1]); }
-    ctx.moveTo(qs[3][0], qs[3][1]);
-    for (const q of qs) ctx.lineTo(q[0], q[1]);
-    // The top edge marked, so up is visible.
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(qs[0][0], qs[0][1]);
-    ctx.lineTo(qs[1][0], qs[1][1]);
-    ctx.lineWidth = width + 1;
-    ctx.stroke();
-  };
-  const ghost = css('--ghost');
-  for (const c of run.truth_cameras) frustum(c, ghost, 1);
-  const added = new Set(s.added);
-  const colCam = css('--cam'), colCamNew = css('--cam-new');
-  for (const c of s.cameras) frustum(c.pose, added.has(c.image) ? colCamNew : colCam, added.has(c.image) ? 2 : 1.25);
-}
-
-// Drag to orbit, wheel or pinch to zoom.
-const pointers = new Map();
-let pinch = 0;
-canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); canvas.style.cursor = 'grabbing'; });
-canvas.addEventListener('pointerup', (e) => { pointers.delete(e.pointerId); pinch = 0; canvas.style.cursor = 'grab'; });
-canvas.addEventListener('pointercancel', (e) => { pointers.delete(e.pointerId); pinch = 0; });
-canvas.addEventListener('pointermove', (e) => {
-  if (!pointers.has(e.pointerId)) return;
-  const [px, py] = pointers.get(e.pointerId);
-  pointers.set(e.pointerId, [e.clientX, e.clientY]);
-  if (pointers.size === 2) {
-    const [a, b] = [...pointers.values()];
-    const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
-    if (pinch) view.dist *= pinch / d;
-    pinch = d;
-  } else {
-    view.yaw -= (e.clientX - px) * 0.008;
-    view.pitch = Math.max(-1.45, Math.min(1.45, view.pitch + (e.clientY - py) * 0.008));
-  }
-  draw();
-});
-canvas.addEventListener('wheel', (e) => { e.preventDefault(); view.dist *= Math.exp(e.deltaY * 0.001); draw(); }, { passive: false });
-window.addEventListener('resize', draw);
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
-</script>
+<script type="module" src="demo.js"></script>
 </body>
 </html>

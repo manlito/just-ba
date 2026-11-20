@@ -41,6 +41,10 @@
       <label for="jb-q" class="jb-sr">Search the documentation</label>
       <input id="jb-q" type="search" name="q" placeholder="Search" autocomplete="off" spellcheck="false">
     </form>
+    {%- if jb_demo %}
+    <a class="jb-toplink" href="{{ pathto('demo/index.html', 1) }}">Live demo</a>
+    <a class="jb-toplink" href="{{ pathto('demo/capture.html', 1) }}">Live capture</a>
+    {%- endif %}
     <a class="jb-toplink" href="https://pypi.org/project/just-ba/">PyPI</a>
   </div>
 </header>

@@ -1,0 +1,182 @@
+{
+ "scene": "ETH3D delivery_area, undistorted DSLR images (6208 x 4135) scaled to 1280 px, JPEG quality 80",
+ "focal": "pixels of the file, from ETH3D's dslr_calibration_undistorted (PINHOLE, fx and fy averaged)",
+ "images": [
+  {
+   "file": "dsc_0675.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0676.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0677.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0678.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0679.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0680.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0681.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0682.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0683.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0684.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0685.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0686.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0687.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0688.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0689.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0690.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0691.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0692.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0693.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0694.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0695.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0696.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0697.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0698.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0699.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0700.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0701.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0702.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0703.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0704.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0705.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0706.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0707.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0708.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0709.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0710.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0711.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0712.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0713.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0714.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0715.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0716.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0717.jpg",
+   "focal": 702.83
+  },
+  {
+   "file": "dsc_0718.jpg",
+   "focal": 702.83
+  }
+ ]
+}

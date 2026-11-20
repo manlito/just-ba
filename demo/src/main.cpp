@@ -32,7 +32,7 @@
 //     capture must have one intrinsics block.
 //
 //   common options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]
-//                   [--refine none|focal|focal+distortion] [--export dir] [-v]
+//                   [--refine none|focal|focal+distortion] [--register-from-pairs] [--export dir] [-v]
 //     --refine: the intrinsics the adjustments refine. Default: focal+distortion with
 //     --thresholds colmap, as COLMAP's mapper; none otherwise.
 #include <algorithm>
@@ -70,7 +70,7 @@ int usage() {
                "                    [--thresholds colmap|demo]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
-               "         [--refine none|focal|focal+distortion] [--export dir] [-v]\n");
+               "         [--refine none|focal|focal+distortion] [--register-from-pairs] [--export dir] [-v]\n");
   return 2;
 }
 
@@ -105,6 +105,7 @@ bool common_option(const std::vector<std::string>& args, std::size_t& i, Common&
   const bool has_value = i + 1 < args.size();
   if (a == "-v") c.verbose = true;
   else if (a == "--threads" && has_value) c.mapper.threads = std::atoi(args[++i].c_str());
+  else if (a == "--register-from-pairs") c.mapper.register_from_pairs = true;
   else if (a == "--export" && has_value) c.export_dir = args[++i];
   else if (a == "--poses" && has_value) *bad = !pose_backend_from_name(args[++i], &c.mapper.pose_backend);
   else if (a == "--refine" && has_value) *bad = !refine_from_name(args[++i], &c.refine);

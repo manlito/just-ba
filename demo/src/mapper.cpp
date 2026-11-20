@@ -4,6 +4,7 @@
 #include "mapper.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -909,6 +910,91 @@ double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o) {
 
 }  // namespace
 
+namespace {
+
+// D158: the unregistered image with the most inliers to a registered image in a kept
+// pair (at least min_register_pair_inliers), placed from that pair: the pair's relative
+// rotation, and a centre along its translation direction at the median distance of the
+// registered cameras to their nearest neighbour (the pair fixes no scale; for a pair
+// without a baseline the direction is noise, and the step small next to the scene). Its
+// pose is set and it is marked registered; -1 when there is no such image. Each image is
+// tried once a model (`tried`), and not one whose PnP was rejected (`failed_with` >= 0).
+int register_from_pair(const Capture& c, const std::vector<jpo_pose_result>& results, const std::vector<char>& kept,
+                       const MapperOptions& o, Map& m, const std::vector<int>& failed_with, std::vector<char>& tried) {
+  int best_pair = -1;
+  std::uint32_t best_n = 0;
+  for (std::size_t q = 0; q < c.pairs.size(); ++q) {
+    if (q >= kept.size() || q >= results.size() || !kept[q]) continue;
+    const jpo_pose_result& r = results[q];
+    if (r.status != JPO_OK && r.status != JPO_DEGENERATE) continue;
+    const auto a = static_cast<std::size_t>(c.pairs[q].a), b = static_cast<std::size_t>(c.pairs[q].b);
+    if (static_cast<bool>(m.registered[a]) == static_cast<bool>(m.registered[b])) continue;
+    const std::size_t other = m.registered[a] ? b : a;
+    // Only an image no PnP was tried on: one whose PnP was rejected saw enough points, and
+    // the rejection stands.
+    if (tried[other] || (other < failed_with.size() && failed_with[other] >= 0)) continue;
+    if (r.n_inliers < o.min_register_pair_inliers || r.n_inliers <= best_n) continue;
+    best_pair = static_cast<int>(q);
+    best_n = r.n_inliers;
+  }
+  if (best_pair < 0) return -1;
+  const Pair& p = c.pairs[static_cast<std::size_t>(best_pair)];
+  const bool new_is_b = m.registered[static_cast<std::size_t>(p.a)] != 0;
+  const auto known = static_cast<std::size_t>(new_is_b ? p.a : p.b);
+  const auto image = static_cast<std::size_t>(new_is_b ? p.b : p.a);
+  tried[image] = 1;
+
+  // The map's spacing: the median distance of a registered camera to its nearest one.
+  std::vector<std::array<double, 3>> centres;
+  for (std::size_t i = 0; i < m.n_images(); ++i) {
+    if (!m.registered[i]) continue;
+    std::array<double, 3> C;
+    camera_centre(&m.cams.poses[7 * i], C.data());
+    centres.push_back(C);
+  }
+  std::vector<double> nearest;
+  for (std::size_t i = 0; i < centres.size(); ++i) {
+    double d = std::numeric_limits<double>::infinity();
+    for (std::size_t j = 0; j < centres.size(); ++j)
+      if (j != i)
+        d = std::min(d, std::hypot(centres[i][0] - centres[j][0], centres[i][1] - centres[j][1], centres[i][2] - centres[j][2]));
+    if (std::isfinite(d)) nearest.push_back(d);
+  }
+  double step = 0.0;
+  if (!nearest.empty()) {
+    std::nth_element(nearest.begin(), nearest.begin() + static_cast<std::ptrdiff_t>(nearest.size() / 2), nearest.end());
+    step = nearest[nearest.size() / 2];
+  }
+
+  // The pair's pose takes a's camera to b's: X_b = R X_a + t, |t| = 1.
+  const double* rel = results[static_cast<std::size_t>(best_pair)].pose;
+  double R[9], Rk[9], Rn[9], tn[3];
+  quat_to_rotmat(rel, R);
+  const double* pk = &m.cams.poses[7 * known];
+  quat_to_rotmat(pk, Rk);
+  const double* tk = pk + 4;
+  if (new_is_b) {
+    // X_new = R (Rk X + tk) + s t
+    mat3_mul(R, Rk, Rn);
+    for (int r = 0; r < 3; ++r) tn[r] = R[3 * r] * tk[0] + R[3 * r + 1] * tk[1] + R[3 * r + 2] * tk[2] + step * rel[4 + r];
+  } else {
+    // X_known = R X_new + s t, so X_new = R' (Rk X + tk - s t)
+    double Rt[9];
+    transpose3(R, Rt);
+    mat3_mul(Rt, Rk, Rn);
+    double v[3];
+    for (int r = 0; r < 3; ++r) v[r] = tk[r] - step * rel[4 + r];
+    for (int r = 0; r < 3; ++r) tn[r] = Rt[3 * r] * v[0] + Rt[3 * r + 1] * v[1] + Rt[3 * r + 2] * v[2];
+  }
+  double* pn = &m.cams.poses[7 * image];
+  rotmat_to_quat(Rn, pn);
+  std::copy(tn, tn + 3, pn + 4);
+  m.registered[image] = 1;
+  return static_cast<int>(image);
+}
+
+}  // namespace
+
 Reconstruction Mapper::run(const Capture& c, const StepCallback& on_step, const ProgressCallback& on_progress) {
   return run_impl(c, nullptr, on_step, on_progress);
 }
@@ -1282,6 +1368,7 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
     // -- 4. Register the remaining images. Those that see the most triangulated points go
     // first; up to pnp_batch are resected in one call, all against the same map.
     std::vector<int> failed_with(n_img, -1);  // points an image saw when its resection last failed
+    std::vector<char> from_pair_tried(n_img, 0);  // register_from_pairs: each image once a model
     for (;;) {
       timed_points(true);
       std::vector<std::pair<int, int>> seen;  // (points seen, image)
@@ -1291,7 +1378,19 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
         // An image that failed is tried again only once it sees more points than it did then.
         if (n >= static_cast<int>(o.min_pnp_inliers) && n > failed_with[i]) seen.emplace_back(n, static_cast<int>(i));
       }
-      if (seen.empty()) break;
+      if (seen.empty()) {
+        // D158: no image sees enough of the map; one that matches a registered image
+        // well is placed from that pair.
+        const int image =
+            o.register_from_pairs ? register_from_pair(c, run.pair_results, run.pair_kept, o, m, failed_with, from_pair_tried)
+                                  : -1;
+        if (image < 0) break;
+        ++run.pair_registrations;
+        timed_points(false);
+        last = timed_adjust(o.local_iterations);
+        if (!step(steps, "register", {image})) return false;
+        continue;
+      }
       std::sort(seen.begin(), seen.end(),
                 [](const auto& x, const auto& y) { return x.first != y.first ? x.first > y.first : x.second < y.second; });
       // Only images that see at least half as many points as the best one: a weakly
@@ -1735,6 +1834,7 @@ struct Session::State {
   bool place(SessionStep& st) {
     const MapperOptions& opt = o();
     const std::size_t n_img = m.n_images();
+    std::vector<char> from_pair_tried(n_img, 0);  // register_from_pairs (D158): each image once a call
     for (;;) {
       update_points(m, opt, true);
       std::vector<std::pair<int, int>> seen;  // (points seen, image)
@@ -1743,7 +1843,17 @@ struct Session::State {
         const int n = points_seen_in(m, i);
         if (n >= static_cast<int>(opt.min_pnp_inliers) && n > failed_with[i]) seen.emplace_back(n, static_cast<int>(i));
       }
-      if (seen.empty()) return true;
+      if (seen.empty()) {
+        // D158, as run's step 4: an image no PnP can place, from its best pair to the map.
+        const int image =
+            opt.register_from_pairs ? register_from_pair(c, pair_results, pair_kept, opt, m, failed_with, from_pair_tried)
+                                    : -1;
+        if (image < 0) return true;
+        update_points(m, opt, false);
+        adjust_window({image}, st);
+        st.placed.push_back(image);
+        continue;
+      }
       std::sort(seen.begin(), seen.end(),
                 [](const auto& x, const auto& y) { return x.first != y.first ? x.first > y.first : x.second < y.second; });
       std::size_t n_cand = 1;

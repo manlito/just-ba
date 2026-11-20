@@ -19,7 +19,12 @@ not, and a default build does not look for it.
 | `tools/colmap_compare.sh` | One scene from its images: COLMAP, then the capture file, then `jba_demo run`. |
 | `tools/colmap_table.py` | The comparison over several capture files, as Markdown tables. |
 | `tools/colmap_fixture.py`, `tools/test_colmap_roundtrip.py` | The COLMAP path tested without COLMAP. |
-| `web/demo_wasm.cpp`, `web/index.html` | The live demo: the WebAssembly entry points and the page. |
+| `web/demo_wasm.cpp`, `web/index.html`, `web/demo.js` | The live demo (D156): the WebAssembly entry points, the page and its script. |
+| `web/samples/` | The live demo's sample set: 44 images of ETH3D's *delivery_area* and `samples.json` (their focal lengths). |
+| `tools/fetch_match_web.sh` | The live demo's keypoints and matcher modules, from just-keypoints' and just-matching's sites. |
+| `web/capture.html`, `web/capture.js`, `web/capture_worker.js`, `web/weights_worker.js` | The live capture (D157): the page, its camera loop, the mapper session in a worker, FlexGlue's weights from the visitor's checkpoint. |
+| `web/gates.js`, `web/gates.test.mjs` | The live capture's keep rules, ported from Like Recon, and their tests (`node --test demo/web/gates.test.mjs`). |
+| `web/view.js` | The live capture's 3D view. |
 
 ## Build
 
@@ -203,8 +208,23 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 
 ## The live demo
 
+Structure from motion on real photos in the browser (D156). The page loads the sample
+set or the visitor's own images, finds ALIKED keypoints with just-keypoints' module and
+matches every pair with LightGlue through just-matching's (both on WebGPU), then calls
+`demo_reconstruct` with the keypoints and matches: the mapper with COLMAP's thresholds,
+SIMPLE_RADIAL cameras whose focal length and distortion it refines, on the CPU or
+WebGPU. By default it runs once on each and shows the mapper's timings side by side;
+keypoints and matches are kept, so reconstructing again costs only the reconstruction.
+URL parameters: `run=1` runs once the sample set is loaded, `n=k` keeps its first k
+images, `backends=cpu|webgpu|both`, `focal=guess` drops the samples' focal lengths (as
+for the visitor's own photos: searched for).
+
 Emscripten 7.0.0 and emdawnwebgpu from Dawn's release (D122). Emscripten needs Python
 3.10 or later (`EMSDK_PYTHON` if the first `python3` on the path is older).
+
+```bash
+demo/tools/fetch_match_web.sh
+```
 
 ```bash
 emcmake cmake -S . -B build/demo-wasm -G Ninja -DJBA_BUILD_DEMO=ON -DJBA_WITH_WEBGPU=ON \
@@ -212,12 +232,61 @@ emcmake cmake -S . -B build/demo-wasm -G Ninja -DJBA_BUILD_DEMO=ON -DJBA_WITH_WE
 cmake --build build/demo-wasm
 ```
 
-`build/demo-wasm/demo/web` then holds `index.html`, `jba_demo.js` and
-`jba_demo.wasm`, ready for any static server. The documentation site includes them
-when built with `JBA_DEMO_WEB=build/demo-wasm/demo/web` (`docs-site/README.md`).
+The first fetches the keypoints and matcher modules and LightGlue's float16 weights
+(Apache-2.0, 24 MB) into `third_party/match-web`, checked against pinned hashes.
+`build/demo-wasm/demo/web` then holds the page, `demo.js`, `jba_demo.js`,
+`jba_demo.wasm`, `jkp/`, `jmt/` and `samples/`, ready for any static server
+(`python3 -m http.server -d build/demo-wasm/demo/web`). The documentation site includes
+the folder when built with `JBA_DEMO_WEB=build/demo-wasm/demo/web`
+(`docs-site/README.md`).
 
 The `docs` workflow builds the same way, from poselib-gpu's `main`, and deploys the
 site with the demo on every push to main (D148).
+
+The sample images are ETH3D's (Schöps et al., CVPR 2017), CC BY-NC-SA 4.0
+(non-commercial): the undistorted DSLR images of *delivery_area*, scaled to 1280 px and
+re-encoded as JPEG; `samples.json` gives each one's focal length from ETH3D's calibration,
+scaled the same way.
+
+## The live capture
+
+The visitor's camera, captured and reconstructed as it goes (D157): `web/capture.html`,
+in the same folder as the live demo. Per camera frame, on the page's thread: ALIKED
+keypoints (just-keypoints), the matcher's features (FlexGlue's dense features, or
+LightGlue's of the keypoints), the matches to the last keyframe at the live depth
+(FlexGlue's layer-0 head), checked against a relative pose on the CPU
+(`demo_pair_inliers`), and Like Recon's keep rules (`web/gates.js`: overlap, support,
+redundancy, confident keypoints, blur against a decaying sharp level, the best frame of
+the band, re-localization against held keyframes). A keyframe is matched to the three
+before it at the online depth (FlexGlue at 3 layers, the strongest 1,024 matches) and
+added to a `Session` in a worker (`demo_session_new`, `demo_session_add`), whose map the
+page draws. With FlexGlue, a keyframe the map can't place is matched to four more chosen
+by appearance (the shortlist) and tried again (`demo_session_retry`). Finish matches the
+shortlist over every keyframe (LightGlue: each with the five before it) and runs
+`demo_session_finish` (`Session::finish`, `Mapper::run_from` from the live map), with
+progress and Stop; the points are coloured from the keyframes and can be downloaded as
+PLY. **Reconstruct again** matches the keyframes again with the matcher chosen then
+(FlexGlue: its shortlist and the three before each; LightGlue: the five before each) and
+runs the mapper from scratch (`demo_capture_reconstruct`), without the camera or the live
+map: a capture made with LightGlue on a phone can be reconstructed with FlexGlue. The session takes Like Recon's settings: a window of 8, a new piece after 10
+keyframes in a row not placed, 15 verified matches for an online pair, the map starting
+from the widest pair it can. Keyframes after a turn, which see too few of the map's points
+for PnP, are placed from their best pair to the map (`register_from_pairs`, D158; also
+`jba_demo --register-from-pairs`).
+
+FlexGlue's weights come from the visitor: `flexglue.pth` from FlexGlue's release, checked
+against its SHA-256, converted to float16 by just-matching's module (`jmt.convert`) in a
+worker that ends afterwards, and kept in the origin's private file system
+(`flexglue-fp16.jmtw`, 284 MB). Phones default to LightGlue, 1,024 keypoints and a
+960 px working image. URL parameters: `matcher=flexglue|lightglue`, `keypoints=1024|2048`,
+`side=<px>`, `debug=1`, and for testing without a camera `video=<url>` (a recorded video
+instead, `rate=` its playback rate).
+
+Tried in Chrome 156 on an M5 Pro with house-04's 41 keyframes made into a video
+(ffmpeg's motion interpolation, 12 frames a second, played at half speed): FlexGlue kept
+27 keyframes, 26 placed live, and the finish registered all 27 (4,040 points, 1.32 px);
+LightGlue kept 23 and registered 12. FlexGlue's live frames took 150–850 ms (the
+interpolated frames are not a camera's; try the page with a real one).
 
 ## What it checks
 
@@ -229,7 +298,6 @@ thresholds follow the noise (`thresholds_for_noise`): poselib-gpu's defaults up 
 half a pixel, larger above.
 
 Measured on 2026-11-16 on the owner's M5 Pro: the three scenes pass at seeds 0 to 8
-natively, on the CPU and with Metal for both libraries, and at seed 0 in the browser
-pane (Chrome) on WebGPU and on the CPU. With the default backends they pass up to 2 px
+natively, on the CPU and with Metal for both libraries. With the default backends they pass up to 2 px
 of noise with half the matches wrong and 30 unrelated pairs, except the orbit at half the matches
 wrong, where no pair keeps the 100 inliers the first-pair rule asks for.
