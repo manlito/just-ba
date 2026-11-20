@@ -151,6 +151,42 @@ def test_evaluate_reports_costs():
     assert 0 < r.reprojection_cost < 0.5 * np.sum((r.reprojection_error) ** 2) + 1e-9
 
 
+def test_intrinsics_prior():
+    # D161: fixed, fully free or regularized per group; the target is written back.
+    start, _, _ = small_problem(seed=7)
+    perturb(start, seed=8)
+    k = start.intrinsics.copy()
+    k[0, :2] *= 1.04
+    start.intrinsics = k
+    start.intrinsics_free = [1]  # focal only
+    o = jba.SolverOptions()
+    o.max_iterations = 100
+
+    free = start.copy()
+    jba.solve(free, o)
+    assert free.intrinsics_prior.size == 0
+
+    reg = start.copy()
+    jba.set_intrinsics_prior(reg, 0.002)  # focal within about 0.2 %
+    assert np.array_equal(reg.intrinsics_prior, start.intrinsics)
+    assert np.isinf(reg.intrinsics_prior_sigma[0, 2:]).all()
+    reg.intrinsics_prior = []  # empty target: the start, written back by solve
+    s = jba.solve(reg, o)
+    assert np.array_equal(reg.intrinsics_prior, start.intrinsics)
+    f0, f_free, f_reg = start.intrinsics[0, 0], free.intrinsics[0, 0], reg.intrinsics[0, 0]
+    assert abs(f_reg - f0) < abs(f_free - f0)
+    assert np.array_equal(reg.intrinsics[0, 2:], start.intrinsics[0, 2:])  # principal point stays fixed
+
+    r = jba.evaluate(reg, o)
+    assert r.intrinsics_prior_cost > 0
+    assert r.intrinsics_prior_param[0] in (0, 1) and r.intrinsics_prior_norm[0] > 0
+    assert abs(s.final_cost_by_type["reprojection"] - (r.reprojection_cost + r.intrinsics_prior_cost)) < 1e-9 * s.final_cost
+
+    bad = start.copy()
+    bad.intrinsics_prior_sigma = [1.0, 1.0, 0.0, 1.0]
+    assert bad.validate() != ""
+
+
 def test_conventions():
     # An ARKit camera at the origin with the identity transform looks down -z with
     # y up: in library axes that is a rotation by pi about x.

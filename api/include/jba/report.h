@@ -20,6 +20,15 @@ struct ResidualReport {
   double gravity_cost = 0;
   double line_cost = 0;
   double depth_cost = 0;  // depth readings and the priors on free corrections
+  // Priors on free intrinsics (D161). Kept apart from reprojection_cost, which stays
+  // the pixels' own; the solver's reprojection entry (SolverSummary::*_cost_by_type)
+  // is the sum of the two.
+  double intrinsics_prior_cost = 0;
+  // Per intrinsics block with a prior: the largest |k - target| / sigma over its
+  // free parameters, and that parameter's index (COLMAP order); 0 and -1 for blocks
+  // without one. Empty without intrinsics_prior_sigma.
+  std::vector<double> intrinsics_prior_norm;
+  std::vector<int> intrinsics_prior_param;
 
   // Per observation: reprojection error in pixels (not divided by sigma), and
   // whether the point is in front of the camera.

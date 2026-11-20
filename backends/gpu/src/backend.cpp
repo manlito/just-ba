@@ -783,8 +783,7 @@ struct GpuBackend::Impl {
     op.y = vy;
     op.iter = iter;
     op.mode = 1;
-    run(Kernel::SchurPoints, npts, op);
-    run(Kernel::FactorsTimes, nfac, op);
+    run(Kernel::SchurPoints, npts + nfac, op);  // the factors' J x too
     gather(1, vx, vy, iter);
   }
 
