@@ -319,7 +319,7 @@ function clearPicker() {
 async function keep(c, why, shoot) {
   c.kept = true;
   const kf = { index: S.keyframes.length, seq: S.keyframes.length + 1, xy: c.xy, desc: c.desc, feat: c.feat, w: c.w,
-               h: c.h, shoot, why, placed: false, jpeg: null };
+               h: c.h, shoot, why, placed: false, jpeg: null, keptAt: performance.now() };
   S.keyframes.push(kf);
   S.keyframesModel = S.kpModel;
   // A small JPEG of it, for its thumbnail, the points' colours and the finish's features.
@@ -363,29 +363,38 @@ function freeFeatures() {
 // One piece of the map's work: one pair matched, or a keyframe handed to the worker (which
 // runs on its own) or its answer taken in. While the worker places a keyframe, the next
 // keyframes' pairs are matched; they go to the worker in order, each after the one before
-// it is placed or tried again. Returns false when there is nothing to do now.
-async function onlineStep() {
+// it is placed or tried again. Returns 'gpu' after work on the GPU (a pair matched, the
+// appearance shortlist), 'cpu' after the rest (a keyframe sent, an answer taken in), and
+// false when there is nothing to do now, or when the next piece needs the GPU and `gpu`
+// is false.
+async function onlineStep(gpu = true) {
   const head = S.jobs[0];
   if (!head) return false;
   if (head.failed) {
     S.jobs.shift();
     notice('The map could not take a keyframe: ' + head.failed.message);
-    return true;
+    return 'cpu';
   }
-  if (head.answer) return takeAnswer(head);
+  if (head.answer) {
+    if (!gpu && wantsAppearance(head)) return false;
+    return takeAnswer(head);
+  }
   for (const job of S.jobs) {
     if (job.stage !== 'match' && job.stage !== 'appearance') continue;
     const todo = job.stage === 'match' ? job.partners : job.more;
     const p = todo.find((q) => !job.done.has(q.index));
     if (p) {
-      job.done.add(p.index);
-      if (p.feat && job.kf.feat) {
-        const m = await S.matcher.match(p.feat, p.xy, job.kf.feat, job.kf.xy, ONLINE[S.matcherKind]);
-        const matches = G.strongest(m.matches, m.scores, MATCHES_PER_PAIR);
-        (job.stage === 'match' ? job.pairs : job.morePairs).push({ earlier: p.index, matches });
-        S.links.add(`${p.index}-${job.kf.index}`);
+      if (!(p.feat && job.kf.feat)) {
+        job.done.add(p.index);
+        return 'cpu';
       }
-      return true;
+      if (!gpu) return false;
+      job.done.add(p.index);
+      const m = await S.matcher.match(p.feat, p.xy, job.kf.feat, job.kf.xy, ONLINE[S.matcherKind]);
+      const matches = G.strongest(m.matches, m.scores, MATCHES_PER_PAIR);
+      (job.stage === 'match' ? job.pairs : job.morePairs).push({ earlier: p.index, matches });
+      S.links.add(`${p.index}-${job.kf.index}`);
+      return 'gpu';
     }
     if (job !== head) continue;  // matched, waiting for its turn
     job.done = new Set();
@@ -396,30 +405,38 @@ async function onlineStep() {
       : call('retry', { pairs: job.morePairs, newPiece: job.kf.shoot });
     wait.then((r) => { job.answer = r; job.mapMs = performance.now() - t0; }, (e) => { job.failed = e; });
     job.stage = job.stage === 'match' ? 'added' : 'retried';
-    return true;
+    return 'cpu';
   }
   return false;  // the worker is at it, and every pair is matched
 }
 
+// A keyframe the map didn't place, to be tried again with partners chosen by appearance
+// (FlexGlue's shortlist, on the GPU).
+function wantsAppearance(job) {
+  const { step, map } = job.answer;
+  return job.stage === 'added' && !step.placed?.includes(job.kf.index) && S.matcherKind === 'flexglue' && map.started;
+}
+
 async function takeAnswer(job) {
   const { step, map } = job.answer;
+  const again = wantsAppearance(job);
   job.answer = null;
   if (DEBUG) {
     const pairs = job.stage === 'added' ? job.pairs : job.morePairs;
-    console.log(`keyframe ${job.kf.index} ${job.stage} in ${job.mapMs.toFixed(0)} ms: ${step.ok ? '' : step.error + ' '}` +
-      `placed [${step.placed}], pairs ${pairs.map((p) => `${p.earlier}:${p.matches.length / 2}`).join(' ')}`);
+    console.log(`keyframe ${job.kf.index} ${job.stage} in ${job.mapMs.toFixed(0)} ms ` +
+      `(${(performance.now() - job.kf.keptAt).toFixed(0)} ms after it was kept, ${S.jobs.length - 1} more queued): ` +
+      `${step.ok ? '' : step.error + ' '}placed [${step.placed}], pairs ${pairs.map((p) => `${p.earlier}:${p.matches.length / 2}`).join(' ')}`);
   }
   takeMap(step, map, job.mapMs);
-  const placed = step.placed?.includes(job.kf.index);
-  if (job.stage === 'added' && !placed && S.matcherKind === 'flexglue' && map.started) {
+  if (again) {
     job.more = await appearancePartners(job);
     job.morePairs = [];
     job.stage = 'appearance';
-    return true;
+    return 'gpu';
   }
   S.jobs.shift();
   freeFeatures();
-  return true;
+  return 'cpu';
 }
 
 // Keyframes chosen by appearance over the session for one the map couldn't place: among
@@ -461,8 +478,13 @@ function takeMap(step, map, ms) {
 
 // The map's share of each camera frame: more when it falls behind. The desktop app matches
 // the map's pairs on a thread of its own; here they share the GPU module with the camera.
-// On a phone a map pair alone takes ~200 ms: one a frame at most, while the camera moves.
+// Only the GPU's work counts against it: sending a keyframe to the worker and taking its
+// answer in go through every frame. On a phone a map pair alone takes ~200 ms: one a frame
+// while the map keeps up, two once more than MAP_BEHIND_JOBS keyframes wait. A keyframe
+// needs three pairs and the camera keeps one every 2-3 frames; at one pair a frame the
+// queue grew all through a capture (11 keyframes, 15 s behind on the test video).
 const MAP_BUDGET_MS = phone ? 0 : 120, MAP_BEHIND_MS = phone ? 0 : 400;
+const MAP_PAIRS = 1, MAP_BEHIND_PAIRS = phone ? 2 : 1, MAP_BEHIND_JOBS = 2;
 
 async function loop() {
   const v = $('video');
@@ -476,9 +498,16 @@ async function loop() {
       const tLoop = performance.now();
       if (fresh) await liveStep();
       const t0 = performance.now();
-      const budget = !fresh ? Math.max(MAP_BEHIND_MS, 400) : S.jobs.length > 2 ? MAP_BEHIND_MS : MAP_BUDGET_MS;
-      // At least one piece of the map's work a frame, then more while the budget lasts.
-      if (await onlineStep()) while (performance.now() - t0 < budget && (await onlineStep()));
+      const behind = S.jobs.length > MAP_BEHIND_JOBS;
+      const budget = !fresh ? Math.max(MAP_BEHIND_MS, 400) : behind ? MAP_BEHIND_MS : MAP_BUDGET_MS;
+      const least = behind ? MAP_BEHIND_PAIRS : MAP_PAIRS;
+      // At least `least` pairs a frame, then more while the budget lasts; the CPU's pieces
+      // whenever they come.
+      for (let pairs = 0; ;) {
+        const did = await onlineStep(pairs < least || performance.now() - t0 < budget);
+        if (!did) break;
+        if (did === 'gpu') pairs++;
+      }
       if (!fresh && !S.jobs.length) await new Promise((r) => setTimeout(r, 100));
       if (fresh) S.stats.loopMs = S.stats.frames > 1 ? 0.8 * S.stats.loopMs + 0.2 * (performance.now() - tLoop) : performance.now() - tLoop;
     } catch (e) {
