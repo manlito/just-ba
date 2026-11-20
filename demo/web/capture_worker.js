@@ -9,7 +9,7 @@
 //   new { width, height, focal, focalUnknown, window, restartAfter, minPairInliers, poses, ba }
 //   add { xy: Float32Array, pairs: [{ earlier, matches: Int32Array }], deferSplit }  -> step + map
 //   retry { pairs, newPiece }              -> step + map
-//   finish { pairs: [{ a, b, matches }] }  -> result with points, tracks, colourObs
+//   finish { pairs: [{ a, b, matches }], fromScratch }  -> result with points, tracks, colourObs
 //   reconstruct { width, height, focal, xy: [Float32Array per keyframe], pairs, poses }
 //                                          -> the same, from scratch (Reconstruct again)
 //   free { }
@@ -117,13 +117,13 @@ const ops = {
       a.free();
     }
   },
-  async finish({ pairs }) {
+  async finish({ pairs, fromScratch }) {
     cancel = false;
     const a = arena();
     try {
       const pk = packPairs(pairs, true);
-      const r = JSON.parse(await M.ccall('demo_session_finish', 'string', ['number', 'number', 'number', 'number'],
-        [pairs.length, a.put(pk.images), a.put(pk.begin), a.put(pk.matches)], { async: true }));
+      const r = JSON.parse(await M.ccall('demo_session_finish', 'string', ['number', 'number', 'number', 'number', 'number'],
+        [pairs.length, a.put(pk.images), a.put(pk.begin), a.put(pk.matches), fromScratch ? 1 : 0], { async: true }));
       return r.ok || r.cancelled ? { ...r, ...arrays(r.points, true) } : r;
     } finally {
       a.free();
@@ -149,6 +149,10 @@ const ops = {
     } finally {
       a.free();
     }
+  },
+  // The module's memory, bytes (a WebAssembly module's never shrinks).
+  async mem() {
+    return { bytes: M ? M.HEAPU8.length : 0 };
   },
   async free() {
     if (M) M._demo_session_free();

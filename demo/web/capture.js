@@ -46,6 +46,8 @@ const APPEARANCE_PARTNERS = 4;   // more keyframes for one the map can't place (
 const FINISH_SHORTLIST = 10;     // pairs per keyframe for the finish (FlexGlue's shortlist)
 const FINISH_SEQUENTIAL = 5;     // LightGlue's finish: each keyframe with the five before it
 const MIN_FINISH_MATCHES = 15;
+// FlexGlue's finish from the live map placing fewer than this share of the keyframes is run again from scratch.
+const FINISH_FROM_SCRATCH = 0.8;
 
 // A phone: LightGlue by default (FlexGlue's backbone is ~1 GB of GPU memory and takes ~2 s a
 // frame on a Pixel 9a), a 640 px working image and 1,024 keypoints (ALIKED 140 ms there, a
@@ -578,13 +580,36 @@ async function finish() {
     if (n < 2) throw new Error('fewer than two keyframes');
     // The live features go: the pairs are matched with features made afresh (matchKeyframes).
     for (const k of S.keyframes) { k.feat?.destroy(); k.feat = null; }
-    const pairs = await matchKeyframes(S.matcherKind, S.links);
-    setProgress(null);
-    setStatus('Finishing from the live map…');
-    const r = await call('finish', { pairs });
-    setProgress(null);
-    if (!r.ok && !r.cancelled) throw new Error(r.error);
-    if (r.cancelled) throw new Error('stopped');
+    let r;
+    if (S.matcherKind === 'lightglue') {
+      // LightGlue: every pair matched again at full depth and the mapper from scratch. The live
+      // map's pairs (3 layers) hold the result back: on the test video the same 39 keyframes
+      // gave 17 registered from 3-layer pairs and 36 from full-depth ones.
+      const pairs = await matchKeyframes('lightglue', new Set());
+      releaseModules();
+      setStatus('Reconstructing…');
+      r = await call('reconstruct', reconstructArgs(pairs));
+      setProgress(null);
+      if (r.cancelled) throw new Error('stopped');
+      if (!r.ok) throw new Error(r.error);
+    } else {
+      const pairs = await matchKeyframes(S.matcherKind, S.links);
+      releaseModules();
+      setStatus('Finishing from the live map…');
+      r = await call('finish', { pairs });
+      setProgress(null);
+      if (!r.ok && !r.cancelled) throw new Error(r.error);
+      if (r.cancelled) throw new Error('stopped');
+      // A live map in pieces can hold the finish back: under FINISH_FROM_SCRATCH of the
+      // keyframes placed, again from scratch with the same pairs, the better kept.
+      if (r.registered < FINISH_FROM_SCRATCH * r.images) {
+        setStatus(`The live map placed ${r.registered} of ${r.images}: reconstructing from scratch…`);
+        const again = await call('finish', { pairs, fromScratch: true });
+        setProgress(null);
+        if (again.cancelled) throw new Error('stopped');
+        if (again.ok && again.registered > r.registered) r = again;
+      }
+    }
     S.result = r;
     await showResult(r);
     setStatus(`Done: ${r.registered} of ${r.images} keyframes, ${int(r.points.length / 3)} points, ${fmt(r.mean_error_px)} px, in ${fmt(r.seconds, 1)} s.`);
@@ -631,6 +656,26 @@ async function showResult(r) {
   }
   $('empty').hidden = r.cameras.length > 0;
   view.set({ cameras: r.cameras, points: r.points, colours, added: new Set() }, { refit: true });
+}
+
+// The worker's reconstruct op for the keyframes and `pairs`: from scratch, the focal length searched for.
+function reconstructArgs(pairs) {
+  const { w, h } = S.keyframes[0];
+  return { width: w, height: h, focal: 1.2 * Math.max(w, h), xy: S.keyframes.map((k) => k.xy), pairs,
+           poses: S.backends.poses.includes('webgpu') ? 'webgpu' : 'cpu' };
+}
+
+// The keypoint detector and the matcher let go before the mapper's long adjustments: phones
+// share their memory with the GPU, and a Pixel 9a under memory pressure had its low-memory
+// killer take the page in the middle of a finish (the modules' own heaps were under 200 MB).
+// ensureModules makes them again for Reconstruct again or a new capture.
+function releaseModules() {
+  S.extractor?.destroy?.();
+  S.extractor = null;
+  S.extractorK = 0;
+  S.matcher?.destroy?.();
+  S.matcher = null;
+  S.matcherKind = null;
 }
 
 // The pairs of keyframes for the finish and Reconstruct again, matched with `kind`, leaving
@@ -700,15 +745,12 @@ async function reconstructAgain() {
   await keepAwake(true);
   try {
     await ensureModules();
-    const kind = S.matcherKind, kfs = S.keyframes;
+    const kind = S.matcherKind;
     const pairs = await matchKeyframes(kind, new Set());
+    releaseModules();
     setProgress(null);
     setStatus('Reconstructing…');
-    const { w, h } = kfs[0];
-    const r = await call('reconstruct', {
-      width: w, height: h, focal: 1.2 * Math.max(w, h), xy: kfs.map((k) => k.xy), pairs,
-      poses: S.backends.poses.includes('webgpu') ? 'webgpu' : 'cpu',
-    });
+    const r = await call('reconstruct', reconstructArgs(pairs));
     if (r.cancelled) throw new Error('stopped');
     if (!r.ok) throw new Error(r.error);
     S.result = r;
@@ -1045,5 +1087,20 @@ async function boot() {
   setStatus(matcherKind() === 'flexglue' && !S.weightsReady ? 'FlexGlue needs its weights (below), or choose LightGlue.' : 'Press Start and allow the camera.');
 }
 
-if (DEBUG) window.capture = S;
+if (DEBUG) {
+  window.capture = S;
+  // Memory of each WebAssembly module, MB: this page's mapper, the keypoints, the matcher, the worker's mapper.
+  window.captureMemory = async () => {
+    const mb = (b) => Math.round(b / 1e6);
+    const jkp = await import(new URL('jkp/jkp.js', import.meta.url).href).catch(() => null);
+    const jmt = await import(new URL('jmt/jmt.js', import.meta.url).href).catch(() => null);
+    return {
+      live: mb(S.live?.HEAPU8.length ?? 0),
+      keypoints: mb((await jkp?.module?.())?.HEAPU8?.length ?? 0),
+      matcher: mb((await jmt?.module?.())?.HEAPU8?.length ?? 0),
+      worker: mb((await call('mem')).bytes),
+      jsHeap: performance.memory ? mb(performance.memory.usedJSHeapSize) : null,
+    };
+  };
+}
 boot().catch((e) => setStatus('Could not load the capture: ' + e.message, true));

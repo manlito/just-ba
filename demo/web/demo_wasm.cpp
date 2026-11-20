@@ -553,13 +553,14 @@ EMSCRIPTEN_KEEPALIVE const char* demo_session_snapshot() {
   return result.c_str();
 }
 
-// The whole capture from the live map (Session::finish, Mapper::run_from): the session's
-// pairs and more (each pair here with both of its frames, a and b, then the matches), with
+// The whole capture from the live map (Session::finish, Mapper::run_from), or from scratch
+// with from_scratch (Mapper::run): the session's pairs and more (each pair here with both of its frames, a and b, then the matches), with
 // progress through Module.onProgress, which can stop it. The result as JSON, its points in
 // demo_points(), their tracks in demo_tracks(), and per point an observation in
 // demo_colour_obs().
 EMSCRIPTEN_KEEPALIVE const char* demo_session_finish(int n_pairs, const std::int32_t* pair_images,
-                                                    const std::int32_t* pair_begin, const std::int32_t* matches) {
+                                                    const std::int32_t* pair_begin, const std::int32_t* matches,
+                                                    int from_scratch) {
   step_points.clear();
   step_tracks.clear();
   colour_obs.clear();
@@ -572,7 +573,11 @@ EMSCRIPTEN_KEEPALIVE const char* demo_session_finish(int n_pairs, const std::int
     demo::Capture c = session->capture();
     add_pairs(c, n_pairs, pair_images, pair_begin, matches);
     const auto t0 = std::chrono::steady_clock::now();
-    result = result_json(session->finish(c, progress_reporter(t0)), c);
+    // from_scratch: Mapper::run on the session's capture and these pairs, not from the
+    // live map (the page asks for it when the live map's finish placed too few keyframes).
+    result = result_json(from_scratch ? session_mapper->run(c, {}, progress_reporter(t0))
+                                      : session->finish(c, progress_reporter(t0)),
+                         c);
   } catch (const std::exception& e) {
     result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
   }
