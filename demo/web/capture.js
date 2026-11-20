@@ -2,9 +2,9 @@
 // them (gates.js), a map grown from the keyframes while capturing (demo::Session in
 // capture_worker.js), then Finish, the whole capture reconstructed from that map.
 //
-// Per camera frame, on this page's thread: ALIKED keypoints (just-keypoints), the
-// matcher's features of the frame (just-matching: FlexGlue's dense features, or
-// LightGlue's of the keypoints), its matches to the last keyframe at the live depth
+// Per camera frame, on this page's thread: ALIKED keypoints (just-keypoints; XFeat's with
+// LighterGlue), the matcher's features of the frame (just-matching: FlexGlue's dense
+// features, or LightGlue's or LighterGlue's of the keypoints), its matches to the last keyframe at the live depth
 // (FlexGlue's layer-0 head), checked against a relative pose on the CPU
 // (demo_pair_inliers), the overlap and support those give, the blur, and the rules. A
 // kept frame is matched to the last few keyframes at the online depth, one pair per
@@ -13,7 +13,7 @@
 // tried again. Finish matches more pairs (the shortlist over every keyframe) and runs
 // the mapper from the live map.
 //
-// URL parameters: matcher=flexglue|lightglue, keypoints=1024|2048, side=<px> (the
+// URL parameters: matcher=flexglue|lightglue|lighterglue, keypoints=1024|2048, side=<px> (the
 // working image's longer side), debug=1 (timings in the console), video=<url> (a recorded
 // video instead of the camera, for testing; rate=<playback rate>, 0.5 by default).
 import * as G from './gates.js';
@@ -33,10 +33,17 @@ const FLEXGLUE = {
 // Like Recon's numbers (src-tauri/src/capture.rs, online.rs).
 // LightGlue's live and map depths: on a Pixel 9a at 640 px, 2 layers take 160 ms (342
 // matches), 3 take 215 ms (481), 5 take 330 ms, adaptive 9 about 510 ms.
-const LIVE = { flexglue: { layers: 0 }, lightglue: { layers: 2, depthConfidence: -1, widthConfidence: -1 } };
-const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 3, depthConfidence: -1, widthConfidence: -1 } };
-// Finish's pairs: FlexGlue as the map's; LightGlue at full, adaptive depth (it has the time).
-const FINISH = { flexglue: { layers: 3 }, lightglue: { layers: 9, depthConfidence: 0.95, widthConfidence: 0.99 } };
+// LighterGlue (XFeat's) at the same depths: its layers are about a third of LightGlue's work.
+const FIXED = { depthConfidence: -1, widthConfidence: -1 };
+const LIVE = { flexglue: { layers: 0 }, lightglue: { layers: 2, ...FIXED }, lighterglue: { layers: 2, ...FIXED } };
+const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 3, ...FIXED }, lighterglue: { layers: 3, ...FIXED } };
+// Finish's pairs: FlexGlue as the map's; LightGlue and LighterGlue at full, adaptive depth (they have the time; the
+// matcher's own adaptivity: LightGlue 0.95 and 0.99, LighterGlue all six layers and width 0.95).
+const FINISH = { flexglue: { layers: 3 }, lightglue: { layers: 9 }, lighterglue: { layers: 9 } };
+// LightGlue and LighterGlue match keypoints with their descriptors: ALIKED's, XFeat's.
+const sparse = (kind) => kind === 'lightglue' || kind === 'lighterglue';
+const keypointModel = (kind) => (kind === 'lighterglue' ? 'xfeat' : 'aliked');
+const MATCHER_NAME = { flexglue: 'FlexGlue', lightglue: 'LightGlue', lighterglue: 'LighterGlue' };
 const SEQUENTIAL = 3;            // keyframes each new one is matched to
 const MATCHES_PER_PAIR = 1024;   // the strongest, per online pair
 const WINDOW = 8;                // keyframes adjusted together
@@ -44,7 +51,7 @@ const RESTART_AFTER = 10;        // keyframes in a row not placed before a new p
 const ONLINE_MIN_PAIR_INLIERS = 15;
 const APPEARANCE_PARTNERS = 4;   // more keyframes for one the map can't place (FlexGlue)
 const FINISH_SHORTLIST = 10;     // pairs per keyframe for the finish (FlexGlue's shortlist)
-const FINISH_SEQUENTIAL = 5;     // LightGlue's finish: each keyframe with the five before it
+const FINISH_SEQUENTIAL = 5;     // LightGlue's and LighterGlue's finish: each keyframe with the five before it
 const MIN_FINISH_MATCHES = 15;
 // FlexGlue's finish from the live map placing fewer than this share of the keyframes is run again from scratch.
 const FINISH_FROM_SCRATCH = 0.8;
@@ -64,13 +71,14 @@ const S = {
   gpu: null, precision: 'fp32',
   live: null,          // the demo's module on this thread, for demo_pair_inliers
   worker: null, calls: new Map(), nextId: 1,
-  extractor: null, extractorK: 0,
+  extractor: null, extractorKey: '', kpModel: 'aliked',   // the detector, and its keypoints' model
   matcher: null, matcherKind: null,
   weights: null,       // FlexGlue: { stored } or { bytes } (this visit only)
   stream: null, track: null, wakeLock: null,
   running: false, finishing: false, shoot: false, busy: false,
   session: null,       // { width, height }
   keyframes: [],       // { index, seq, xy, desc, feat, w, h, jpeg, placed, shoot, thumb }
+  keyframesModel: null, // the keypoints' model of this capture's keyframes ('aliked' or 'xfeat')
   reference: null, before: null, twoBack: false, held: [], cursor: 0,
   picker: new G.Picker(), speed: new G.Speed(), blur: new G.Blur(),
   floor: G.floorOf(), settings: G.defaultSettings(),
@@ -222,7 +230,7 @@ async function liveStep() {
   const tKp = performance.now();
   const kp = await S.extractor.extract(frame.image);
   const tDescribe = performance.now();
-  const confidentNow = G.confident(kp.score);
+  const confidentNow = G.confident(kp.score, S.kpModel);
   const sharp = G.sharpness(frame.image.data, w, h);
   const blurry = S.blur.blurry(sharp);
   const ratio = S.blur.ratio(sharp);
@@ -268,7 +276,8 @@ async function liveStep() {
     overlap: G.anticipate(overlapNow, speed), support: now?.support ?? { inliers: 0, coverage: 0 },
     overlap2: S.twoBack ? G.anticipate(overlap2, speed) : null,
   });
-  // The descriptors are kept whatever the matcher: Reconstruct again may match with LightGlue.
+  // The descriptors are kept whatever the matcher: Reconstruct again may match with LightGlue (ALIKED's) or
+  // LighterGlue (XFeat's).
   const cand = { xy: kp.xy, desc: kp.desc, feat: f, w, h, image: frame.image,
                  overlap: overlapNow, relocalized };
   let pick;
@@ -310,6 +319,7 @@ async function keep(c, why, shoot) {
   const kf = { index: S.keyframes.length, seq: S.keyframes.length + 1, xy: c.xy, desc: c.desc, feat: c.feat, w: c.w,
                h: c.h, shoot, why, placed: false, jpeg: null };
   S.keyframes.push(kf);
+  S.keyframesModel = S.kpModel;
   // A small JPEG of it, for its thumbnail, the points' colours and the finish's features.
   const cv = new OffscreenCanvas(c.w, c.h);
   cv.getContext('2d').putImageData(c.image, 0, 0);
@@ -586,11 +596,11 @@ async function finish() {
     clearPicker();
     for (const k of S.keyframes) { k.feat?.destroy(); k.feat = null; }
     let r;
-    if (S.matcherKind === 'lightglue') {
-      // LightGlue: every pair matched again at full depth and the mapper from scratch. The live
+    if (sparse(S.matcherKind)) {
+      // LightGlue (and LighterGlue): every pair matched again at full depth and the mapper from scratch. The live
       // map's pairs (3 layers) hold the result back: on the test video the same 39 keyframes
       // gave 17 registered from 3-layer pairs and 36 from full-depth ones.
-      const pairs = await matchKeyframes('lightglue', new Set());
+      const pairs = await matchKeyframes(S.matcherKind, new Set());
       releaseModules();
       setStatus('Reconstructing…');
       r = await call('reconstruct', reconstructArgs(pairs));
@@ -685,14 +695,14 @@ function releaseModules() {
 
 // The pairs of keyframes for the finish and Reconstruct again, matched with `kind`, leaving
 // out those in `skip` ("a-b"). FlexGlue on a computer: every keyframe described, the
-// shortlist over all of them and the three before each. Otherwise (LightGlue, or a phone):
+// shortlist over all of them and the three before each. Otherwise (LightGlue, LighterGlue, or a phone):
 // each keyframe with the five before it, described as they come and only those six held:
 // on a Pixel 9a, FlexGlue's features of every keyframe at once and the shortlist over them
 // crashed the browser's GPU process.
 async function matchKeyframes(kind, skip) {
   const kfs = S.keyframes, n = kfs.length;
   const describeOne = async (k) => {
-    if (kind === 'lightglue') return S.matcher.describeKeypoints({ width: k.w, height: k.h }, k.xy, k.desc);
+    if (sparse(kind)) return S.matcher.describeKeypoints({ width: k.w, height: k.h }, k.xy, k.desc);
     const bm = await createImageBitmap(k.jpeg);
     try { return await S.matcher.describe(bm); } finally { bm.close(); }
   };
@@ -749,8 +759,13 @@ async function reconstructAgain() {
   setButtons();
   await keepAwake(true);
   try {
-    await ensureModules();
-    const kind = S.matcherKind;
+    const kind = matcherKind();
+    if (sparse(kind) && S.keyframesModel && keypointModel(kind) !== S.keyframesModel) {
+      throw new Error(`${MATCHER_NAME[kind]} matches ${keypointModel(kind) === 'xfeat' ? 'XFeat' : 'ALIKED'} keypoints, ` +
+                      `and this capture has ${S.keyframesModel === 'xfeat' ? 'XFeat' : 'ALIKED'}'s: choose ` +
+                      `${S.keyframesModel === 'xfeat' ? 'LighterGlue' : 'LightGlue'} or FlexGlue`);
+    }
+    await ensureModules(S.keyframesModel ?? keypointModel(kind));
     const pairs = await matchKeyframes(kind, new Set());
     releaseModules();
     setProgress(null);
@@ -760,7 +775,7 @@ async function reconstructAgain() {
     if (!r.ok) throw new Error(r.error);
     S.result = r;
     await showResult(r);
-    setStatus(`Done with ${kind === 'flexglue' ? 'FlexGlue' : 'LightGlue'}: ${r.registered} of ${r.images} keyframes, ` +
+    setStatus(`Done with ${MATCHER_NAME[kind]}: ${r.registered} of ${r.images} keyframes, ` +
               `${int(r.points.length / 3)} points, ${fmt(r.mean_error_px)} px.`);
   } catch (e) {
     setProgress(null);
@@ -843,14 +858,19 @@ async function keepAwake(on) {
 
 // ---- modules and weights
 
-async function ensureModules() {
+// The detector follows the matcher (XFeat for LighterGlue, else ALIKED); `model` overrides it (Reconstruct again
+// keeps the capture's keypoints).
+async function ensureModules(model = keypointModel(matcherKind())) {
   const K = topK();
-  if (!S.extractor || S.extractorK !== K) {
-    setStatus('Loading the keypoint detector (ALIKED)…');
+  if (!S.extractor || S.extractorKey !== `${model}/${K}`) {
+    setStatus(`Loading the keypoint detector (${model === 'xfeat' ? 'XFeat' : 'ALIKED'})…`);
     const jkp = await import(new URL('jkp/jkp.js', import.meta.url).href);
     S.extractor?.destroy?.();
-    S.extractor = await jkp.create({ weightsUrl: new URL('jkp/aliked-n16.jkpw', import.meta.url).href, topK: K });
-    S.extractorK = K;
+    S.extractor = null;
+    const weightsUrl = new URL(model === 'xfeat' ? 'jkp/xfeat.jkpw' : 'jkp/aliked-n16.jkpw', import.meta.url).href;
+    S.extractor = await jkp.create({ weightsUrl, topK: K });
+    S.extractorKey = `${model}/${K}`;
+    S.kpModel = model;
   }
   const kind = matcherKind();
   if (!S.matcher || S.matcherKind !== kind) {
@@ -858,9 +878,10 @@ async function ensureModules() {
     S.matcher?.destroy?.();
     S.matcher = null;
     let weights;
-    if (kind === 'lightglue') {
-      weights = await jmt.fetchWeights(new URL('jmt/lightglue-aliked-fp16.jmtw', import.meta.url).href, {
-        onProgress: (got, total) => { setStatus(`LightGlue's weights: ${(got / 1e6).toFixed(0)} MB…`); if (total) setProgress(got, total); },
+    if (sparse(kind)) {
+      const file = kind === 'lighterglue' ? 'jmt/lightglue-xfeat.jmtw' : 'jmt/lightglue-aliked-fp16.jmtw';
+      weights = await jmt.fetchWeights(new URL(file, import.meta.url).href, {
+        onProgress: (got, total) => { setStatus(`${MATCHER_NAME[kind]}'s weights: ${(got / 1e6).toFixed(0)} MB…`); if (total) setProgress(got, total); },
       });
     } else {
       setStatus('Loading FlexGlue\'s weights from this browser…');
@@ -888,6 +909,8 @@ async function refreshWeights() {
   $('flexglue').hidden = kind !== 'flexglue';
   $('matcher-hint').textContent = kind === 'flexglue'
     ? 'FlexGlue: the best matches, from your own copy of its weights; heavy on a phone.'
+    : kind === 'lighterglue'
+    ? 'LighterGlue: XFeat keypoints and the lightest matcher, served with the page (4.5 MB); sequential pairs only.'
     : 'LightGlue: lighter, served with the page (24 MB); sequential pairs only.';
   if (kind === 'flexglue') {
     const f = S.weights?.bytes ? null : await storedWeights();
@@ -1008,7 +1031,7 @@ async function reset() {
   for (const k of S.keyframes) k.feat?.destroy();
   clearPicker();
   Object.assign(S, {
-    keyframes: [], reference: null, before: null, twoBack: false, lastOverlap2: null, held: [], cursor: 0, jobs: [], links: new Set(),
+    keyframes: [], keyframesModel: null, reference: null, before: null, twoBack: false, lastOverlap2: null, held: [], cursor: 0, jobs: [], links: new Set(),
     map: null, lastStep: null, result: null, done: false, session: null,
     picker: new G.Picker(), speed: new G.Speed(), blur: new G.Blur(), stats: { frameMs: 0, mapMs: 0, frames: 0, kpMs: 0, describeMs: 0, matchMs: 0, loopMs: 0 },
   });

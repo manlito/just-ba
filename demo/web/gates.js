@@ -40,6 +40,8 @@ export const SPARSE_KEYFRAMES = 6;
 export const RELOCALIZE_PER_FRAME = 3;
 /** A keypoint at least this sure counts towards a frame's quality. */
 export const CONFIDENT_SCORE = 0.2;
+/** CONFIDENT_SCORE for XFeat, whose scores run lower: as many of a frame's keypoints reach it (Like Recon). */
+export const CONFIDENT_SCORE_XFEAT = 0.08;
 /** Matches that agree with a relative pose within this many pixels count as seen. */
 export const INLIER_PX = 4;
 /** Fewer agreeing matches than this and the frames are taken not to overlap. */
@@ -178,10 +180,11 @@ export function hold(seqs) {
   return keep;
 }
 
-/** How many keypoint scores are at least CONFIDENT_SCORE. */
-export function confident(scores) {
+/** How many keypoint scores are at least CONFIDENT_SCORE (model 'xfeat': CONFIDENT_SCORE_XFEAT). */
+export function confident(scores, model = 'aliked') {
+  const at = model === 'xfeat' ? CONFIDENT_SCORE_XFEAT : CONFIDENT_SCORE;
   let n = 0;
-  for (const s of scores) if (s >= CONFIDENT_SCORE) ++n;
+  for (const s of scores) if (s >= at) ++n;
   return n;
 }
 

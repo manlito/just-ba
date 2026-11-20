@@ -1,10 +1,11 @@
 // just-ba's live demo (D156): structure from motion on real photos, in the browser.
-// - Keypoints and descriptors: ALIKED, from just-keypoints' module (jkp/), on WebGPU.
-// - Matches: LightGlue on every pair, from just-matching's module (jmt/), on WebGPU.
+// - Keypoints and descriptors: ALIKED or XFeat, from just-keypoints' module (jkp/), on WebGPU.
+// - Matches: LightGlue (ALIKED) or LighterGlue (XFeat) on every pair, from just-matching's module (jmt/), on WebGPU.
 // - Reconstruction: the demo's mapper (jba_demo.js): poselib-gpu verifies the pairs and registers images, just-ba
 //   builds tracks, triangulates and adjusts; on the CPU or WebGPU, once on each to compare.
 // Keypoints and matches are kept until the images or their settings change, so reconstructing again on another
-// backend costs only the reconstruction. URL parameters: run=1 runs once the sample set is loaded; n=k keeps the
+// backend costs only the reconstruction. URL parameters: run=1 runs once the sample set is loaded; features=xfeat starts
+// with XFeat and LighterGlue; n=k keeps the
 // first k sample images; backends=cpu|webgpu|both; focal=guess drops the samples' focal lengths, as for photos of
 // the visitor's own (1.2 times the larger side, then searched for).
 const params = new URLSearchParams(location.search);
@@ -13,12 +14,18 @@ const css = name => getComputedStyle(document.documentElement).getPropertyValue(
 
 const MAX_IMAGES = 60;
 const MIN_MATCHES = 15;  // pairs with fewer are not handed to the mapper (as the COLMAP path's --min-matches)
-const LIGHTGLUE = { layers: 9, depthConfidence: 0.95, widthConfidence: 0.99 };  // its adaptive depth and width
+// The two feature sets: keypoints and descriptors from just-keypoints, their matcher from just-matching. Matched with
+// the matcher's own adaptive depth and width (LightGlue 0.95 and 0.99; LighterGlue all six layers, width 0.95).
+const FEATURES = {
+  aliked: { keypoints: 'ALIKED', jkpw: 'jkp/aliked-n16.jkpw', matcher: 'LightGlue', jmtw: 'jmt/lightglue-aliked-fp16.jmtw' },
+  xfeat: { keypoints: 'XFeat', jkpw: 'jkp/xfeat.jkpw', matcher: 'LighterGlue', jmtw: 'jmt/lightglue-xfeat.jmtw' },
+};
+const MATCH = { layers: 9 };
 
 const state = {
   images: [],         // { name, file, bitmap, data, focal (pixels of the scaled image, NaN: unknown), kp, feat, tKp, tDesc, thumb }
-  extractor: null, extractorK: 0,
-  matcher: null, weights: null, precision: 'fp32',
+  extractor: null, extractorKey: '',
+  matcher: null, matcherFeatures: '', weights: {}, precision: 'fp32',   // weights by feature set
   matches: null,      // { key, pairs: [{ i, j, m: Int32Array }], tMatch, nPairs }
   runs: {},           // by backend: the mapper's answer, with points, tracks and colours
   shown: null,
@@ -57,7 +64,7 @@ const setting = name => document.querySelector(`input[name=${name}]:checked`).va
 
 // ---- images
 
-function settingsKey() { return `${setting('keypoints')}/${setting('side')}`; }
+function settingsKey() { return `${setting('features')}/${setting('keypoints')}/${setting('side')}`; }
 
 async function bitmapOf(blob) {
   const side = Number(setting('side'));
@@ -171,32 +178,38 @@ function renderThumbs() {
 // ---- keypoints and matches (WebGPU)
 
 async function ensureModules() {
-  const K = Number(setting('keypoints'));
-  if (!state.extractor || state.extractorK !== K) {
-    setStatus('Loading just-keypoints (ALIKED)…');
+  const K = Number(setting('keypoints')), f = setting('features'), F = FEATURES[f];
+  if (!state.extractor || state.extractorKey !== `${f}/${K}`) {
+    setStatus(`Loading just-keypoints (${F.keypoints})…`);
     const t0 = performance.now();
     const jkp = await import(new URL('jkp/jkp.js', location.href).href);
     state.extractor?.destroy?.();
-    state.extractor = await jkp.create({ weightsUrl: 'jkp/aliked-n16.jkpw', topK: K });
-    state.extractorK = K;
+    state.extractor = await jkp.create({ weightsUrl: F.jkpw, topK: K });
+    state.extractorKey = `${f}/${K}`;
     state.timing.loadKeypoints = performance.now() - t0;
   }
-  if (!state.matcher) {
+  if (!state.matcher || state.matcherFeatures !== f) {
+    // The images' features belong to the matcher that made them.
+    for (const im of state.images) im.feat?.destroy(), im.feat = null;
+    state.matcher?.destroy?.();
+    state.matcher = null;
     const jmt = await import(new URL('jmt/jmt.js', location.href).href);
     const t0 = performance.now();
-    if (!state.weights) {
-      state.weights = await jmt.fetchWeights('jmt/lightglue-aliked-fp16.jmtw', {
+    if (!state.weights[f]) {
+      state.weights[f] = await jmt.fetchWeights(F.jmtw, {
         onProgress(got, total) {
-          setStatus(total ? `LightGlue's weights: ${(got / 1e6).toFixed(0)} of ${(total / 1e6).toFixed(0)} MB…` : `LightGlue's weights…`);
+          setStatus(total ? `${F.matcher}'s weights: ${(got / 1e6).toFixed(0)} of ${(total / 1e6).toFixed(0)} MB…` : `${F.matcher}'s weights…`);
           if (total) setProgress(got, total);
         },
       });
     }
     setProgress(null);
     setStatus('Creating the matcher…');
-    state.matcher = await jmt.create({ weights: state.weights, precision: state.precision });
+    state.matcher = await jmt.create({ weights: state.weights[f], precision: state.precision });
+    state.matcherFeatures = f;
     state.timing.loadMatcher = performance.now() - t0;
   }
+  renderGpuInfo();
 }
 
 async function findMatches() {
@@ -231,7 +244,7 @@ async function findMatches() {
         setProgress(p, total);
       }
       const a = state.images[i], b = state.images[j];
-      const r = await state.matcher.match(a.feat, a.kp.xy, b.feat, b.kp.xy, LIGHTGLUE);
+      const r = await state.matcher.match(a.feat, a.kp.xy, b.feat, b.kp.xy, MATCH);
       if (r.matches.length / 2 >= MIN_MATCHES) pairs.push({ i, j, m: r.matches });
     }
   }
@@ -388,6 +401,11 @@ async function run() {
 
 // ---- tables
 
+function renderGpuInfo() {
+  const F = FEATURES[setting('features')];
+  $('gpu-info').textContent = `GPU: ${state.gpuName ?? '–'}. ${F.matcher} runs in ${state.precision === 'fp16' ? 'FP16' : 'FP32'}.`;
+}
+
 function renderMatchTimes() {
   const ims = state.images.filter(im => im.kp), m = state.matches;
   if (!ims.length || !m) {
@@ -398,8 +416,8 @@ function renderMatchTimes() {
   const rows = [
     ['Images', state.images.length],
     ['Keypoints per image, median', int(median(ims.map(im => im.kp.xy.length / 2)))],
-    ['ALIKED per image, median', `${fmt(median(ims.map(im => im.tKp)), 0)} ms`],
-    ['LightGlue features per image, median', `${fmt(median(ims.map(im => im.tDesc)), 0)} ms`],
+    [`${FEATURES[state.matcherFeatures]?.keypoints ?? 'Keypoints'} per image, median`, `${fmt(median(ims.map(im => im.tKp)), 0)} ms`],
+    [`${FEATURES[state.matcherFeatures]?.matcher ?? 'Matcher'} features per image, median`, `${fmt(median(ims.map(im => im.tDesc)), 0)} ms`],
     ['Pairs matched', `${int(m.nPairs)} in ${fmt(m.tMatch / 1000, 1)} s (${fmt(m.tMatch / m.nPairs, 0)} ms each)`],
     [`Pairs with ${MIN_MATCHES} matches or more`, `${int(m.pairs.length)}, ${int(nm)} matches`],
   ];
@@ -667,7 +685,11 @@ drop.addEventListener('drop', async e => {
   await addImages(fromFiles(e.dataTransfer.files));
   setStatus(`${state.images.length} images. Press Run.`);
 });
-for (const inp of document.querySelectorAll('input[name=keypoints]')) inp.addEventListener('change', invalidate);
+for (const inp of document.querySelectorAll('input[name=keypoints], input[name=features]')) inp.addEventListener('change', invalidate);
+{
+  const f = document.querySelector(`input[name=features][value="${params.get('features')}"]`);
+  if (f) f.checked = true;
+}
 for (const inp of document.querySelectorAll('input[name=side]')) inp.addEventListener('change', () => rescale());
 for (const inp of document.querySelectorAll('input[name=shown]')) {
   inp.addEventListener('change', () => {
@@ -704,7 +726,8 @@ async function start() {
       state.gpu = true;
     }
   } catch { /* no WebGPU */ }
-  $('gpu-info').textContent = `GPU: ${info}. LightGlue runs in ${state.precision === 'fp16' ? 'FP16' : 'FP32'}.`;
+  state.gpuName = info;
+  renderGpuInfo();
   if (!state.gpu) {
     $('notice').hidden = false;
     $('notice').textContent = 'No WebGPU device here: keypoints and matching need one, so the demo cannot run.';
