@@ -275,7 +275,6 @@ async function liveStep() {
   if (pick) await keep(pick.frame, pick.why, shoot);
   freeCandidate(cand);
 
-  drawOverlay(kp.xy, now?.seen, w, h);
   const gate = pick ? 'kept' : verdict.gate === 'kept' ? 'waiting' : verdict.gate;
   showGate(gate, pick?.why, overlapNow, G.slowDown(speed, blurry && S.settings.rejectBlur), relocalized);
   const ms = performance.now() - t0;
@@ -306,6 +305,7 @@ async function keep(c, why, shoot) {
   cv.getContext('2d').putImageData(c.image, 0, 0);
   kf.jpeg = await cv.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
   addThumb(kf, cv);
+  showLastKeyframe(cv);
   const partners = S.keyframes.slice(Math.max(0, kf.index - SEQUENTIAL), kf.index);
   if (c.relocalized && S.reference && !partners.includes(S.reference)) partners.push(S.reference);
   if (G.usableReference(c.xy)) {
@@ -466,55 +466,36 @@ async function loop() {
   }
 }
 
-// ---- what the camera view shows
-
-const overlay = $('overlay');
-function drawOverlay(xy, seen, w, h) {
-  const v = $('video'), dpr = window.devicePixelRatio || 1;
-  const cw = v.clientWidth, ch = v.clientHeight;
-  if (overlay.width !== Math.round(cw * dpr) || overlay.height !== Math.round(ch * dpr)) {
-    overlay.width = Math.round(cw * dpr);
-    overlay.height = Math.round(ch * dpr);
-  }
-  const g = overlay.getContext('2d');
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.clearRect(0, 0, cw, ch);
-  const sx = cw / w, sy = ch / h;
-  const inl = new Set((seen ?? []).map((p) => p[1]));
-  const colKp = getComputedStyle(document.documentElement).getPropertyValue('--kp').trim();
-  const colIn = getComputedStyle(document.documentElement).getPropertyValue('--kp-in').trim();
-  for (let i = 0; 2 * i < xy.length; i++) {
-    g.fillStyle = inl.has(i) ? colIn : colKp;
-    g.globalAlpha = inl.has(i) ? 0.95 : 0.55;
-    g.fillRect(xy[2 * i] * sx - 1.5, xy[2 * i + 1] * sy - 1.5, 3, 3);
-  }
-  g.globalAlpha = 1;
-}
+// ---- what the view shows: a pill for the tracking, the last keyframe in the corner
 
 const GATES = {
-  kept: 'Keyframe', waiting: 'Keep moving', too_few_keypoints: 'Too little texture', blurry: 'Blurry: move slower',
+  kept: 'Keyframe', waiting: 'Tracking', too_few_keypoints: 'Too little texture here', blurry: 'Blurry: move slower',
   lost: 'Lost: point back at the last keyframe', paused: 'Paused',
 };
-const WHY = { first: 'first', shoot: 'shot', target: '', support: 'matches thinning', redundancy: 'two back leaving',
-              lost: 'kept before losing it' };
 function showGate(gate, why, overlap, slow, relocalized) {
-  let text = GATES[gate] ?? gate;
-  if (gate === 'kept' && WHY[why]) text += ` (${WHY[why]})`;
-  if (gate !== 'kept' && slow) text = 'Slow down';
-  if (relocalized) text = 'Found an earlier keyframe again';
-  showChip(text, gate === 'kept' ? 'kept' : gate === 'lost' || slow ? 'warn' : '');
-  const m = $('meter');
-  m.hidden = overlap == null;
-  if (overlap != null) {
-    m.querySelector('i').style.width = `${Math.round(100 * overlap)}%`;
-    m.querySelector('b').style.left = `${100 * S.settings.targetOverlap}%`;
-  }
+  let text = GATES[gate] ?? gate, kind = gate === 'kept' || gate === 'waiting' ? 'ok' : 'warn';
+  if (gate === 'kept') text = `Keyframe ${S.keyframes.length}`;
+  else if (gate === 'waiting' && slow) { text = 'Slow down'; kind = 'warn'; }
+  if (relocalized) { text = 'Found the map again'; kind = 'ok'; }
+  showChip(text, kind);
 }
 function showChip(text, kind) {
   const c = $('chip');
   c.hidden = !text;
   c.textContent = text;
   c.className = 'chip' + (kind ? ' ' + kind : '');
+}
+
+// The corner: the last keyframe, flashed when one is kept; the live camera inset in it.
+function showLastKeyframe(cv) {
+  const k = $('lastkf');
+  k.width = cv.width;
+  k.height = cv.height;
+  k.getContext('2d').drawImage(cv, 0, 0);
+  k.hidden = false;
+  const pip = $('pip');
+  pip.classList.add('has-kf', 'flash');
+  setTimeout(() => pip.classList.remove('flash'), 400);
 }
 
 function addThumb(kf, cv) {
@@ -548,6 +529,10 @@ function renderNumbers() {
     rows.push(['Finished: error', `${fmt(r.mean_error_px)} px`]);
   }
   $('numbers').innerHTML = rows.map(([k, v]) => `<tr><td>${k}</td><td class="n">${v}</td></tr>`).join('');
+  // On the map: keyframes kept, placed, points.
+  const placed = r ? r.registered : m ? m.cameras.length : 0;
+  const pts = r ? r.points.length / 3 : m ? m.points.length / 3 : 0;
+  $('stats').textContent = S.keyframes.length ? `${S.keyframes.length} kept · ${placed} placed · ${int(pts)} points` : '';
 }
 
 // ---- the finish
@@ -573,8 +558,6 @@ async function finish() {
     await S.loopDone;
     stopCamera();
     showChip('', '');
-    $('meter').hidden = true;
-    overlay.getContext('2d').clearRect(0, 0, overlay.width, overlay.height);
     // The map's queue first: every keyframe placed or tried.
     while (S.jobs.length) {
       setStatus(`Adding the last keyframes to the map (${S.jobs.length} left)…`);
@@ -662,7 +645,6 @@ async function showResult(r) {
   }
   $('empty').hidden = r.cameras.length > 0;
   view.set({ cameras: r.cameras, points: r.points, colours, added: new Set() }, { refit: true });
-  selectTab('model');
 }
 
 function downloadPly() {
@@ -695,7 +677,6 @@ async function openCamera(deviceId) {
     await v.play();
     S.stream = { getTracks: () => [] };
     v.hidden = false;
-    overlay.hidden = false;
     $('placeholder').hidden = true;
     return;
   }
@@ -708,7 +689,6 @@ async function openCamera(deviceId) {
   v.srcObject = S.stream;
   await v.play();
   v.hidden = false;
-  overlay.hidden = false;
   $('placeholder').hidden = true;
   const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
   const sel = $('camera');
@@ -867,9 +847,8 @@ async function start() {
     S.wakeLock = await navigator.wakeLock?.request('screen').catch(() => null);
     S.running = true;
     S.busy = false;
-    setStatus('Capturing: move slowly around the scene. Finish when you have gone round it.');
+    setStatus('Capturing. Move slowly; Finish when done.');
     setButtons();
-    selectTab('camera');
     S.loopDone = loop();
     await S.loopDone;
   } catch (e) {
@@ -894,17 +873,12 @@ async function reset() {
   $('empty').hidden = false;
   view.set(null);
   showChip('', '');
-  $('meter').hidden = true;
+  $('lastkf').hidden = true;
+  $('pip').classList.remove('has-kf');
   notice(null);
   renderNumbers();
   setStatus('Press Start for a new capture.');
   setButtons();
-}
-
-function selectTab(t) {
-  $('stage').dataset.tab = t;
-  document.querySelector(`input[name=tab][value=${t}]`).checked = true;
-  if (t === 'model') view.draw();
 }
 
 const view = new ModelView($('view'));
@@ -918,7 +892,6 @@ $('finish').addEventListener('click', () => {
 $('reset').addEventListener('click', reset);
 $('download').addEventListener('click', downloadPly);
 $('camera').addEventListener('change', (e) => { if (!S.running) openCamera(e.target.value).catch((err) => setStatus(err.message, true)); });
-for (const i of document.querySelectorAll('input[name=tab]')) i.addEventListener('change', () => selectTab(i.value));
 for (const i of document.querySelectorAll('input[name=matcher]')) i.addEventListener('change', refreshWeights);
 $('accept').addEventListener('change', setButtons);
 $('pick').addEventListener('click', () => $('file').click());

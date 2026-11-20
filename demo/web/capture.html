@@ -76,23 +76,20 @@
   tr:last-child td { border-bottom: 0; }
   progress { width: 100%; height: 8px; accent-color: var(--accent); }
 
-  /* Camera and model side by side; on a narrow screen one at a time, under tabs. */
-  .stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-  .tabs { display: none; margin-bottom: 10px; }
-  .pane { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #000; }
-  .pane.model { background: var(--view); }
-  .camera video, .camera canvas.overlay { display: block; width: 100%; height: auto; }
-  .camera canvas.overlay { position: absolute; inset: 0; height: 100%; pointer-events: none; }
-  .camera .placeholder { aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; color: #9aa3b2; padding: 16px; text-align: center; }
-  #view { display: block; width: 100%; aspect-ratio: 16 / 9; touch-action: none; cursor: grab; }
-  .chip { position: absolute; left: 10px; top: 10px; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600;
-          background: rgba(0, 0, 0, 0.62); color: #fff; pointer-events: none; }
-  .chip.kept { background: rgba(15, 122, 74, 0.9); }
-  .chip.warn { background: rgba(180, 35, 24, 0.88); }
-  .meter { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.25); pointer-events: none; }
-  .meter i { display: block; height: 100%; border-radius: 3px; background: #fff; width: 0; transition: width 0.15s; }
-  .meter b { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--kp); }
-  .stats { position: absolute; left: 10px; top: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  /* The map is the view; a corner shows the last keyframe, with the live camera inset in it. */
+  .stage { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--view); }
+  #view { display: block; width: 100%; height: min(72vh, 720px); touch-action: none; cursor: grab; }
+  .pip { position: absolute; right: 10px; bottom: 10px; width: min(30%, 320px); border-radius: 8px; overflow: hidden;
+         background: #000; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35); border: 2px solid rgba(255, 255, 255, 0.85); }
+  .pip canvas, .pip video { display: block; width: 100%; height: auto; }
+  .pip.has-kf video { position: absolute; left: 6px; top: 6px; width: 38%; border-radius: 5px; border: 1.5px solid #fff; }
+  .pip .placeholder { aspect-ratio: 3 / 4; display: flex; align-items: center; justify-content: center; color: #9aa3b2; padding: 10px; text-align: center; font-size: 12px; }
+  .pip.flash { border-color: #34d399; }
+  .chip { position: absolute; left: 10px; top: 10px; padding: 6px 12px; border-radius: 999px; font-size: 14px; font-weight: 600;
+          background: rgba(0, 0, 0, 0.62); color: #fff; pointer-events: none; max-width: calc(100% - 20px); }
+  .chip.kept, .chip.ok { background: rgba(15, 122, 74, 0.9); }
+  .chip.warn { background: rgba(180, 35, 24, 0.9); }
+  .stats { position: absolute; left: 12px; bottom: 10px; max-width: calc(64% - 24px); font-size: 12px; color: var(--muted); pointer-events: none; font-family: var(--mono); }
   .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); pointer-events: none; padding: 16px; text-align: center; }
 
   .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0; }
@@ -112,12 +109,11 @@
   @media (max-width: 1040px) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
   @media (max-width: 760px) {
     main { padding: 12px 12px 120px; }
-    h1 { font-size: 18px; margin-bottom: 8px; }
+    h1 { display: none; }
     .lede { display: none; }
-    .stage { grid-template-columns: minmax(0, 1fr); }
-    .tabs { display: inline-flex; }
-    .stage[data-tab="camera"] .pane.model, .stage[data-tab="model"] .pane.camera { display: none; }
-    #view { aspect-ratio: 3 / 4; }
+    /* The map fills the screen above the buttons. */
+    #view { height: calc(100svh - 250px); min-height: 300px; }
+    .pip { width: 34%; }
     .cols { grid-template-columns: minmax(0, 1fr); }
     /* The buttons stay under the thumb. */
     .controls { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
@@ -148,22 +144,15 @@
   <div id="unsupported" class="notice" hidden></div>
   <div id="notice" class="notice" hidden></div>
 
-  <div class="seg tabs" id="tabs">
-    <label><input type="radio" name="tab" value="camera" checked>Camera</label>
-    <label><input type="radio" name="tab" value="model">Model</label>
-  </div>
-  <div class="stage" id="stage" data-tab="camera">
-    <div class="pane camera">
+  <div class="stage" id="stage">
+    <canvas id="view" aria-label="The map"></canvas>
+    <div id="empty" class="empty">The map appears here once two keyframes far enough apart are kept.</div>
+    <div id="chip" class="chip" hidden></div>
+    <div id="stats" class="stats"></div>
+    <div id="pip" class="pip" title="The last keyframe, and the camera">
+      <canvas id="lastkf" hidden></canvas>
       <video id="video" playsinline muted hidden></video>
-      <canvas id="overlay" class="overlay" hidden></canvas>
-      <div id="placeholder" class="placeholder">The camera appears here.</div>
-      <div id="chip" class="chip" hidden></div>
-      <div id="meter" class="meter" hidden title="How much of the last keyframe is still in view; a keyframe is kept near the mark"><i></i><b></b></div>
-    </div>
-    <div class="pane model">
-      <canvas id="view"></canvas>
-      <div id="stats" class="stats"></div>
-      <div id="empty" class="empty">The map appears here once two keyframes far enough apart are kept.</div>
+      <div id="placeholder" class="placeholder">Camera</div>
     </div>
   </div>
 

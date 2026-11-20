@@ -78,7 +78,7 @@ export class ModelView {
     const lo = xs.map((a) => quantile(a, 0.05)), hi = xs.map((a) => quantile(a, 0.95));
     v.target = lo.map((x, d) => 0.5 * (x + hi[d]));
     v.size = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
-    v.dist = 0.9 * v.size;
+    v.dist = 1.4 * v.size;  // far enough back that the cameras, at the edge of the points, stay in view
     const cs = [0, 1, 2].map((k) => cams.map((c) => c.pose[k]));
     const camSize = Math.hypot(...cs.map((a) => Math.max(...a) - Math.min(...a)));
     v.frustum = Math.max(0.01 * v.size, Math.min(0.04 * v.size, 0.08 * camSize || 0.03 * v.size));
