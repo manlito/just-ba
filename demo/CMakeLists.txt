@@ -89,7 +89,8 @@ _demo_pair_inliers,_demo_last_error,_demo_capture_reconstruct"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/web/index.html
             ${CMAKE_CURRENT_SOURCE_DIR}/web/demo.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.html
             ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture_worker.js
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/weights_worker.js ${CMAKE_CURRENT_SOURCE_DIR}/web/gates.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/weights_worker.js ${CMAKE_CURRENT_SOURCE_DIR}/web/flexglue_weights.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/gates.js
             ${CMAKE_CURRENT_SOURCE_DIR}/web/view.js ${_web}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/web/samples ${_web}/samples)
   if(EXISTS "${JBA_DEMO_MATCH_WEB_DIR}")

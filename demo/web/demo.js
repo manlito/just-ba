@@ -1,31 +1,41 @@
 // just-ba's live demo (D156): structure from motion on real photos, in the browser.
 // - Keypoints and descriptors: ALIKED or XFeat, from just-keypoints' module (jkp/), on WebGPU.
-// - Matches: LightGlue (ALIKED) or LighterGlue (XFeat) on every pair, from just-matching's module (jmt/), on WebGPU.
+// - Matches: LightGlue (ALIKED), LighterGlue (XFeat) or FlexGlue (ALIKED; the visitor's own weights, D160) on every
+//   pair, from just-matching's module (jmt/), on WebGPU.
 // - Reconstruction: the demo's mapper (jba_demo.js): poselib-gpu verifies the pairs and registers images, just-ba
 //   builds tracks, triangulates and adjusts; on the CPU or WebGPU, once on each to compare.
 // Keypoints and matches are kept until the images or their settings change, so reconstructing again on another
 // backend costs only the reconstruction. URL parameters: run=1 runs once the sample set is loaded; features=xfeat starts
-// with XFeat and LighterGlue; n=k keeps the
+// with XFeat and LighterGlue, features=flexglue with ALIKED and FlexGlue; n=k keeps the
 // first k sample images; backends=cpu|webgpu|both; focal=guess drops the samples' focal lengths, as for photos of
 // the visitor's own (1.2 times the larger side, then searched for).
+import * as FW from './flexglue_weights.js';
+
 const params = new URLSearchParams(location.search);
 const $ = id => document.getElementById(id);
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 const MAX_IMAGES = 60;
 const MIN_MATCHES = 15;  // pairs with fewer are not handed to the mapper (as the COLMAP path's --min-matches)
-// The two feature sets: keypoints and descriptors from just-keypoints, their matcher from just-matching. Matched with
-// the matcher's own adaptive depth and width (LightGlue 0.95 and 0.99; LighterGlue all six layers, width 0.95).
+// The feature sets: keypoints from just-keypoints, their matcher from just-matching. LightGlue and LighterGlue take
+// the keypoints' descriptors and match with their own adaptive depth and width (LightGlue 0.95 and 0.99; LighterGlue
+// all six layers, width 0.95). FlexGlue describes the whole image (dense features) and matches ALIKED's keypoints
+// through all nine layers, with its early stop: a pair it judges to show different places (overlap below
+// 0.8 x 0.5^(9 - layer), from layer 2) stops there with no matches, as in just-matching's demo.
 const FEATURES = {
-  aliked: { keypoints: 'ALIKED', jkpw: 'jkp/aliked-n16.jkpw', matcher: 'LightGlue', jmtw: 'jmt/lightglue-aliked-fp16.jmtw' },
-  xfeat: { keypoints: 'XFeat', jkpw: 'jkp/xfeat.jkpw', matcher: 'LighterGlue', jmtw: 'jmt/lightglue-xfeat.jmtw' },
+  aliked: { keypoints: 'ALIKED', jkpw: 'jkp/aliked-n16.jkpw', matcher: 'LightGlue', jmtw: 'jmt/lightglue-aliked-fp16.jmtw',
+            match: { layers: 9 } },
+  xfeat: { keypoints: 'XFeat', jkpw: 'jkp/xfeat.jkpw', matcher: 'LighterGlue', jmtw: 'jmt/lightglue-xfeat.jmtw',
+           match: { layers: 9 } },
+  flexglue: { keypoints: 'ALIKED', jkpw: 'jkp/aliked-n16.jkpw', matcher: 'FlexGlue', dense: true,
+              match: { layers: 9, minCovisibility: 0.8, earlyStopDecay: 0.5 } },
 };
-const MATCH = { layers: 9 };
 
 const state = {
   images: [],         // { name, file, bitmap, data, focal (pixels of the scaled image, NaN: unknown), kp, feat, tKp, tDesc, thumb }
   extractor: null, extractorKey: '',
-  matcher: null, matcherFeatures: '', weights: {}, precision: 'fp32',   // weights by feature set
+  matcher: null, matcherFeatures: '', weights: {}, precision: 'fp32',   // weights by feature set (not FlexGlue's)
+  flexglue: { ready: false, bytes: null },   // FlexGlue's weights: kept in this browser, or bytes for this visit only
   matches: null,      // { key, pairs: [{ i, j, m: Int32Array }], tMatch, nPairs }
   runs: {},           // by backend: the mapper's answer, with points, tracks and colours
   shown: null,
@@ -179,13 +189,13 @@ function renderThumbs() {
 
 async function ensureModules() {
   const K = Number(setting('keypoints')), f = setting('features'), F = FEATURES[f];
-  if (!state.extractor || state.extractorKey !== `${f}/${K}`) {
+  if (!state.extractor || state.extractorKey !== `${F.jkpw}/${K}`) {
     setStatus(`Loading just-keypoints (${F.keypoints})…`);
     const t0 = performance.now();
     const jkp = await import(new URL('jkp/jkp.js', location.href).href);
     state.extractor?.destroy?.();
     state.extractor = await jkp.create({ weightsUrl: F.jkpw, topK: K });
-    state.extractorKey = `${f}/${K}`;
+    state.extractorKey = `${F.jkpw}/${K}`;
     state.timing.loadKeypoints = performance.now() - t0;
   }
   if (!state.matcher || state.matcherFeatures !== f) {
@@ -195,8 +205,16 @@ async function ensureModules() {
     state.matcher = null;
     const jmt = await import(new URL('jmt/jmt.js', location.href).href);
     const t0 = performance.now();
-    if (!state.weights[f]) {
-      state.weights[f] = await jmt.fetchWeights(F.jmtw, {
+    let weights = state.weights[f];
+    if (F.dense) {
+      setStatus('Loading FlexGlue\'s weights from this browser…');
+      weights = state.flexglue.bytes ?? await FW.load();
+      if (!weights) {
+        await refreshFlexGlue();
+        throw new Error('FlexGlue\'s weights are not in this browser: give it flexglue.pth (Settings), or choose another matcher');
+      }
+    } else if (!weights) {
+      weights = state.weights[f] = await jmt.fetchWeights(F.jmtw, {
         onProgress(got, total) {
           setStatus(total ? `${F.matcher}'s weights: ${(got / 1e6).toFixed(0)} of ${(total / 1e6).toFixed(0)} MB…` : `${F.matcher}'s weights…`);
           if (total) setProgress(got, total);
@@ -205,7 +223,7 @@ async function ensureModules() {
     }
     setProgress(null);
     setStatus('Creating the matcher…');
-    state.matcher = await jmt.create({ weights: state.weights[f], precision: state.precision });
+    state.matcher = await jmt.create({ weights, precision: state.precision });
     state.matcherFeatures = f;
     state.timing.loadMatcher = performance.now() - t0;
   }
@@ -225,7 +243,8 @@ async function findMatches() {
     im.tKp = performance.now() - t0;
     t0 = performance.now();
     im.feat?.destroy();
-    im.feat = await state.matcher.describeKeypoints(im.data, im.kp.xy, im.kp.desc);
+    im.feat = FEATURES[setting('features')].dense ? await state.matcher.describe(im.data)
+                                                  : await state.matcher.describeKeypoints(im.data, im.kp.xy, im.kp.desc);
     await state.matcher.finish();
     im.tDesc = performance.now() - t0;
     im.kpKey = key;
@@ -233,7 +252,7 @@ async function findMatches() {
   renderThumbs();
   const sig = key + '|' + state.images.map(im => im.name).join('|');
   if (state.matches?.key === sig) return false;
-  const total = n * (n - 1) / 2, pairs = [];
+  const total = n * (n - 1) / 2, pairs = [], options = FEATURES[setting('features')].match;
   const t0 = performance.now();
   let p = 0;
   for (let i = 0; i < n; i++) {
@@ -244,7 +263,7 @@ async function findMatches() {
         setProgress(p, total);
       }
       const a = state.images[i], b = state.images[j];
-      const r = await state.matcher.match(a.feat, a.kp.xy, b.feat, b.kp.xy, MATCH);
+      const r = await state.matcher.match(a.feat, a.kp.xy, b.feat, b.kp.xy, options);
       if (r.matches.length / 2 >= MIN_MATCHES) pairs.push({ i, j, m: r.matches });
     }
   }
@@ -357,9 +376,12 @@ async function reconstruct(backend) {
 async function run() {
   if (state.busy) return;
   if (state.images.length < 3) return setStatus('Add at least three images.', true);
+  if (FEATURES[setting('features')].dense && !state.flexglue.ready) {
+    return setStatus('FlexGlue needs its weights first (Settings), or choose another matcher.', true);
+  }
   state.busy = true;
   state.cancel = false;
-  $('run').disabled = true;
+  setButtons();
   $('stop').hidden = false;
   stopPlaying();
   const tRun = performance.now();
@@ -394,8 +416,8 @@ async function run() {
     if (e.message !== 'stopped') console.error(e);
   } finally {
     state.busy = false;
-    $('run').disabled = false;
     $('stop').hidden = true;
+    setButtons();
   }
 }
 
@@ -686,6 +708,77 @@ drop.addEventListener('drop', async e => {
   setStatus(`${state.images.length} images. Press Run.`);
 });
 for (const inp of document.querySelectorAll('input[name=keypoints], input[name=features]')) inp.addEventListener('change', invalidate);
+for (const inp of document.querySelectorAll('input[name=features]')) inp.addEventListener('change', () => refreshFlexGlue(true));
+
+// ---- FlexGlue's weights, from the visitor's own flexglue.pth (shared with the live capture: one origin)
+
+function setButtons() {
+  const flex = FEATURES[setting('features')].dense;
+  $('run').disabled = !state.started || state.busy || state.converting || (flex && !state.flexglue.ready);
+  $('fg-pick').disabled = state.converting || state.busy || !$('fg-accept').checked;
+  $('fg-remove').disabled = state.converting || state.busy;
+  for (const i of document.querySelectorAll('input[name=features]')) i.disabled = state.converting || state.busy;
+}
+
+// announce: say on the status line when FlexGlue is chosen and has no weights.
+async function refreshFlexGlue(announce = false) {
+  const flex = FEATURES[setting('features')].dense;
+  $('flexglue').hidden = !flex;
+  const f = state.flexglue.bytes ? null : await FW.stored();
+  state.flexglue.ready = !!(f || state.flexglue.bytes);
+  $('fg-status').innerHTML = state.flexglue.ready
+    ? `<span class="ok">FlexGlue's weights are ready</span>${f ? ` (kept in this browser, ${(f.size / 1e6).toFixed(0)} MB)` : ' (for this visit)'}.`
+    : 'FlexGlue needs its weights once.';
+  $('fg-get').hidden = state.flexglue.ready;
+  $('fg-remove').hidden = !f;
+  setButtons();
+  if (announce && flex && !state.flexglue.ready && state.started && !state.busy) setStatus('FlexGlue needs its weights (Settings), or choose another matcher.');
+}
+
+async function useCheckpoint(file) {
+  if (!file || state.converting || state.busy) return;
+  if (!$('fg-accept').checked) return setStatus('Tick the box to accept the licences first.', true);
+  state.converting = true;
+  setButtons();
+  try {
+    const out = await FW.convert(file, data => {
+      setStatus(`${FW.STAGES[data.stage]}… ${data.total ? Math.round(100 * data.done / data.total) + ' %' : ''}`);
+      setProgress(data.done, data.total);
+    });
+    if (!out.stored) state.flexglue.bytes = out.bytes;
+    setStatus((out.stored ? 'FlexGlue\'s weights are kept in this browser.' : 'This browser cannot keep files: the weights are ready for this visit.') +
+              ' Press Run.');
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    setProgress(null);
+    state.converting = false;
+    await refreshFlexGlue();
+  }
+}
+
+$('fg-accept').addEventListener('change', setButtons);
+$('fg-pick').addEventListener('click', () => $('fg-file').click());
+$('fg-file').addEventListener('change', e => { useCheckpoint(e.target.files[0]); e.target.value = ''; });
+{
+  const d = $('fg-drop');
+  for (const ev of ['dragenter', 'dragover']) d.addEventListener(ev, e => { e.preventDefault(); d.classList.add('over'); });
+  for (const ev of ['dragleave', 'drop']) d.addEventListener(ev, () => d.classList.remove('over'));
+  d.addEventListener('drop', e => { e.preventDefault(); useCheckpoint(e.dataTransfer.files[0]); });
+}
+$('fg-remove').addEventListener('click', async () => {
+  if (state.busy) return;
+  await FW.remove();
+  state.flexglue.bytes = null;
+  if (state.matcherFeatures === 'flexglue') {
+    for (const im of state.images) im.feat?.destroy(), im.feat = null;
+    state.matcher?.destroy?.();
+    state.matcher = null;
+    state.matcherFeatures = '';
+  }
+  setStatus('FlexGlue\'s weights were removed from this browser.');
+  refreshFlexGlue();
+});
 {
   const f = document.querySelector(`input[name=features][value="${params.get('features')}"]`);
   if (f) f.checked = true;
@@ -742,7 +835,8 @@ async function start() {
     for (const v of ['both', 'webgpu']) document.querySelector(`input[name=backends][value=${v}]`).disabled = true;
   }
   await loadSamples();
-  $('run').disabled = false;
+  state.started = true;
+  await refreshFlexGlue(true);
   if (params.get('run') === '1') run();
 }
 start().catch(e => setStatus('Could not start the demo: ' + e.message, true));

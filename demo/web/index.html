@@ -83,6 +83,10 @@
   .thumb.out::after { content: "not registered"; position: absolute; inset: auto 0 0 0; top: 30%; text-align: center; font-size: 10px; color: var(--bad); font-weight: 600; }
   .drop { border: 1.5px dashed var(--field); border-radius: 8px; padding: 10px; text-align: center; color: var(--faint); font-size: 12.5px; }
   .drop.over { border-color: var(--accent); color: var(--accent); }
+  .ok { color: var(--ok); font-weight: 600; }
+  .licence { max-height: 140px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; color: var(--muted); margin: 8px 0; }
+  #flexglue { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  #flexglue .drop { margin-top: 8px; }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   th, td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); text-align: left; vertical-align: baseline; }
   th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
@@ -169,9 +173,35 @@
           <div class="seg">
             <label><input type="radio" name="features" value="aliked" checked>ALIKED + LightGlue</label>
             <label><input type="radio" name="features" value="xfeat">XFeat + LighterGlue</label>
+            <label><input type="radio" name="features" value="flexglue">ALIKED + FlexGlue</label>
           </div>
           <p class="hint">XFeat and LighterGlue are a light pair: a 4.5 MB download instead of 24 MB, keypoints in
-            about a third of ALIKED's time and matches in about half of LightGlue's.</p>
+            about a third of ALIKED's time and matches in about half of LightGlue's. FlexGlue gives the best matches,
+            from your own copy of its weights; it needs about 1 GB of GPU memory, so it is heavy on a phone.</p>
+          <div id="flexglue" hidden>
+            <p id="fg-status" class="muted"></p>
+            <div id="fg-get" hidden>
+              <p>FlexGlue's weights are not served by this page: its backbone is under Meta's DINOv3 License. Download
+                <code>flexglue.pth</code> (567 MB) from <a href="https://github.com/cvg/FlexGlue/releases/tag/v0.1" target="_blank" rel="noopener">FlexGlue's release</a>
+                and give it to the page below. It is checked, converted to half precision (284 MB) and kept in this
+                browser, so it is needed only once (the live capture uses the same copy).</p>
+              <label class="row"><input type="checkbox" id="fg-accept"> I accept the licences below, under which I use FlexGlue's weights.</label>
+              <div class="licence">
+                <p><strong>DINOv3 License</strong> (Meta), for the backbone: the weights may be used, copied and modified,
+                  with this agreement passed on to anyone they are given to; research using them must acknowledge them; use
+                  must comply with trade controls, and not for military, nuclear, espionage or weapons purposes.
+                  <a href="https://github.com/cvg/FlexGlue/blob/99920296d082c9405ebfd612d674efe288e74881/DINOv3_LICENSE.md" target="_blank" rel="noopener">Read the full licence</a>.</p>
+                <p><strong>MIT licence</strong>, for FlexGlue's matcher.
+                  <a href="https://github.com/cvg/FlexGlue/blob/99920296d082c9405ebfd612d674efe288e74881/LICENSE" target="_blank" rel="noopener">Read it</a>.</p>
+              </div>
+              <div class="row">
+                <button id="fg-pick" disabled>Choose flexglue.pth…</button>
+                <input id="fg-file" type="file" accept=".pth" hidden>
+              </div>
+              <div id="fg-drop" class="drop">Or drop flexglue.pth here.</div>
+            </div>
+            <div class="row" style="margin-top:8px"><button id="fg-remove" hidden>Remove from this browser</button></div>
+          </div>
         </div>
         <div class="field">
           <span class="label">Keypoints per image</span>
@@ -235,7 +265,8 @@
   <p class="credits">Sample images: 44 of ETH3D's <em>delivery_area</em> (Schöps et al., "A Multi-View Stereo Benchmark
     with High-Resolution Images and Multi-Camera Videos", CVPR 2017; CC BY-NC-SA 4.0, non-commercial), undistorted
     DSLR images scaled down and re-encoded as JPEG. Keypoints: ALIKED (BSD-3-Clause) or XFeat (Apache-2.0) through
-    just-keypoints. Matches: LightGlue or LighterGlue (weights Apache-2.0) through just-matching. Pose estimation: poselib-gpu. Bundle adjustment: just-ba.</p>
+    just-keypoints. Matches: LightGlue or LighterGlue (weights Apache-2.0), or FlexGlue (matcher MIT, backbone DINOv3
+    License; your own copy) through just-matching. Pose estimation: poselib-gpu. Bundle adjustment: just-ba.</p>
 </main>
 
 <script type="module" src="demo.js"></script>

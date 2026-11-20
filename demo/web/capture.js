@@ -20,18 +20,12 @@
 // video instead of the camera, for testing; rate=<playback rate>, 0.5 by default).
 import * as G from './gates.js';
 import { ModelView } from './view.js';
+import * as FW from './flexglue_weights.js';
 
 const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
 const DEBUG = params.get('debug') === '1';
 
-// FlexGlue's released checkpoint (just-matching's tools/fetch_upstream.sh pins it).
-const FLEXGLUE = {
-  sha256: 'd7371f743b8cdc4adf723c2aa05b181587fe4bc177fced139697975dff790068',
-  bytes: 567328059,
-  stored: 'flexglue-fp16.jmtw',
-  storedBytes: 283537600,
-};
 // Like Recon's numbers (src-tauri/src/capture.rs, online.rs).
 // LightGlue's live and map depths: on a Pixel 9a at 640 px, 2 layers take 160 ms (342
 // matches), 3 take 215 ms (481), 5 take 330 ms, adaptive 9 about 510 ms.
@@ -934,22 +928,13 @@ async function ensureModules(model = keypointModel(matcherKind())) {
       });
     } else {
       setStatus('Loading FlexGlue\'s weights from this browser…');
-      weights = S.weights?.bytes ?? new Uint8Array(await (await storedWeights()).arrayBuffer());
+      weights = S.weights?.bytes ?? await FW.load();
+      if (!weights) throw new Error('FlexGlue\'s weights are gone from this browser: give flexglue.pth again');
     }
     setProgress(null);
     setStatus('Starting the matcher…');
     S.matcher = await jmt.create({ weights, precision: S.precision });
     S.matcherKind = kind;
-  }
-}
-
-async function storedWeights() {
-  try {
-    const dir = await navigator.storage.getDirectory();
-    const f = await (await dir.getFileHandle(FLEXGLUE.stored)).getFile();
-    return f.size === FLEXGLUE.storedBytes ? f : null;
-  } catch {
-    return null;
   }
 }
 
@@ -962,7 +947,7 @@ async function refreshWeights() {
     ? 'LighterGlue: XFeat keypoints and the lightest matcher, served with the page (4.5 MB); sequential pairs only.'
     : 'LightGlue: lighter, served with the page (24 MB); sequential pairs only.';
   if (kind === 'flexglue') {
-    const f = S.weights?.bytes ? null : await storedWeights();
+    const f = S.weights?.bytes ? null : await FW.stored();
     const ready = !!(f || S.weights?.bytes);
     $('weights-status').innerHTML = ready
       ? `<span class="ok">FlexGlue's weights are ready</span>${f ? ` (kept in this browser, ${(f.size / 1e6).toFixed(0)} MB)` : ' (for this visit)'}.`
@@ -977,30 +962,14 @@ async function refreshWeights() {
 async function useCheckpoint(file) {
   if (!file) return;
   if (!$('accept').checked) { notice('Tick the box to accept the licences first.'); return; }
-  if (file.size !== FLEXGLUE.bytes) {
-    notice(`${file.name} is ${int(file.size)} bytes; FlexGlue's released flexglue.pth is ${int(FLEXGLUE.bytes)}.`);
-    return;
-  }
   notice(null);
   S.busy = true;
   setButtons();
   try {
-    await navigator.storage.persist?.();
-    const w = new Worker(new URL('weights_worker.js', import.meta.url), { type: 'module' });
-    const out = await new Promise((resolve, reject) => {
-      w.onmessage = ({ data }) => {
-        if (data.stage) {
-          const label = { check: 'Checking flexglue.pth', read: 'Converting it to half precision', store: 'Keeping it in this browser' }[data.stage];
-          setStatus(`${label}… ${data.total ? Math.round(100 * data.done / data.total) + ' %' : ''}`);
-          setProgress(data.done, data.total);
-          return;
-        }
-        data.ok ? resolve(data) : reject(new Error(data.error));
-      };
-      w.onerror = (e) => reject(new Error(e.message || 'the conversion failed'));
-      w.postMessage({ file, name: FLEXGLUE.stored, sha256: FLEXGLUE.sha256, keep: true });
+    const out = await FW.convert(file, (data) => {
+      setStatus(`${FW.STAGES[data.stage]}… ${data.total ? Math.round(100 * data.done / data.total) + ' %' : ''}`);
+      setProgress(data.done, data.total);
     });
-    w.terminate();  // its ~1.4 GB go with it
     if (!out.stored) S.weights = { bytes: out.bytes };
     setStatus(out.stored ? 'FlexGlue\'s weights are kept in this browser.' : 'This browser cannot keep files: the weights are ready for this visit.');
   } catch (e) {
@@ -1122,7 +1091,7 @@ for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, (e) => { e
 for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => { e.preventDefault(); useCheckpoint(e.dataTransfer.files[0]); });
 $('remove').addEventListener('click', async () => {
-  try { await (await navigator.storage.getDirectory()).removeEntry(FLEXGLUE.stored); } catch { /* gone already */ }
+  await FW.remove();
   S.weights = null;
   if (S.matcherKind === 'flexglue') { S.matcher?.destroy(); S.matcher = null; }
   setStatus('FlexGlue\'s weights were removed from this browser.');
