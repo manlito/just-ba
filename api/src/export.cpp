@@ -282,7 +282,8 @@ void write_result(const std::string& path, const Problem& p, const Covariance* c
   }
   if (rep) {
     if (rep->reprojection_error.size() != n_obs) throw std::runtime_error("write_result: report is not of this problem");
-    const std::vector<double> costs = {rep->reprojection_cost, rep->relative_prior_cost, rep->global_prior_cost,
+    // The solver's types: the reprojection entry includes the intrinsics prior (D161).
+    const std::vector<double> costs = {rep->reprojection_cost + rep->intrinsics_prior_cost, rep->relative_prior_cost, rep->global_prior_cost,
                                        rep->gravity_cost,      rep->line_cost,           rep->depth_cost};
     q.extra.push_back(section("result.cost_by_type", costs, {costs.size()}));
     q.extra.push_back(section("result.reprojection_error", rep->reprojection_error, {n_obs}));

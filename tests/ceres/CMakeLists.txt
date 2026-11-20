@@ -43,6 +43,16 @@ jba_parity_case(sigma "--model SIMPLE_RADIAL --sigma 0.7" "--check-parameters")
 jba_parity_case(shared_focal "--model RADIAL --free-intrinsics 1" "--check-parameters")
 jba_parity_case(shared_all_intrinsics "--model PINHOLE --free-intrinsics 7" "--check-parameters")
 jba_parity_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --free-intrinsics 5" "")
+# Priors on free intrinsics (D161): toward the truth from a perturbed start, toward
+# the start itself, one group regularized and another fully free, and per image.
+jba_parity_case(intrinsics_prior "--model RADIAL --free-intrinsics 5 --intrinsics-prior 0.002,inf,0.001" "--check-parameters")
+jba_parity_case(intrinsics_prior_at_start
+                "--model OPENCV --free-intrinsics 7 --intrinsics-prior 0.001,1,0.0005 --intrinsics-prior-at-start"
+                "--check-parameters")
+jba_parity_case(intrinsics_prior_focal_only "--model SIMPLE_RADIAL --free-intrinsics 5 --intrinsics-prior 0.002,inf,inf"
+                "--check-parameters")
+jba_parity_case(intrinsics_prior_per_image
+                "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-prior 0.005,inf,0.002" "")
 # One shared block with focal and distortion free seen by 40,000 observations: more
 # than one gather unit (16,384), so the CPU splits its sums and the GPU checks of the
 # same problem (gpu_cases.cmake) take the split gathers and summed intrinsics terms.

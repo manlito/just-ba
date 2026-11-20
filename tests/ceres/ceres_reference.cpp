@@ -384,6 +384,36 @@ ceres::CostFunction* make_depth_prior_cost(double w_scale, double w_offset) {
   return new ceres::AutoDiffCostFunction<DepthPriorCost, 2, 2>(new DepthPriorCost{w_scale, w_offset});
 }
 
+namespace {
+
+// Prior on an intrinsics block (D161): residual (k - k0) * w per parameter, w 0 for
+// parameters without one. Linear, so its Jacobian is written out.
+class IntrinsicsPriorCost : public ceres::CostFunction {
+ public:
+  IntrinsicsPriorCost(std::vector<double> k0, std::vector<double> w) : k0_(std::move(k0)), w_(std::move(w)) {
+    set_num_residuals(static_cast<int>(k0_.size()));
+    mutable_parameter_block_sizes()->push_back(static_cast<int>(k0_.size()));
+  }
+  bool Evaluate(double const* const* x, double* r, double** J) const override {
+    const std::size_t n = k0_.size();
+    for (std::size_t a = 0; a < n; ++a) r[a] = (x[0][a] - k0_[a]) * w_[a];
+    if (J && J[0]) {
+      std::fill(J[0], J[0] + n * n, 0.0);
+      for (std::size_t a = 0; a < n; ++a) J[0][a * n + a] = w_[a];
+    }
+    return true;
+  }
+
+ private:
+  std::vector<double> k0_, w_;
+};
+
+}  // namespace
+
+ceres::CostFunction* make_intrinsics_prior_cost(const double* target, const double* weight, int n) {
+  return new IntrinsicsPriorCost(std::vector<double>(target, target + n), std::vector<double>(weight, weight + n));
+}
+
 ceres::CostFunction* make_line_cost(const double* normal, int axis, double inv_sigma) {
   auto* f = new Line;
   std::copy_n(normal, 3, f->n);
@@ -621,6 +651,23 @@ Result solve(jba::Problem& p, const Options& o) {
     } else if (!constant.empty()) {
       owned.push_back(std::make_unique<ceres::SubsetManifold>(np, constant));
       problem.SetManifold(K, owned.back().get());
+    }
+    // The prior on free intrinsics (D161), with just-ba's rules: none on a constant
+    // block, zero weight on fixed parameters, the target taken now (before the solve
+    // moves K).
+    if (!p.intrinsics_prior_sigma.empty() && static_cast<int>(constant.size()) < np) {
+      const std::size_t at = static_cast<std::size_t>(np) * c;
+      std::vector<double> target(K, K + np), w(static_cast<std::size_t>(np), 0.0);
+      for (int a = 0; a < np && !p.intrinsics_prior.empty(); ++a)
+        if (!std::isnan(p.intrinsics_prior[at + static_cast<std::size_t>(a)]))
+          target[static_cast<std::size_t>(a)] = p.intrinsics_prior[at + static_cast<std::size_t>(a)];
+      bool any = false;
+      for (int a = 0; a < np; ++a) {
+        const double sigma = p.intrinsics_prior_sigma[at + static_cast<std::size_t>(a)];
+        if ((mask & jba::intrinsics_group(p.model, a)) && std::isfinite(sigma)) w[static_cast<std::size_t>(a)] = 1 / sigma;
+        any = any || w[static_cast<std::size_t>(a)] != 0;
+      }
+      if (any) problem.AddResidualBlock(make_intrinsics_prior_cost(target.data(), w.data(), np), nullptr, K);
     }
     ordering->AddElementToGroup(K, 1);
   }

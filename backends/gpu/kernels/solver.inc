@@ -862,11 +862,31 @@ JBA_FUNC void jf_times(JBA_ARGS_REF a, JBA_DEVICE const float* x, uint k, JBA_TH
   }
 }
 
+// m = J_factor x for factor f.
+JBA_FUNC void factor_times(JBA_ARGS_REF a, JBA_DEVICE const float* x, uint f) {
+  const Factor F = a.factors[f];
+  JBA_DEVICE const float* J = a.fJ + F.joff;
+  for (int row = 0; row < F.rows; ++row) {
+    float m = 0;
+    for (int sl = 0; sl < F.nslots; ++sl) {
+      if (F.off[sl] < 0) continue;
+      for (int c = 0; c < F.size[sl]; ++c) m += J[row * F.cols + F.base[sl] + c] * x[F.off[sl] + c];
+    }
+    a.fm[F.roff + row] = m;
+  }
+}
+
 // Per point, the part of the Schur product before the camera gather:
-// t = J_f x - J_e C^-1 J_e^T J_f x for its observations.
+// t = J_f x - J_e C^-1 J_e^T J_f x for its observations. Threads past the points
+// do the factors' m = J_factor x, so the conjugate gradients loop needs no dispatch
+// of its own for them.
 JBA_KERNEL(schur_points) {
   const uint j = gid;
-  if (j >= a.npts || s.done) return;
+  if (s.done) return;
+  if (j >= a.npts) {
+    if (j - a.npts < a.nfac) factor_times(a, op.x, j - a.npts);
+    return;
+  }
   const int e = a.point_off[j];
   float u[3] = {0, 0, 0};
   const bool depth = a.has_depth;
@@ -894,20 +914,12 @@ JBA_KERNEL(schur_points) {
   }
 }
 
-// m = J_factor x for every factor.
+// m = J_factor x for every factor (the model cost; the Schur product does it in
+// schur_points).
 JBA_KERNEL(factors_times) {
   const uint f = gid;
   if (f >= a.nfac || (op.mode == 1 && s.done)) return;
-  const Factor F = a.factors[f];
-  JBA_DEVICE const float* J = a.fJ + F.joff;
-  for (int row = 0; row < F.rows; ++row) {
-    float m = 0;
-    for (int sl = 0; sl < F.nslots; ++sl) {
-      if (F.off[sl] < 0) continue;
-      for (int c = 0; c < F.size[sl]; ++c) m += J[row * F.cols + F.base[sl] + c] * op.x[F.off[sl] + c];
-    }
-    a.fm[F.roff + row] = m;
-  }
+  factor_times(a, op.x, f);
 }
 
 // Right-hand side, point part: t = J_e C^-1 g_e.

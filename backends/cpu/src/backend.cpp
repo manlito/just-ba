@@ -256,7 +256,7 @@ struct CpuBackend::Impl : System {
               for (int c = 0; c < n; ++c) m[row] += J[row * fs.cols + base + c] * x[so + c];
           }
         }
-      }, 16);
+      }, fs.grain);
     }
   }
 

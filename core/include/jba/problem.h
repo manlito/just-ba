@@ -50,6 +50,19 @@ struct Problem {
   std::vector<double> intrinsics;
   // Per block: IntrinsicsGroup mask of freed groups. Empty means all fixed.
   std::vector<std::uint8_t> intrinsics_free;
+  // Optional prior on free intrinsics (D161), num_params(model) values per block in
+  // COLMAP order. Each group is fixed (its bit clear in intrinsics_free), fully free
+  // (bit set, no finite sigma) or regularized (bit set, finite sigma): residual
+  // (k - target) / sigma, without a robust loss. intrinsics_prior_sigma is in each
+  // parameter's own units (pixels for focal lengths and the principal point); +inf,
+  // or a parameter that is not free, means no prior on it; empty means no prior at
+  // all. intrinsics_prior is the target; empty, or NaN for a parameter, means the
+  // intrinsics given to solve(). solve() writes the target it used back here for the
+  // blocks it regularized (others keep what they had, NaN for an empty target), so
+  // later solves anchor to the same values. A target needs a sigma; 1 / sigma must be
+  // finite. set_intrinsics_prior (priors.h) fills both by group.
+  std::vector<double> intrinsics_prior;
+  std::vector<double> intrinsics_prior_sigma;
 
   // Per image.
   std::vector<double> poses;                    // 7 per image

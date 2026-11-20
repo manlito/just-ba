@@ -387,6 +387,24 @@ std::string validate(const Problem& p) {
   };
   if (const auto i = first_not_finite(p.intrinsics); i < p.intrinsics.size())
     return "intrinsics block " + std::to_string(i / static_cast<std::size_t>(np)) + " has a value that is not finite";
+  if (!p.intrinsics_prior_sigma.empty()) {
+    if (p.intrinsics_prior_sigma.size() != p.intrinsics.size())
+      return "intrinsics_prior_sigma must hold " + std::to_string(np) + " values per intrinsics block";
+    for (std::size_t i = 0; i < p.intrinsics_prior_sigma.size(); ++i)
+      // NaN fails too; +inf is no prior; so small that 1 / sigma overflows is refused.
+      if (!(p.intrinsics_prior_sigma[i] > 0) || !std::isfinite(1 / p.intrinsics_prior_sigma[i]))
+        return "intrinsics block " + std::to_string(i / static_cast<std::size_t>(np)) +
+               " has a prior sigma that is not positive (or too small)";
+  }
+  if (!p.intrinsics_prior.empty()) {
+    if (p.intrinsics_prior_sigma.empty()) return "intrinsics_prior needs intrinsics_prior_sigma";
+    if (p.intrinsics_prior.size() != p.intrinsics.size())
+      return "intrinsics_prior must hold " + std::to_string(np) + " values per intrinsics block";
+    for (std::size_t i = 0; i < p.intrinsics_prior.size(); ++i)  // NaN: the starting value
+      if (std::isinf(p.intrinsics_prior[i]))
+        return "intrinsics block " + std::to_string(i / static_cast<std::size_t>(np)) +
+               " has a prior target that is infinite";
+  }
   if (const auto i = first_not_finite(p.poses); i < p.poses.size())
     return "image " + std::to_string(i / 7) + " has a pose value that is not finite";
   if (const auto i = first_not_finite(p.points); i < p.points.size())
@@ -430,6 +448,8 @@ void write_problem(const std::string& path, const Problem& p) {
   w.array("camera.model", model, 1);
   w.array("intrinsics", p.intrinsics, np);
   if (!p.intrinsics_free.empty()) w.array("intrinsics.free", p.intrinsics_free, 1);
+  if (!p.intrinsics_prior.empty()) w.array("intrinsics.prior", p.intrinsics_prior, np);
+  if (!p.intrinsics_prior_sigma.empty()) w.array("intrinsics.prior_sigma", p.intrinsics_prior_sigma, np);
   w.array("image.pose", p.poses, 7);
   if (!p.image_intrinsics.empty()) w.array("image.intrinsics", p.image_intrinsics, 1);
   if (!p.image_fixed.empty()) w.array("image.fixed", p.image_fixed, 1);
@@ -501,7 +521,7 @@ void write_problem(const std::string& path, const Problem& p) {
       "prior.gravity.sigma",   "lines.image",         "lines.xy",              "lines.sigma",
       "lines.axis",            "manhattan.frame",     "manhattan.dof",         "depth.obs",
       "depth.obs_sigma",       "depth.kind",          "depth.form",            "depth.correction",
-      "depth.correction_free"};
+      "depth.correction_free", "intrinsics.prior",   "intrinsics.prior_sigma"};
   for (std::size_t i = 0; i < p.extra.size(); ++i) {
     const auto& s = p.extra[i];
     bool repeated = std::find(std::begin(kKnown), std::end(kKnown), s.name) != std::end(kKnown);
@@ -567,6 +587,8 @@ Problem read_problem(const std::string& path) {
     if (n == "camera.model") continue;
     if (n == "intrinsics") { take(path, s, np, p.intrinsics); have_intr = true; }
     else if (n == "intrinsics.free") take(path, s, 1, p.intrinsics_free);
+    else if (n == "intrinsics.prior") take(path, s, np, p.intrinsics_prior);
+    else if (n == "intrinsics.prior_sigma") take(path, s, np, p.intrinsics_prior_sigma);
     else if (n == "image.pose") { take(path, s, 7, p.poses); have_pose = true; }
     else if (n == "image.intrinsics") take(path, s, 1, p.image_intrinsics);
     else if (n == "image.fixed") take(path, s, 1, p.image_fixed);

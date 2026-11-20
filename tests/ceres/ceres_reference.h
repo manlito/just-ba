@@ -132,6 +132,9 @@ ceres::CostFunction* make_line_cost(const double* normal, int axis, double inv_s
 ceres::CostFunction* make_depth_cost(jba::DepthKind kind, jba::DepthForm form, double reading, double inv_sigma);
 // Prior on a depth correction toward (1, 0): parameters (correction 2), weights per part.
 ceres::CostFunction* make_depth_prior_cost(double w_scale, double w_offset);
+// Prior on an intrinsics block (D161): parameters (intrinsics n); residual
+// (k - target) * weight per parameter.
+ceres::CostFunction* make_intrinsics_prior_cost(const double* target, const double* weight, int n);
 
 // A ceres::LossFunction matching `loss`, or nullptr for none. Caller owns it.
 ceres::LossFunction* make_loss(const jba::Loss& loss);

@@ -58,6 +58,8 @@ per block for the camera model.
 | `camera.model` | i32 | [1] | yes | COLMAP model id: 0 SIMPLE_PINHOLE, 1 PINHOLE, 2 SIMPLE_RADIAL, 3 RADIAL, 4 OPENCV, 5 OPENCV_FISHEYE |
 | `intrinsics` | f64 | [B, P] | yes | Parameters in COLMAP order (document 02) |
 | `intrinsics.free` | u8 | [B] | no | Bit mask of freed groups: 1 focal length, 2 principal point, 4 distortion. Absent: all fixed (D26) |
+| `intrinsics.prior` | f64 | [B, P] | no | Target of the prior on free intrinsics (D161). Needs `intrinsics.prior_sigma`. Absent, or NaN for a parameter: the intrinsics as given; a solve writes the target it used here for the blocks it regularized |
+| `intrinsics.prior_sigma` | f64 | [B, P] | no | Standard deviation of each parameter's prior, in its units (pixels for focal lengths and the principal point); positive, +inf for none; only freed parameters are regularized. Absent: no prior (D161) |
 | `image.pose` | f64 | [N, 7] | yes | World to camera: qw, qx, qy, qz, tx, ty, tz. Unit quaternion. Camera axes x right, y down, z forward |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Intrinsics block of each image. Absent: every image uses block 0 |
 | `image.fixed` | u8 | [N] | no | 1 holds the pose fixed. Absent: all free |
@@ -157,7 +159,7 @@ sections). `P` points with a covariance.
 | `result.centre_covariance` | f64 | [N, 3, 3] | Camera centre covariance, working frame |
 | `result.point_covariance.index` | i32 | [P] | Points with a covariance |
 | `result.point_covariance` | f64 | [P, 3, 3] | Their covariances |
-| `result.cost_by_type` | f64 | [6] | Cost by residual type, in the order of `loss.type` |
+| `result.cost_by_type` | f64 | [6] | Cost by residual type, in the order of `loss.type`; reprojection includes the intrinsics prior (D161) |
 | `result.reprojection_error` | f64 | [K] | Pixels, not divided by sigma |
 | `result.relative_prior_weight`, `result.global_prior_weight`, `result.gravity_weight` | f64 | per prior | Robust weight rho', near 0 for a prior the solve overruled |
 | `result.line_angle` | f64 | [L] | Radians by which a segment's axis misses its plane; NaN when not in the term |

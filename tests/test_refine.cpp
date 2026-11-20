@@ -4,11 +4,13 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 
 #include "check.h"
 #include "jba/initialize.h"
 #include "jba/manhattan.h"
+#include "jba/priors.h"
 #include "jba/solver.h"
 #include "jba/refine.h"
 #include "scene.h"
@@ -181,6 +183,40 @@ int main() {
     ro.min_observations = 0;
     const auto r0 = jba::refine(scene.input, ro);
     EXPECT(r0.refined[kBlind] && r0.refined[kSparse]);
+  }
+
+  // Prior on free intrinsics (D161): every round, and the re-solve after outlier
+  // removal, anchors to the caller's intrinsics, not to the previous round's result.
+  // An empty target gives exactly the result of an explicit target at the given
+  // values, and the focal length (3 % off) lands between them and the free result:
+  // the many observations outweigh a 0.1 % prior, but it holds the given value.
+  {
+    SceneOptions so;
+    so.drift_heading_per_m = 0.02;
+    auto scene = jba_test::make_scene(so);
+    jba::Problem& sc = scene.input.scene;
+    sc.intrinsics[0] *= 1.03;
+    sc.intrinsics_free = {jba::kFocal};
+    const auto given = sc.intrinsics;
+    jba::RefineOptions ro;
+    ro.rounds = 3;
+    const auto free = jba::refine(scene.input, ro);
+    jba::set_intrinsics_prior(sc, 0.001, std::numeric_limits<double>::infinity(),
+                              std::numeric_limits<double>::infinity());
+    sc.intrinsics_prior.clear();  // empty: refine pins the given values
+    const auto reg = jba::refine(scene.input, ro);
+    const double f0 = given[0], sigma = 0.001 * f0;
+    std::printf("%-28s focal given %.2f, free %.2f, regularized %.2f\n", "room, intrinsics prior", f0,
+                free.problem.intrinsics[0], reg.problem.intrinsics[0]);
+    EXPECT(reg.problem.intrinsics_prior == given);
+    sc.intrinsics_prior = given;
+    const auto explicit_target = jba::refine(scene.input, ro);
+    EXPECT(explicit_target.problem.intrinsics == reg.problem.intrinsics &&
+           explicit_target.problem.poses == reg.problem.poses);
+    const double f_free = free.problem.intrinsics[0], f_reg = reg.problem.intrinsics[0];
+    EXPECT((f_reg - f0) * (f_free - f0) > 0 && std::abs(f_reg - f0) < std::abs(f_free - f0) &&
+           std::abs(f_reg - f0) > sigma);
+    EXPECT(reg.summaries.size() >= 3);
   }
 
   // Global priors from a drift-free source with arbitrary frame and scale,

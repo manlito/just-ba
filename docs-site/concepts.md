@@ -24,6 +24,18 @@ Blocks can be held: `image_fixed` holds a pose, `point_fixed` a point, and
 `intrinsics_free` frees groups of intrinsics per block (1 focal length, 2
 principal point, 4 distortion); intrinsics are held unless freed.
 
+A freed group can be fully free or regularized: with `intrinsics_prior_sigma` (per
+parameter, in its units; +inf for none) it is pulled toward `intrinsics_prior`, by
+default the values it started from. This is for refining another process's
+calibration without letting it wander:
+
+```python
+p.intrinsics_free = [1 | 4]                  # focal length and distortion
+jba.set_intrinsics_prior(p, 0.01,            # focal within about 1 %
+                         distortion_sigma=0.005)  # principal point: held anyway
+jba.solve(p)                                 # writes the target used back to p.intrinsics_prior
+```
+
 ## Pose priors
 
 - **Relative priors** (`rel_images`, `rel_pose`, `rel_sigma`) constrain the motion

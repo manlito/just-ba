@@ -59,7 +59,7 @@ jobs:
         run: ctest --test-dir build -C Release --output-on-failure -LE "gpu|slow"
       # GPU tests are run by hand (D40), Metal included (D110): bench/gpu_check.py.
 
-  # The live demo's whole pipeline from Python (D161): just-keypoints, just-matching and
+  # The live demo's whole pipeline from Python (D162): just-keypoints, just-matching and
   # poselib-gpu from PyPI, just-ba built here, LightGlue's weights from their release
   # (cached), on the CPU. The first 16 sample images in quick mode (120 pairs), all 44
   # in full mode. Not on Windows; Metal and CUDA are run by hand.

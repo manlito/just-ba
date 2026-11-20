@@ -41,6 +41,32 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
     r.reprojection_cost += 0.5 * rho[0];
   }
 
+  // Priors on free intrinsics, with the solver's rules (D161): blocks used by an
+  // observation, free parameters with a finite sigma.
+  if (!p.intrinsics_prior_sigma.empty()) {
+    const std::size_t n_blk = p.num_intrinsics_blocks();
+    const std::vector<double>& target = p.intrinsics_prior.empty() ? p.intrinsics : p.intrinsics_prior;
+    std::vector<char> used(n_blk, 0);
+    for (std::size_t k = 0; k < n_obs; ++k) used[static_cast<std::size_t>(p.intrinsics_of_image(static_cast<std::size_t>(p.obs_image[k])))] = 1;
+    r.intrinsics_prior_norm.assign(n_blk, 0.0);
+    r.intrinsics_prior_param.assign(n_blk, -1);
+    for (std::size_t c = 0; c < n_blk; ++c) {
+      const std::uint8_t mask = p.intrinsics_free.empty() ? 0 : p.intrinsics_free[c];
+      if (!used[c] || mask == 0) continue;
+      for (int a = 0; a < np; ++a) {
+        const std::size_t at = static_cast<std::size_t>(np) * c + static_cast<std::size_t>(a);
+        const double sigma = p.intrinsics_prior_sigma[at];
+        if (!(mask & intrinsics_group(p.model, a)) || !std::isfinite(sigma)) continue;
+        const double v = std::isnan(target[at]) ? 0.0 : (p.intrinsics[at] - target[at]) / sigma;
+        r.intrinsics_prior_cost += 0.5 * v * v;
+        if (r.intrinsics_prior_param[c] < 0 || std::abs(v) > r.intrinsics_prior_norm[c]) {
+          r.intrinsics_prior_norm[c] = std::abs(v);
+          r.intrinsics_prior_param[c] = a;
+        }
+      }
+    }
+  }
+
   std::vector<double> W_rel, W_glob;
   prior_whitening(p, o.prior_defaults, W_rel, W_glob);
   auto whitened_norm2 = [](const double* W, const double* res) {

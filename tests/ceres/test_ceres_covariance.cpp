@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -95,6 +96,17 @@ int main() {
     p.intrinsics_free = {jba::kFocal | jba::kDistortion};
     perturb(p, 6);
     compare("free shared intrinsics", p, {});
+  }
+  {
+    // A prior on the free intrinsics (D161): toward values away from the start, and
+    // with one parameter free but without a prior.
+    auto p = jba_test::random_problem(CameraModel::Radial, 10, 200, 14);
+    p.intrinsics_free = {jba::kFocal | jba::kDistortion};
+    jba::set_intrinsics_prior(p, 0.002, std::numeric_limits<double>::infinity(), 0.001);
+    p.intrinsics_prior_sigma[4] = std::numeric_limits<double>::infinity();  // k2 fully free
+    p.intrinsics[0] *= 1.01;
+    perturb(p, 15);
+    compare("free intrinsics with a prior", p, {});
   }
   {
     auto p = jba_test::random_problem(CameraModel::Pinhole, 10, 200, 7);

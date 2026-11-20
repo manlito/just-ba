@@ -61,7 +61,7 @@ if(JBA_BUILD_TESTS)
   add_test(NAME real_captures COMMAND ${Python_EXECUTABLE} -m pytest -q -s ${PROJECT_SOURCE_DIR}/tests/real)
   set_tests_properties(real_captures PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_CURRENT_BINARY_DIR}"
                        LABELS "python;real")
-  # The live demo's pipeline from Python (tests/pipeline, D161): skipped without
+  # The live demo's pipeline from Python (tests/pipeline, D162): skipped without
   # just-keypoints, just-matching, poselib-gpu, Pillow and LightGlue's weights, and on
   # Windows. Minutes on the CPU, so "slow": CI runs it in a job of its own.
   add_test(NAME python_pipeline COMMAND ${Python_EXECUTABLE} -m pytest -q -s ${PROJECT_SOURCE_DIR}/tests/pipeline)
