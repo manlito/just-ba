@@ -45,8 +45,8 @@ ALIKED's). FlexGlue gives the better map. Its weights are not
 served by this site, because the backbone is under Meta's DINOv3 License. You download
 `flexglue.pth` (567 MB) from FlexGlue's release once and give it to the page, which
 checks it, converts it to half precision (284 MB) and keeps it in the browser. LightGlue's
-weights (24 MB) come with the page; it is the default on phones, where FlexGlue is heavy.
-LighterGlue's (4.5 MB) come with the page too.
+weights (24 MB) come with the page, and so do LighterGlue's (4.5 MB), the default on phones,
+where FlexGlue is heavy: XFeat and LighterGlue are the lightest pair.
 
 ```{only} demo
 <p><a href="demo/capture.html"><strong>Open the live capture</strong></a>. On a computer,

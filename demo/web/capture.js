@@ -56,9 +56,11 @@ const MIN_FINISH_MATCHES = 15;
 // FlexGlue's finish from the live map placing fewer than this share of the keyframes is run again from scratch.
 const FINISH_FROM_SCRATCH = 0.8;
 
-// A phone: LightGlue by default (FlexGlue's backbone is ~1 GB of GPU memory and takes ~2 s a
-// frame on a Pixel 9a), a 640 px working image and 1,024 keypoints (ALIKED 140 ms there, a
-// 2-layer LightGlue match 158 ms). 480 px and 768 keypoints save ~80 ms a check but leave
+// A phone: LighterGlue by default, with XFeat keypoints (FlexGlue's backbone is ~1 GB of GPU
+// memory and takes ~2 s a frame on a Pixel 9a; LightGlue was the default before: ALIKED 140 ms
+// there, a 2-layer match 158 ms; XFeat is about a third of ALIKED's time and LighterGlue about
+// half of LightGlue's on an M5 Pro, not yet measured on a phone), a 640 px working image and
+// 1,024 keypoints. 480 px and 768 keypoints save ~80 ms a check but leave
 // the map too few points: on the test video both placed 6 of ~40, so the speed comes from
 // the checks skipped and the overlap anticipated instead.
 const phone = matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820;
@@ -1091,7 +1093,7 @@ async function boot() {
   if (!adapter) missing.push('WebGPU');
   if (!navigator.mediaDevices?.getUserMedia) missing.push('camera access');
   if (!('Worker' in window)) missing.push('workers');
-  document.querySelector(`input[name=matcher][value=${params.get('matcher') ?? (phone ? 'lightglue' : 'flexglue')}]`).checked = true;
+  document.querySelector(`input[name=matcher][value=${params.get('matcher') ?? (phone ? 'lighterglue' : 'flexglue')}]`).checked = true;
   document.querySelector(`input[name=keypoints][value="${params.get('keypoints') ?? (phone ? 1024 : 2048)}"]`).checked = true;
   if (missing.length) {
     const u = $('unsupported');
