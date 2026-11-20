@@ -564,6 +564,7 @@ async function finish() {
   S.finishing = true;
   S.cancelFinish = false;
   setButtons();
+  await keepAwake(true);
   try {
     await S.loopDone;
     stopCamera();
@@ -593,6 +594,7 @@ async function finish() {
   } finally {
     S.finishing = false;
     S.done = true;
+    keepAwake(false);
     for (const k of S.keyframes) { k.feat?.destroy(); k.feat = null; }
     setButtons();
     renderNumbers();
@@ -695,6 +697,7 @@ async function reconstructAgain() {
   S.finishing = true;
   S.cancelFinish = false;
   setButtons();
+  await keepAwake(true);
   try {
     await ensureModules();
     const kind = S.matcherKind, kfs = S.keyframes;
@@ -718,6 +721,7 @@ async function reconstructAgain() {
               e.message !== 'stopped');
   } finally {
     S.finishing = false;
+    keepAwake(false);
     setButtons();
     renderNumbers();
   }
@@ -777,8 +781,17 @@ async function openCamera(deviceId) {
 function stopCamera() {
   S.stream?.getTracks().forEach((t) => t.stop());
   S.stream = null;
-  S.wakeLock?.release().catch(() => {});
-  S.wakeLock = null;
+}
+
+// The screen stays on while the page works (capturing, the finish, Reconstruct again): a
+// phone whose screen sleeps sends the browser to the background, where Android reclaimed
+// its GPU process in the middle of a finish (a Pixel 9a).
+async function keepAwake(on) {
+  if (on && !S.wakeLock) S.wakeLock = await navigator.wakeLock?.request('screen').catch(() => null);
+  if (!on) {
+    S.wakeLock?.release().catch(() => {});
+    S.wakeLock = null;
+  }
 }
 
 // ---- modules and weights
@@ -924,7 +937,7 @@ async function start() {
     // the target and pairs two apart had 4-42 matches; a slightly higher target leaves
     // overlap two back.
     if (phone) S.settings.targetOverlap = 0.6;
-    S.wakeLock = await navigator.wakeLock?.request('screen').catch(() => null);
+    await keepAwake(true);
     S.running = true;
     S.busy = false;
     setStatus('Capturing. Move slowly; Finish when done.');
@@ -988,8 +1001,9 @@ $('remove').addEventListener('click', async () => {
   setStatus('FlexGlue\'s weights were removed from this browser.');
   refreshWeights();
 });
-document.addEventListener('visibilitychange', async () => {
-  if (!document.hidden && S.running && !S.wakeLock) S.wakeLock = await navigator.wakeLock?.request('screen').catch(() => null);
+// A wake lock goes when the page is hidden; it comes back with the page while work goes on.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && (S.running || S.finishing)) { S.wakeLock = null; keepAwake(true); }
 });
 
 // ---- start-up: what this browser can do
