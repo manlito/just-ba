@@ -7,9 +7,11 @@
 // features, or LightGlue's or LighterGlue's of the keypoints), its matches to the last keyframe at the live depth
 // (FlexGlue's layer-0 head), checked against a relative pose on the CPU
 // (demo_pair_inliers), the overlap and support those give, the blur, and the rules. A
-// kept frame is matched to the last few keyframes at the online depth, one pair per
-// camera frame so the camera never waits, and goes to the worker's session; one the
-// map can't place is matched to frames chosen by appearance (FlexGlue's shortlist) and
+// kept frame is matched to the last few keyframes at the online depth and goes to the
+// worker's session. With LightGlue or LighterGlue the worker matches those pairs itself,
+// with a matcher of its own (D159), and the camera's loop never waits for the map. With
+// FlexGlue they are matched here between camera frames, a share of each, and a keyframe
+// the map can't place is matched to frames chosen by appearance (FlexGlue's shortlist) and
 // tried again. Finish matches more pairs (the shortlist over every keyframe) and runs
 // the mapper from the live map.
 //
@@ -42,6 +44,8 @@ const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 3, ...FIXED }, li
 const FINISH = { flexglue: { layers: 3 }, lightglue: { layers: 9 }, lighterglue: { layers: 9 } };
 // LightGlue and LighterGlue match keypoints with their descriptors: ALIKED's, XFeat's.
 const sparse = (kind) => kind === 'lightglue' || kind === 'lighterglue';
+const SPARSE_WEIGHTS = { lightglue: 'jmt/lightglue-aliked-fp16.jmtw', lighterglue: 'jmt/lightglue-xfeat.jmtw' };
+const weightsUrl = (kind) => new URL(SPARSE_WEIGHTS[kind], import.meta.url).href;
 const keypointModel = (kind) => (kind === 'lighterglue' ? 'xfeat' : 'aliked');
 const MATCHER_NAME = { flexglue: 'FlexGlue', lightglue: 'LightGlue', lighterglue: 'LighterGlue' };
 const SEQUENTIAL = 3;            // keyframes each new one is matched to
@@ -340,7 +344,17 @@ async function keep(c, why, shoot) {
     const keepIt = G.hold(anchors.map((k) => k.seq));
     S.held = anchors.filter((_, i) => keepIt[i]);
   }
-  S.jobs.push({ kf, partners, pairs: [], stage: 'match', done: new Set(), tried: new Set(partners.map((p) => p.index)) });
+  if (sparse(S.matcherKind)) {
+    // The worker matches the pairs and places the keyframe (D159); the answer is taken in
+    // between camera frames (onlineStep), in order.
+    const job = { kf, partners: [], pairs: [], stage: 'added' };
+    const sent = (k) => ({ index: k.index, xy: k.xy, desc: k.desc, width: k.w, height: k.h });
+    call('place', { kf: sent(kf), partners: partners.map(sent), options: ONLINE[S.matcherKind], maxMatches: MATCHES_PER_PAIR })
+      .then((r) => { job.answer = r; job.mapMs = r.ms; job.matchMs = r.matchMs; }, (e) => { job.failed = e; });
+    S.jobs.push(job);
+  } else {
+    S.jobs.push({ kf, partners, pairs: [], stage: 'match', done: new Set(), tried: new Set(partners.map((p) => p.index)) });
+  }
   freeFeatures();
   setButtons();
 }
@@ -420,13 +434,15 @@ function wantsAppearance(job) {
 async function takeAnswer(job) {
   const { step, map } = job.answer;
   const again = wantsAppearance(job);
-  job.answer = null;
   if (DEBUG) {
-    const pairs = job.stage === 'added' ? job.pairs : job.morePairs;
-    console.log(`keyframe ${job.kf.index} ${job.stage} in ${job.mapMs.toFixed(0)} ms ` +
+    // The worker's pairs come as [earlier, matches]; the page's as { earlier, matches }.
+    const pairs = job.answer.pairs ?? (job.stage === 'added' ? job.pairs : job.morePairs).map((p) => [p.earlier, p.matches.length / 2]);
+    const matched = job.matchMs != null ? `, its pairs ${job.matchMs.toFixed(0)} ms of it` : '';
+    console.log(`keyframe ${job.kf.index} ${job.stage} in ${job.mapMs.toFixed(0)} ms${matched} ` +
       `(${(performance.now() - job.kf.keptAt).toFixed(0)} ms after it was kept, ${S.jobs.length - 1} more queued): ` +
-      `${step.ok ? '' : step.error + ' '}placed [${step.placed}], pairs ${pairs.map((p) => `${p.earlier}:${p.matches.length / 2}`).join(' ')}`);
+      `${step.ok ? '' : step.error + ' '}placed [${step.placed}], pairs ${pairs.map(([a, n]) => `${a}:${n}`).join(' ')}`);
   }
+  job.answer = null;
   takeMap(step, map, job.mapMs);
   if (again) {
     job.more = await appearancePartners(job);
@@ -476,9 +492,10 @@ function takeMap(step, map, ms) {
   renderNumbers();
 }
 
-// The map's share of each camera frame: more when it falls behind. The desktop app matches
-// the map's pairs on a thread of its own; here they share the GPU module with the camera.
-// Only the GPU's work counts against it: sending a keyframe to the worker and taking its
+// FlexGlue's map: its share of each camera frame, more when it falls behind. The desktop
+// app matches the map's pairs on a thread of its own; FlexGlue's here share the GPU module
+// with the camera (LightGlue's and LighterGlue's are matched in the worker, D159, and
+// this loop only takes the worker's answers in). Only the GPU's work counts against it: sending a keyframe to the worker and taking its
 // answer in go through every frame. On a phone a map pair alone takes ~200 ms: one a frame
 // while the map keeps up, two once more than MAP_BEHIND_JOBS keyframes wait. A keyframe
 // needs three pairs and the camera keeps one every 2-3 frames; at one pair a frame the
@@ -722,6 +739,8 @@ function releaseModules() {
   S.matcher?.destroy?.();
   S.matcher = null;
   S.matcherKind = null;
+  // The worker's too (D159), before its adjustments: its calls run in order.
+  call('dropMatcher').catch(() => {});
 }
 
 // The pairs of keyframes for the finish and Reconstruct again, matched with `kind`, leaving
@@ -910,8 +929,7 @@ async function ensureModules(model = keypointModel(matcherKind())) {
     S.matcher = null;
     let weights;
     if (sparse(kind)) {
-      const file = kind === 'lighterglue' ? 'jmt/lightglue-xfeat.jmtw' : 'jmt/lightglue-aliked-fp16.jmtw';
-      weights = await jmt.fetchWeights(new URL(file, import.meta.url).href, {
+      weights = await jmt.fetchWeights(weightsUrl(kind), {
         onProgress: (got, total) => { setStatus(`${MATCHER_NAME[kind]}'s weights: ${(got / 1e6).toFixed(0)} MB…`); if (total) setProgress(got, total); },
       });
     } else {
@@ -1027,6 +1045,10 @@ async function start() {
       await openCamera();
     }
     await ensureModules();
+    if (sparse(S.matcherKind)) {
+      setStatus('Starting the map\'s matcher…');
+      await call('matcher', { url: weightsUrl(S.matcherKind), precision: S.precision });
+    }
     const [w, h] = workingSize();
     setStatus('Starting the map…');
     const backends = S.backends;

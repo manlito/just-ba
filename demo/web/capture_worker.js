@@ -1,14 +1,24 @@
 // The live capture's map (D157): the demo's module in a worker, holding one
 // demo::Session (D153), so that placing a keyframe, adjusting the window and the finish
-// never hold up the camera's loop on the page. The page posts { id, op, ... } and gets
-// { id, ok, result } back (or { id, ok: false, error }); during a finish it also gets
-// { progress } messages, and { op: 'cancel' } stops the finish at its next report.
+// never hold up the camera's loop on the page. With LightGlue or LighterGlue the map's
+// pairs are matched here too (D159), by a matcher of the worker's own (just-matching, its
+// own GPU device): the page sends a keyframe's keypoints and descriptors and goes on with
+// the camera. FlexGlue's are matched on the page (a second FlexGlue is ~1 GB of GPU memory).
+// The page posts { id, op, ... } and gets { id, ok, result } back (or { id, ok: false, error });
+// during a finish it also gets { progress } messages, and { op: 'cancel' } stops the finish
+// at its next report.
 //
 // Ops:
 //   init { }                               -> { poses: [...], ba: [...] } backends
 //   new { width, height, focal, focalUnknown, window, restartAfter, minPairInliers, poses, ba }
 //   add { xy: Float32Array, pairs: [{ earlier, matches: Int32Array }], deferSplit }  -> step + map
 //   retry { pairs, newPiece }              -> step + map
+//   matcher { url, precision }             -> the worker's matcher, from the weights at url
+//   place { kf, partners, options, maxMatches }  -> step + map, pairs ([earlier, matches]), ms
+//                                            kf and each partner { index, xy, desc, width, height }:
+//                                            kf matched to each partner, the strongest maxMatches
+//                                            kept, then added as `add` does (not deferred)
+//   dropMatcher { }                        -> the worker's matcher and features let go
 //   finish { pairs: [{ a, b, matches }], fromScratch }  -> result with points, tracks, colourObs
 //   reconstruct { width, height, focal, xy: [Float32Array per keyframe], pairs, poses }
 //                                          -> the same, from scratch (Reconstruct again)
@@ -16,9 +26,39 @@
 // A map or a finish's result has its points as a Float32Array (3 per point), tracks as an
 // Int32Array, the finish's colourObs too (an image and a keypoint per point); they are transferred.
 import createDemo from './jba_demo.js';
+import { strongest } from './gates.js';
 
 let M = null;
 let cancel = false;
+
+// The map's matcher (D159): LightGlue's or LighterGlue's, and the features of the latest
+// keyframes, by keyframe index (a Map in the order last used). A partner whose features
+// went is described again from what the page sends.
+const matching = { jmt: null, matcher: null, key: '', feats: new Map() };
+const KEEP_FEATURES = 8;
+
+async function featuresOf(k) {
+  let f = matching.feats.get(k.index);
+  if (f) matching.feats.delete(k.index);
+  else f = await matching.matcher.describeKeypoints({ width: k.width, height: k.height }, k.xy, k.desc);
+  matching.feats.set(k.index, f);
+  return f;
+}
+
+function forgetFeatures(keep = KEEP_FEATURES) {
+  for (const [index, f] of matching.feats) {
+    if (matching.feats.size <= keep) break;
+    f.destroy();
+    matching.feats.delete(index);
+  }
+}
+
+function dropMatcher() {
+  forgetFeatures(0);
+  matching.matcher?.destroy();
+  matching.matcher = null;
+  matching.key = '';
+}
 
 async function module() {
   if (!M) {
@@ -85,6 +125,7 @@ const ops = {
   },
   async new(o) {
     await module();
+    forgetFeatures(0);
     const r = JSON.parse(await M.ccall('demo_session_new', 'string',
       ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'string', 'string'],
       [o.width, o.height, o.focal, o.focalUnknown ? 1 : 0, o.window, o.restartAfter, o.minPairInliers, o.poses, o.ba],
@@ -116,6 +157,38 @@ const ops = {
     } finally {
       a.free();
     }
+  },
+  async matcher({ url, precision }) {
+    const key = `${url}/${precision}`;
+    if (matching.matcher && matching.key === key) return {};
+    dropMatcher();
+    matching.jmt ??= await import(new URL('jmt/jmt.js', import.meta.url).href);
+    const weights = await matching.jmt.fetchWeights(url);
+    matching.matcher = await matching.jmt.create({ weights, precision });
+    matching.key = key;
+    return {};
+  },
+  async place({ kf, partners, options, maxMatches }) {
+    if (!matching.matcher) throw new Error('no matcher in the worker');
+    const t0 = performance.now();
+    const fk = await featuresOf(kf);
+    const pairs = [];
+    for (const p of partners) {
+      const fp = await featuresOf(p);
+      const m = await matching.matcher.match(fp, p.xy, fk, kf.xy, options);
+      pairs.push({ earlier: p.index, matches: strongest(m.matches, m.scores, maxMatches) });
+    }
+    // The newest keyframe stays: the next ones are matched to it.
+    matching.feats.delete(kf.index);
+    matching.feats.set(kf.index, fk);
+    forgetFeatures();
+    const matchMs = performance.now() - t0;
+    const r = await ops.add({ xy: kf.xy, pairs, deferSplit: false });
+    return { ...r, pairs: pairs.map((p) => [p.earlier, p.matches.length / 2]), matchMs, ms: performance.now() - t0 };
+  },
+  async dropMatcher() {
+    dropMatcher();
+    return {};
   },
   async finish({ pairs, fromScratch }) {
     const a = arena();
@@ -153,6 +226,7 @@ const ops = {
     return { bytes: M ? M.HEAPU8.length : 0 };
   },
   async free() {
+    forgetFeatures(0);  // a new session numbers its keyframes from 0 again
     if (M) M._demo_session_free();
     return {};
   },
