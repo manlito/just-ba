@@ -110,8 +110,8 @@ else()
     # D158: images placed from their pair when none sees enough of the map; the scenes still pass.
     add_test(NAME demo_synth_pairs COMMAND jba_demo synth --register-from-pairs)
     # D166: a block per image with autofocus jitter, a calibration 5 % off, the blocks in
-    # one group of the intrinsics prior; the scenes still pass, and grouped the focal
-    # lengths land nearer the truth than refined one by one.
+    # one group of the intrinsics prior: the scenes still pass. demo_groups checks that
+    # the focal lengths land nearer the truth than refined one by one, and the rest.
     add_test(NAME demo_synth_groups COMMAND jba_demo synth --focal-jitter 0.004 --focal-bias 0.05 --groups)
     add_executable(test_demo_groups tests/test_groups.cpp)
     target_link_libraries(test_demo_groups PRIVATE jba_demo_mapper jba_warnings)

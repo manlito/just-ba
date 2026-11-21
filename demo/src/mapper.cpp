@@ -66,6 +66,12 @@ std::string check(const Capture& c) {
     return "prior_sigma needs 2 values per image";
   if (!c.image_size.empty() && c.image_size.size() != 2 * static_cast<std::size_t>(blocks))
     return "image_size needs a width and a height per intrinsics block";
+  if (!c.intrinsics_group.empty()) {
+    if (c.intrinsics_group.size() != static_cast<std::size_t>(blocks))
+      return "intrinsics_group needs one group per intrinsics block";
+    for (std::int32_t g : c.intrinsics_group)
+      if (g < -1 || g >= blocks) return "intrinsics_group holds a group below -1 or beyond the number of blocks";
+  }
   for (const Pair& p : c.pairs) {
     if (p.ka.size() != p.kb.size()) return "a pair has more keypoints on one side than the other";
     if (p.a < 0 || p.b < 0 || p.a == p.b || static_cast<std::size_t>(std::max(p.a, p.b)) >= c.num_images())
@@ -97,6 +103,7 @@ struct Map {
   // carried from one adjustment to the next; empty before the first. Cleared with the
   // intrinsics they belong to.
   std::vector<double> group_target, group_mean;
+  double noise_px = 0.0;  // the keypoints' noise per coordinate, measured by the last grouped adjustment; 0: not yet
   bool aligned = false;                         // in the frame of the position priors (D150)
   int aligned_with = 0;                         // registered images with a prior at the last (re)alignment
   std::size_t n_images() const { return registered.size(); }
@@ -497,13 +504,21 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
       if (free) p.image_fixed.push_back((*free)[i] ? 0 : 1);
     }
   if (o.refine_intrinsics) {
-    // The groups asked for, in each block enough registered images use.
+    // The groups asked for, in each block enough registered images use; a block of an
+    // intrinsics group (D166) when its group has enough, as the group's mean holds it: a
+    // held block would pull the mean toward its given values.
     const std::size_t blocks = p.intrinsics.size() / static_cast<std::size_t>(jba::num_params(p.model));
-    std::vector<int> users(blocks, 0);
+    std::vector<int> users(blocks, 0), group_users(blocks, 0);
     for (std::int32_t i : a.image_of) ++users[static_cast<std::size_t>(m.capture->block(static_cast<std::size_t>(i)))];
+    const std::vector<std::int32_t>& group = m.capture->intrinsics_group;
+    for (std::size_t b = 0; b < group.size(); ++b)
+      if (group[b] >= 0) group_users[static_cast<std::size_t>(group[b])] += users[b];
     p.intrinsics_free.assign(blocks, 0);
-    for (std::size_t b = 0; b < blocks; ++b)
-      if (users[b] >= o.refine_min_images) p.intrinsics_free[b] = o.refine_intrinsics;
+    for (std::size_t b = 0; b < blocks; ++b) {
+      const bool group_enough = !group.empty() && group[b] >= 0 && users[b] > 0 &&
+                                group_users[static_cast<std::size_t>(group[b])] >= o.refine_min_images;
+      if (users[b] >= o.refine_min_images || group_enough) p.intrinsics_free[b] = o.refine_intrinsics;
+    }
   }
   std::vector<std::int64_t> obs_of;  // problem observation -> observation of the map
   for (std::size_t t = 0; t < m.tracks.size(); ++t) {
@@ -531,9 +546,15 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   // target the groups' values when first used, the mean carried between adjustments.
   const bool grouped = o.refine_intrinsics != 0 && !m.capture->intrinsics_group.empty();
   if (grouped) {
-    jba::set_intrinsics_groups(p, m.capture->intrinsics_group, o.group_focal_fraction, o.group_principal_point_sigma,
-                               o.group_distortion_sigma, o.group_target_focal_fraction,
-                               o.group_target_principal_point_sigma, o.group_target_distortion_sigma);
+    // The reprojection residuals are in pixels, not divided by the keypoints' noise, so
+    // the sigmas are divided by it instead: a prior keeps its weight against the data
+    // whatever the noise. The noise is the last adjustment's, measured, or before the
+    // first a guess from the pair threshold (about twice the noise).
+    const double noise = m.noise_px > 0.0 ? m.noise_px : std::max(0.05, 0.5 * o.pair_max_error_px);
+    jba::set_intrinsics_groups(p, m.capture->intrinsics_group, o.group_focal_fraction / noise,
+                               o.group_principal_point_sigma / noise, o.group_distortion_sigma / noise,
+                               o.group_target_focal_fraction / noise, o.group_target_principal_point_sigma / noise,
+                               o.group_target_distortion_sigma / noise);
     if (!p.intrinsics_group.empty()) {
       const std::size_t np = static_cast<std::size_t>(jba::num_params(p.model));
       const std::size_t G = p.num_intrinsics_groups();
@@ -545,7 +566,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
           const std::int32_t g = m.capture->intrinsics_group[b];
           if (g < 0) continue;
           count[static_cast<std::size_t>(g)] += 1.0;
-          for (std::size_t a = 0; a < np; ++a) m.group_target[static_cast<std::size_t>(g) * np + a] += m.cams.intrinsics[b * np + a];
+          for (std::size_t q = 0; q < np; ++q) m.group_target[static_cast<std::size_t>(g) * np + q] += m.cams.intrinsics[b * np + q];
         }
         for (std::size_t at = 0; at < G * np; ++at) m.group_target[at] /= count[at / np];
       }
@@ -554,9 +575,9 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
       for (std::size_t b = 0; b < m.capture->intrinsics_group.size() && b < m.capture->focal_unknown.size(); ++b) {
         const std::int32_t g = m.capture->intrinsics_group[b];
         if (g < 0 || !m.capture->focal_unknown[b]) continue;
-        for (std::size_t a = 0; a < np; ++a)
-          if (jba::intrinsics_group(p.model, static_cast<int>(a)) == jba::kFocal)
-            p.intrinsics_group_prior_sigma[static_cast<std::size_t>(g) * np + a] = INFINITY;
+        for (std::size_t q = 0; q < np; ++q)
+          if (jba::intrinsics_group(p.model, static_cast<int>(q)) == jba::kFocal)
+            p.intrinsics_group_prior_sigma[static_cast<std::size_t>(g) * np + q] = INFINITY;
       }
       p.intrinsics_group_mean = m.group_mean;
     }
@@ -596,7 +617,23 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   for (std::size_t j = 0; j < a.track_of.size(); ++j)
     std::copy(&p.points[3 * j], &p.points[3 * j] + 3, &m.X[3 * static_cast<std::size_t>(a.track_of[j])]);
   m.cams.intrinsics = p.intrinsics;  // refined or as they were
-  if (grouped && !p.intrinsics_group.empty()) m.group_mean = p.intrinsics_group_mean;
+  if (grouped && !p.intrinsics_group.empty()) {
+    m.group_mean = p.intrinsics_group_mean;
+    // Blocks of a group no registered image uses yet start from the group's mean, not
+    // from their given values: PnP places their images with it, and their first
+    // adjustment starts near where it ends.
+    const std::size_t np = static_cast<std::size_t>(jba::num_params(p.model));
+    std::vector<char> used(p.intrinsics.size() / np, 0);
+    for (std::int32_t i : a.image_of) used[static_cast<std::size_t>(m.capture->block(static_cast<std::size_t>(i)))] = 1;
+    for (std::size_t b = 0; b < used.size(); ++b) {
+      const std::int32_t g = m.capture->intrinsics_group[b];
+      if (g < 0 || used[b] || m.group_mean.empty()) continue;
+      for (std::size_t k = 0; k < np; ++k) {
+        const double v = m.group_mean[static_cast<std::size_t>(g) * np + k];
+        if (std::isfinite(v)) m.cams.intrinsics[b * np + k] = v;
+      }
+    }
+  }
 
   so.backend = jba::BackendKind::Cpu;  // the report is the host's
   const jba::ResidualReport rep = jba::evaluate(p, so);
@@ -612,6 +649,18 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
     }
   }
   a.mean_error_px = kept ? sum / static_cast<double>(kept) : 0.0;
+  if (grouped) {
+    // The keypoints' noise per coordinate from the kept errors: their median is 1.1774
+    // standard deviations for a two-dimensional normal error.
+    std::vector<double> e;
+    e.reserve(kept);
+    for (std::size_t k = 0; k < obs_of.size(); ++k)
+      if (m.obs_in[obs_of[k]]) e.push_back(rep.reprojection_error[k]);
+    if (e.size() >= 20) {
+      std::nth_element(e.begin(), e.begin() + static_cast<std::ptrdiff_t>(e.size() / 2), e.end());
+      m.noise_px = std::max(0.05, e[e.size() / 2] / 1.1774);
+    }
+  }
   std::vector<jba::Ray> rays;
   for (int t : a.track_of) {
     rays.clear();
@@ -1061,6 +1110,10 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
   const std::size_t n_img = c.num_images();
   m.registered.assign(n_img, 0);
   run.error = check(c);
+  if (run.ok() && !c.intrinsics_group.empty())
+    for (double v : {o.group_focal_fraction, o.group_principal_point_sigma, o.group_distortion_sigma,
+                     o.group_target_focal_fraction, o.group_target_principal_point_sigma, o.group_target_distortion_sigma})
+      if (!(v > 0.0)) run.error = "the group prior's sigmas must be positive (inf for none)";
   if (!run.ok()) return run;
   if (from) {
     std::size_t placed = 0;
@@ -1227,6 +1280,7 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
   m.cams.intrinsics = start;
   m.group_target.clear();
   m.group_mean.clear();
+  m.noise_px = 0.0;
   m.cams.image_intrinsics = c.image_intrinsics;
   m.cams.poses.assign(7 * n_img, 0.0);
   for (std::size_t i = 0; i < n_img; ++i) m.cams.poses[7 * i] = 1.0;

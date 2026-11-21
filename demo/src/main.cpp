@@ -347,18 +347,22 @@ int synth(const std::vector<std::string>& args) {
                   r.prior_images, mt.images, r.aligned ? "aligned" : "NOT aligned", prior_centre_pct, prior_rot_deg,
                   r.prior_error_horizontal, r.prior_error_vertical, frame.s * prior_sigma);
     if ((so.focal_jitter > 0.0 || focal_bias != 0.0) && r.ok()) {
-      // Per registered image: its block's focal length against the truth's.
+      // Per registered image: its block's focal lengths against the truth's.
       double sq = 0.0, sq_given = 0.0;
       std::size_t n = 0;
       for (std::size_t k = 0; k < r.problem.num_images(); ++k) {
         const std::size_t b = static_cast<std::size_t>(r.problem.intrinsics_of_image(k));
-        const double truth = scene.capture.intrinsics[np * b];
-        sq += std::pow(r.problem.intrinsics[np * b] / truth - 1.0, 2);
-        sq_given += std::pow(start.intrinsics[np * b] / truth - 1.0, 2);
-        ++n;
+        for (int f = 0; f < n_focal; ++f) {
+          const double truth = scene.capture.intrinsics[np * b + static_cast<std::size_t>(f)];
+          sq += std::pow(r.problem.intrinsics[np * b + static_cast<std::size_t>(f)] / truth - 1.0, 2);
+          sq_given += std::pow(start.intrinsics[np * b + static_cast<std::size_t>(f)] / truth - 1.0, 2);
+          ++n;
+        }
       }
+      n /= static_cast<std::size_t>(n_focal);
       std::printf("       focal: per image rms %.4f %% (given %.4f %%) over %zu images%s\n",
-                  100.0 * std::sqrt(sq / static_cast<double>(n)), 100.0 * std::sqrt(sq_given / static_cast<double>(n)), n,
+                  100.0 * std::sqrt(sq / static_cast<double>(n * static_cast<std::size_t>(n_focal))),
+                  100.0 * std::sqrt(sq_given / static_cast<double>(n * static_cast<std::size_t>(n_focal))), n,
                   groups ? ", grouped" : "");
     }
     if (focal_error != 0.0)

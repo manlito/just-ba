@@ -52,7 +52,7 @@ scene's by f times a normal draw, as autofocus leaves them; the mapper is given 
 mean), `--focal-bias f` (the focal lengths given that much too large, not marked as a
 guess), `--groups` (the blocks in one group of the intrinsics prior, D166; with the
 two above it prints the per-image focal error), `--group-sigma tie,target` (the group
-prior's focal sigmas as fractions, inf for none; default 0.01,0.05),
+prior's focal sigmas as fractions at 1 px of noise, inf for none; default 0.01,inf),
 `--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
 `--ba cpu|metal|cuda|webgpu` (the solver's), `--refine none|focal|focal+distortion`
 (the intrinsics the adjustments refine; none by default here), `--export dir`

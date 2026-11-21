@@ -108,18 +108,21 @@ struct MapperOptions {
   int refine_min_images = 1;
   // With Capture::intrinsics_group (D166): in every adjustment that refines intrinsics,
   // each block of a group is tied to the group's mean, focal lengths within
-  // group_focal_fraction of it (focus changes them by about 1 %; on the generated
-  // scenes 1 % did better than 0.5 %, which pulled well observed blocks too far), the principal point
+  // group_focal_fraction of it (focus changes them by about 1 %), the principal point
   // within group_principal_point_sigma pixels, distortion within
-  // group_distortion_sigma; the mean to the group's values as given (after a focal
-  // search), focal lengths within group_target_focal_fraction (a poor calibration is
-  // corrected by the group together), the others by group_target_*_sigma. A group
-  // whose focal length is a guess has no target on it. +inf: no tie, or no target. Only
-  // the groups refine_intrinsics frees are tied.
+  // group_distortion_sigma, all at 1 px of keypoint noise: they are divided by the
+  // noise the last adjustment measured, so the ties weigh the same against the data
+  // at any noise. The mean is free by default; group_target_* tie it to the group's
+  // values as given (after a focal search; a run from a start: the start's), which on
+  // the generated scenes only cost accuracy. A group with a guessed focal length has no
+  // target on it. +inf: no tie, or no target. Only the groups refine_intrinsics frees
+  // are tied, and a block of a group is refined once its group, not the block alone,
+  // has refine_min_images registered images. Blocks of a group no registered image
+  // uses yet take the group's mean after each adjustment.
   double group_focal_fraction = 0.01;
   double group_principal_point_sigma = 1.0;
   double group_distortion_sigma = 0.001;
-  double group_target_focal_fraction = 0.05;
+  double group_target_focal_fraction = INFINITY;
   double group_target_principal_point_sigma = INFINITY;
   double group_target_distortion_sigma = INFINITY;
   // Before anything else, the focal lengths of the blocks marked focal_unknown are
