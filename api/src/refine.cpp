@@ -234,6 +234,19 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
       if (std::isnan(base.intrinsics_prior[a])) base.intrinsics_prior[a] = base.intrinsics[a];
   }
 
+  // The Manhattan term is set up by refine alone (below), so the scene's line axes
+  // and frame are cleared before any solve. Without estimating, the scene's frame
+  // (or the aligned one) is where the segments are assigned (D164).
+  std::vector<double> given_frame;
+  if (o.use_manhattan && !o.estimate_manhattan_frame) {
+    given_frame = base.manhattan_frame.empty() ? aligned_frame(base) : base.manhattan_frame;
+    base.manhattan_frame = given_frame;
+    base.manhattan_dof = o.manhattan.dof;
+    if (auto err = validate(base); !err.empty()) throw std::invalid_argument("refine: invalid Manhattan frame: " + err);
+  }
+  base.line_axis.clear();
+  base.manhattan_frame.clear();
+
   RefineResult out;
   const PoseInitialization init = initialize_poses(base, o.solver.prior_defaults);
   base.poses = init.poses;
@@ -253,8 +266,6 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
 
   // Manhattan prior: assign, test support, and remove heading drift before
   // triangulating. Segments of images left out are never assigned.
-  base.line_axis.clear();
-  base.manhattan_frame.clear();
   auto assign = [&](const double* frame, double angle) {
     ManhattanOptions mo = o.manhattan;
     mo.max_angle_deg = angle;
@@ -269,7 +280,7 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   };
   double line_angle = o.manhattan.max_angle_deg;
   if (o.use_manhattan && base.num_lines() > 0) {
-    out.manhattan = assign(nullptr, line_angle);
+    out.manhattan = assign(given_frame.empty() ? nullptr : given_frame.data(), line_angle);
     if (out.manhattan.accepted && o.prior_solve && have_priors) out.summaries.push_back(solve(base, o.solver));
   }
 

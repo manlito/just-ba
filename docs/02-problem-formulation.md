@@ -519,7 +519,8 @@ The single shared frame used here is the stricter, classical Manhattan form.
   with segments holds only its reference's position (D86).
 - In `refine` (opt-in, `use_manhattan`), segments are assigned after the prior-only
   solve, the priors are solved again with them, then assigned again each round
-  with a tighter angle.
+  with a tighter angle. With `estimate_manhattan_frame` off the first assignment
+  uses the scene's frame, or the aligned one, instead of estimating it (D164).
 - Synthetic results (document 07): heading drift in a room and in two rooms joined
   by a doorway is removed far better than by the images alone; random segments are
   refused; a mixed scene is not made worse.

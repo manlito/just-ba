@@ -67,6 +67,12 @@ struct ManhattanAssignment {
 ManhattanAssignment assign_lines(const Problem& problem, const ManhattanOptions& options,
                                  const double* frame = nullptr);
 
+// The frame of a scene whose working axes are already the building's (D164): axis 2
+// is up (-gravity_world), axis 0 the working axis most nearly horizontal (the lowest
+// index on a tie), made exactly horizontal, and axis 1 completes a right-handed
+// basis. With world y down: e0 = x, e1 = z, e2 = -y; with z up, the identity.
+std::vector<double> aligned_frame(const Problem& problem);
+
 // Stores an assignment in the problem (line_axis, manhattan_frame, manhattan_dof),
 // which turns the Manhattan term on in solve(). A refused assignment clears them.
 void apply_assignment(Problem& problem, const ManhattanAssignment& assignment, int dof);

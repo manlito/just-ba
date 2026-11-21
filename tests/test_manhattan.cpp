@@ -204,6 +204,26 @@ int main() {
     jba::apply_assignment(p, a, 1);
     EXPECT(p.has_manhattan() && jba::validate(p).empty());
   }
+  // The aligned frame (D164): with world y down it is the room's, with z up the identity.
+  {
+    const auto sc = jba_test::make_scene(room(jba_test::LineMode::Manhattan));
+    jba::Problem p = sc.input.scene;
+    auto same_rotation = [](const double* a, const double* b) {
+      const double d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+      return std::abs(std::abs(d) - 1) < 1e-12;
+    };
+    EXPECT(same_rotation(jba::aligned_frame(p).data(), sc.truth_frame));
+    p.gravity_world = {0, 0, -1};
+    const double identity[4] = {1, 0, 0, 0};
+    EXPECT(same_rotation(jba::aligned_frame(p).data(), identity));
+    // Gravity off the axes: axis 2 is still exactly up, so the frame validates with
+    // one degree of freedom.
+    const double gn = std::sqrt(0.1 * 0.1 + 0.99 * 0.99 + 0.05 * 0.05);
+    p.gravity_world = {0.1 / gn, 0.99 / gn, 0.05 / gn};
+    p.manhattan_frame = jba::aligned_frame(p);
+    p.manhattan_dof = 1;
+    EXPECT(jba::validate(p).empty());
+  }
   // Sigma in pixels (D163): the endpoint sigma, floored at line_min_sigma (the sine
   // of an image angle) times the length over sqrt(2).
   {
