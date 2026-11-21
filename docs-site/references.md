@@ -4,6 +4,25 @@ just-ba builds on published methods and on other people's software, and it is
 checked against them. This page credits that work: what the code follows, the data
 the tests run on, and the software the library and this site are made with.
 
+## The direction: bae
+
+Zitong Zhan, Huan Xu, Zihang Fang, Xinpeng Wei, Yaoyu Hu and Chen Wang. "Bundle
+Adjustment in the Eager Mode." *IEEE Transactions on Robotics*, 2026.
+arXiv:2409.12190. <https://github.com/pypose/bae>. Apache 2.0 licence.
+
+bae is built on PyPose: Chen Wang et al. "PyPose: A Library for Robot Learning with
+Physics-based Optimization." CVPR 2023. <https://pypose.org>.
+
+- just-ba exists because bae showed what it should be: fast bundle adjustment on the
+  GPU, as a library you call rather than a stage inside a larger system. The idea is
+  bae's authors'.
+- just-ba is written separately, in C++ with its own kernels, and is much narrower.
+  None of bae's code is used; where the solver follows a published method, it is
+  Ceres's (below).
+- bae's RGB-D refinement example was studied when planning how depth enters the
+  problem; just-ba uses depth at keypoints instead of pixels.
+- bae 0.2 is one of the comparisons in the [benchmarks](_generated/benchmarks.md).
+
 ## Methods the code follows
 
 ### Ceres Solver
@@ -45,13 +64,6 @@ Bill Triggs, Philip McLauchlan, Richard Hartley and Andrew Fitzgibbon. "Bundle
 Adjustment — A Modern Synthesis." *Vision Algorithms: Theory and Practice*, LNCS
 1883, Springer, 2000. The correction for robust losses above comes from this paper,
 by way of Ceres.
-
-### PyPose and `bae`
-
-Chen Wang et al. "PyPose: A Library for Robot Learning with Physics-based
-Optimization." CVPR 2023. <https://pypose.org>. PyPose's bundle adjuster `bae`
-showed the direction this library takes: none of its code is used. `bae` 0.2 is
-one of the comparisons in the benchmarks.
 
 ## Data
 

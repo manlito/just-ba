@@ -8,6 +8,15 @@ and export to COLMAP, checked against Ceres and synthetic ground truth, on the C
 on Apple GPUs (Metal) and NVIDIA GPUs (CUDA, milestone 5: met on Linux, Windows check outstanding).
 The plan is in [docs/](docs/README.md).
 
+> [!IMPORTANT]
+> **Look at [bae](https://github.com/pypose/bae) first.** just-ba follows the direction that bae, "Bundle
+> Adjustment in the Eager Mode" (Zitong Zhan, Huan Xu, Zihang Fang, Xinpeng Wei, Yaoyu Hu and Chen Wang, IEEE
+> T-RO 2026), showed: fast bundle adjustment on the GPU, as a library you call. just-ba is a separate and much
+> narrower implementation, in C++ with hand-written kernels and no PyTorch, for one job (refining a tracker's
+> poses); none of bae's code is used, and its solver follows Ceres Solver, its correctness reference. The idea,
+> and the credit for it, are bae's authors'. For bundle adjustment inside PyTorch, with automatic
+> differentiation and the general problems bae handles, bae is the library to depend on.
+
 ## Build
 
 Needs CMake 3.24 or later and a C++23 compiler. On macOS the Metal backend is built
