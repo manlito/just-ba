@@ -79,8 +79,10 @@ struct Problem {
   // is the target; empty, or NaN, the members' mean as given to solve() (written back
   // for the parameters that got one, as for the block prior). intrinsics_group_mean is
   // the mean, in and out: empty or NaN, the members' mean as given; solve() writes the
-  // estimate back for the parameters that were tied. set_intrinsics_groups (priors.h)
-  // fills them by parameter group.
+  // estimate back for the parameters that were tied, so a later solve or evaluate()
+  // starts from it: clear it (or call set_intrinsics_groups again) after changing the
+  // intrinsics by other means. set_intrinsics_groups (priors.h) fills them by
+  // parameter group.
   std::vector<std::int32_t> intrinsics_group;
   std::vector<double> intrinsics_group_sigma;
   std::vector<double> intrinsics_group_prior;

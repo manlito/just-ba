@@ -417,7 +417,17 @@ int main(int argc, char** argv) {
       for (std::size_t c = 0; c < group.size(); ++c) group[c] = static_cast<std::int32_t>(c % static_cast<std::size_t>(intr_groups));
       jba::set_intrinsics_groups(p, group, group_sigma[0], group_sigma[1], group_sigma[2], group_sigma[3], group_sigma[4],
                                  group_sigma[5]);
-      if (group_at_start) p.intrinsics_group_prior.clear();
+      // The target: the true values (every block is used), unless left to the start.
+      if (!group_at_start && !p.intrinsics_group.empty()) {
+        const auto gn = static_cast<std::size_t>(np);
+        p.intrinsics_group_prior.assign(p.intrinsics_group_sigma.size(), 0.0);
+        std::vector<double> count(p.num_intrinsics_groups(), 0.0);
+        for (std::size_t c = 0; c < group.size(); ++c) {
+          count[static_cast<std::size_t>(group[c])] += 1;
+          for (std::size_t a = 0; a < gn; ++a) p.intrinsics_group_prior[static_cast<std::size_t>(group[c]) * gn + a] += p.intrinsics[c * gn + a];
+        }
+        for (std::size_t at = 0; at < p.intrinsics_group_prior.size(); ++at) p.intrinsics_group_prior[at] /= count[at / gn];
+      }
     }
     if (free_mask != 0) {
       p.intrinsics_free.assign(p.num_intrinsics_blocks(), static_cast<std::uint8_t>(free_mask));

@@ -618,8 +618,9 @@ Candidates for later: FULL_OPENCV, THIN_PRISM_FISHEYE, EUCM.
   block pulls the mean as a constant). A parameter is tied when it is free in a
   member, sigma is finite, and the group has two members or a finite tau; tau = +inf
   leaves the mean free. The mean starts at `intrinsics_group_mean` or the members'
-  mean and is written back; the target defaults to the members' mean as given and is
-  written back too, and `refine()` pins it to the caller's values. A group of one
+  mean and is written back (clear it after changing the intrinsics by other means);
+  the target defaults to the members' mean as given and is written back too, and
+  `refine()` carries both from round to round. A group of one
   with a target is the per-block prior with variance sigma^2 + tau^2. The cost
   counts in the reprojection type. `set_intrinsics_groups(problem, group_of_block,
   focal_fraction, principal_point_sigma, distortion_sigma, group_focal_fraction,

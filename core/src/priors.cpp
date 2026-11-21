@@ -174,26 +174,39 @@ void set_intrinsics_groups(Problem& p, const std::vector<std::int32_t>& group_of
     last = std::max(last, g);
   }
   const auto G = static_cast<std::size_t>(last + 1);
-  // Each group's mean over all its blocks: the target and the scale of focal sigmas.
-  std::vector<double> mean(G * np, 0.0);
-  std::vector<std::size_t> count(G, 0);
+  p.intrinsics_group_prior.clear();
+  p.intrinsics_group_mean.clear();
+  if (G == 0) {  // no block in a group: no groups at all
+    p.intrinsics_group.clear();
+    p.intrinsics_group_sigma.clear();
+    p.intrinsics_group_prior_sigma.clear();
+    return;
+  }
+  // The scale of focal sigmas: each group's mean focal length over its blocks used by
+  // an observation, as the solver's members (an unseen placeholder does not count),
+  // or over all its blocks where none is used yet (observations added later).
+  std::vector<char> used(n_blk, 0);
+  for (auto i : p.obs_image) used[static_cast<std::size_t>(p.intrinsics_of_image(static_cast<std::size_t>(i)))] = 1;
+  std::vector<double> mean(G * np, 0.0), mean_all(G * np, 0.0);
+  std::vector<std::size_t> count(G, 0), count_all(G, 0);
   for (std::size_t c = 0; c < n_blk; ++c) {
     if (group_of_block[c] < 0) continue;
     const auto g = static_cast<std::size_t>(group_of_block[c]);
-    ++count[g];
-    for (std::size_t a = 0; a < np; ++a) mean[g * np + a] += p.intrinsics[c * np + a];
+    ++count_all[g];
+    if (used[c]) ++count[g];
+    for (std::size_t a = 0; a < np; ++a) {
+      mean_all[g * np + a] += p.intrinsics[c * np + a];
+      if (used[c]) mean[g * np + a] += p.intrinsics[c * np + a];
+    }
   }
   p.intrinsics_group = group_of_block;
   p.intrinsics_group_sigma.assign(G * np, std::numeric_limits<double>::infinity());
   p.intrinsics_group_prior_sigma.assign(G * np, std::numeric_limits<double>::infinity());
-  p.intrinsics_group_prior.assign(G * np, std::nan(""));
-  p.intrinsics_group_mean.clear();
   for (std::size_t g = 0; g < G; ++g) {
-    if (count[g] == 0) continue;  // no block: no tie, nothing to fill
+    if (count_all[g] == 0) continue;  // no block: no tie, nothing to fill
     for (std::size_t a = 0; a < np; ++a) {
       const std::size_t at = g * np + a;
-      mean[at] /= static_cast<double>(count[g]);
-      p.intrinsics_group_prior[at] = mean[at];
+      mean[at] = count[g] > 0 ? mean[at] / static_cast<double>(count[g]) : mean_all[at] / static_cast<double>(count_all[g]);
       double& s = p.intrinsics_group_sigma[at];
       double& sg = p.intrinsics_group_prior_sigma[at];
       switch (intrinsics_group(p.model, static_cast<int>(a))) {

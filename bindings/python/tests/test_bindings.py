@@ -204,9 +204,10 @@ def test_intrinsics_groups():
     jba.set_intrinsics_groups(p, [0] * n, 0.002, group_focal_fraction=0.05)
     assert p.num_intrinsics_groups == 1 and p.intrinsics_group.tolist() == [0] * n
     assert p.intrinsics_group_sigma.shape == (1, 4) and np.isinf(p.intrinsics_group_sigma[0, 2:]).all()
-    assert p.intrinsics_group_prior[0, 0] == k[0, 0] and p.intrinsics_group_mean.size == 0
+    assert p.intrinsics_group_prior.size == 0 and p.intrinsics_group_mean.size == 0  # the solve takes both
     s = jba.solve(p, o)
     mean = p.intrinsics_group_mean
+    assert p.intrinsics_group_prior[0, 0] == k[0, 0]  # the members' mean as given, written back
     assert mean.shape == (1, 4) and np.isfinite(mean[0, :2]).all() and np.isnan(mean[0, 2:]).all()
     spread = p.intrinsics[:, 0].std()
     free = start.copy()

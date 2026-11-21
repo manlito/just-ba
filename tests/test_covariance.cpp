@@ -6,12 +6,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <random>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "check.h"
 #include "jba/covariance.h"
 #include "jba/geometry.h"
+#include "jba/priors.h"
+#include "jba/solver.h"
 #include "synthetic.h"
 
 int main() {
@@ -73,5 +78,30 @@ int main() {
   const auto ref = static_cast<std::size_t>(gauge.fixed_images[0]);
   for (int a = 0; a < 6; ++a)
     EXPECT(predicted[6 * ref + static_cast<std::size_t>(a)] == 0 && observed[6 * ref + static_cast<std::size_t>(a)] < 1e-30);
+
+  // A system singular at a group prior's mean (D165: ties so loose their weight
+  // underflows) is refused with the block named, as any other block is.
+  {
+    auto p = truth;
+    const std::vector<double> block = p.intrinsics;
+    p.intrinsics.clear();
+    for (std::size_t i = 0; i < n; ++i) p.intrinsics.insert(p.intrinsics.end(), block.begin(), block.end());
+    p.image_intrinsics.resize(n);
+    for (std::size_t i = 0; i < n; ++i) p.image_intrinsics[i] = static_cast<std::int32_t>(i);
+    p.intrinsics_free.assign(n, jba::kFocal);
+    const double inf = std::numeric_limits<double>::infinity();
+    jba::set_intrinsics_groups(p, std::vector<std::int32_t>(n, 0), inf, inf, inf, inf, inf, inf);
+    p.intrinsics_group_sigma[0] = p.intrinsics_group_sigma[1] = 1e200;
+    jba::SolverOptions o;
+    jba::solve(p, o);
+    std::string what;
+    try {
+      jba::covariance(p, o);
+    } catch (const std::runtime_error& e) {
+      what = e.what();
+    }
+    std::printf("singular at a group's mean: %s\n", what.c_str());
+    EXPECT(what.find("mean of intrinsics group 0") != std::string::npos);
+  }
   return TEST_MAIN_RESULT();
 }

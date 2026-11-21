@@ -37,6 +37,14 @@ void perturb(jba::Problem& p, std::uint64_t seed, double point_sigma = 0.02, dou
   }
 }
 
+// Equal, NaN matching NaN.
+bool same_nan(const std::vector<double>& a, const std::vector<double>& b) {
+  if (a.size() != b.size()) return false;
+  for (std::size_t i = 0; i < a.size(); ++i)
+    if (!(a[i] == b[i] || (std::isnan(a[i]) && std::isnan(b[i])))) return false;
+  return true;
+}
+
 }  // namespace
 
 int main() {
@@ -362,7 +370,7 @@ int main() {
     jba::solve(per_block, o);
     auto grouped = start;
     jba::set_intrinsics_groups(grouped, one_group, 0.005, inf, inf, 0.05, inf, inf);
-    EXPECT(grouped.intrinsics_group_mean.empty() && grouped.intrinsics_group_prior[0] == 1.05 * f0);
+    EXPECT(grouped.intrinsics_group_mean.empty() && grouped.intrinsics_group_prior.empty());
     const auto s_grouped = jba::solve(grouped, o);
     const double mean = grouped.intrinsics_group_mean[0];
     std::printf("intrinsics groups: focal rms free %.5f (weak %.5f), per block %.5f (weak %.5f), grouped %.5f (weak "
@@ -398,7 +406,7 @@ int main() {
     // A second solve starts from the mean it wrote and anchors to the same target.
     auto again = grouped;
     jba::solve(again, o);
-    EXPECT(again.intrinsics_group_prior == grouped.intrinsics_group_prior);
+    EXPECT(same_nan(again.intrinsics_group_prior, grouped.intrinsics_group_prior));
     EXPECT_NEAR(again.intrinsics_group_mean[0], mean, 1e-6 * mean);
 
     // Limits: every sigma +inf builds nothing (the free solve, bit for bit); a group of
@@ -436,6 +444,55 @@ int main() {
       jba::solve(as_block, o);
       std::printf("intrinsics groups: group of one %.9f, block prior %.9f\n", as_group.intrinsics[0], as_block.intrinsics[0]);
       EXPECT_NEAR(as_group.intrinsics[0], as_block.intrinsics[0], 1e-6 * f0);
+    }
+    // A block in the group that no observation uses (a placeholder) does not vote: not
+    // in the helper's focal sigma, the target or the mean, so the solve is the same as
+    // without it, and the block keeps its value.
+    {
+      auto extra = start;
+      extra.intrinsics.insert(extra.intrinsics.end(), block.begin(), block.end());
+      extra.intrinsics[np * static_cast<std::size_t>(n_img)] = 5;
+      extra.intrinsics_free.push_back(jba::kFocal);
+      auto groups_extra = one_group;
+      groups_extra.push_back(0);
+      jba::set_intrinsics_groups(extra, groups_extra, 0.005, inf, inf, 0.05, inf, inf);
+      auto plain = start;
+      jba::set_intrinsics_groups(plain, one_group, 0.005, inf, inf, 0.05, inf, inf);
+      EXPECT(extra.intrinsics_group_sigma == plain.intrinsics_group_sigma &&
+             extra.intrinsics_group_prior_sigma == plain.intrinsics_group_prior_sigma);
+      jba::solve(extra, o);
+      jba::solve(plain, o);
+      EXPECT(std::equal(plain.intrinsics.begin(), plain.intrinsics.end(), extra.intrinsics.begin()));
+      EXPECT(extra.intrinsics[np * static_cast<std::size_t>(n_img)] == 5);
+      EXPECT(same_nan(extra.intrinsics_group_mean, plain.intrinsics_group_mean) &&
+             same_nan(extra.intrinsics_group_prior, plain.intrinsics_group_prior));
+      // No block in a group: no groups, a valid problem.
+      auto none = start;
+      jba::set_intrinsics_groups(none, std::vector<std::int32_t>(static_cast<std::size_t>(n_img), -1), 0.005, inf, inf, 0.05,
+                                 inf, inf);
+      EXPECT(none.intrinsics_group.empty() && none.intrinsics_group_sigma.empty() && jba::validate(none).empty());
+    }
+    // Members freed differently, two groups, and the block prior on top: the solver's
+    // cost by type agrees with evaluate(), and a second solve has nothing left to do.
+    {
+      auto mixed = start;
+      for (int i = 0; i < n_img; ++i)
+        mixed.intrinsics_free[static_cast<std::size_t>(i)] =
+            static_cast<std::uint8_t>(i % 3 == 0 ? jba::kFocal | jba::kDistortion : (i % 3 == 1 ? jba::kDistortion : jba::kFocal));
+      std::vector<std::int32_t> two(static_cast<std::size_t>(n_img));
+      for (int i = 0; i < n_img; ++i) two[static_cast<std::size_t>(i)] = i % 2;
+      jba::set_intrinsics_groups(mixed, two, 0.005, inf, 0.002, 0.05, inf, inf);
+      jba::set_intrinsics_prior(mixed, 0.03, inf, 0.01);
+      const auto s = jba::solve(mixed, o);
+      const auto rep = jba::evaluate(mixed, o);
+      EXPECT_NEAR(s.final_cost_by_type[jba::kLossReprojection],
+                  rep.reprojection_cost + rep.intrinsics_prior_cost + rep.intrinsics_group_cost,
+                  1e-9 * s.final_cost_by_type[jba::kLossReprojection]);
+      EXPECT(rep.intrinsics_group_cost > 0 && rep.intrinsics_prior_cost > 0);
+      auto again2 = mixed;
+      const auto s2 = jba::solve(again2, o);
+      std::printf("intrinsics groups, mixed masks: %d iterations, then %d\n", s.iterations, s2.iterations);
+      EXPECT(s2.iterations <= 1 && std::abs(s2.final_cost - s.final_cost) <= 1e-9 * s.final_cost);
     }
     // A fixed member pulls the mean and its siblings: blocks 0 to 4 held at the truth's
     // mean, the others free and tied tightly, the mean free.

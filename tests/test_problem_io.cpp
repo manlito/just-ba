@@ -125,6 +125,9 @@ int main() {
     p.intrinsics_free = {jba::kFocal, jba::kFocal, 0};
     const double inf = std::numeric_limits<double>::infinity();
     jba::set_intrinsics_groups(p, {0, 0, -1}, 0.005, inf, 0.001, 0.05, inf, inf);
+    EXPECT(p.intrinsics_group_prior.empty() && p.intrinsics_group_mean.empty());
+    jba::write_problem(temp_path("intrinsics_group.jba"), p);  // no target yet: the members' mean
+    p.intrinsics_group_prior = {p.intrinsics[0], std::nan(""), std::nan(""), 0.0};
     EXPECT(p.num_intrinsics_groups() == 1 && p.intrinsics_group_sigma[0] == 0.005 * p.intrinsics[0] &&
            std::isinf(p.intrinsics_group_sigma[1]) && p.intrinsics_group_prior_sigma[0] == 0.05 * p.intrinsics[0]);
     const auto path = temp_path("intrinsics_group.jba");

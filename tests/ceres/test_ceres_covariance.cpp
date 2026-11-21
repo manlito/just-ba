@@ -120,7 +120,7 @@ int main() {
     p.intrinsics_free.assign(5, jba::kFocal | jba::kDistortion);
     const double inf = std::numeric_limits<double>::infinity();
     jba::set_intrinsics_groups(p, {0, 0, 0, 0, 0}, 0.003, inf, 0.001, 0.02, inf, inf);
-    p.intrinsics_group_prior[0] *= 1.01;
+    p.intrinsics_group_prior = {1.01 * block[0], std::nan(""), std::nan(""), std::nan("")};  // away from the start
     perturb(p, 17);
     compare("free intrinsics in a group", p, {});
   }

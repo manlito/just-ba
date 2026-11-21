@@ -245,9 +245,10 @@ NB_MODULE(_core, m) {
         "group_distortion_sigma"_a = std::numeric_limits<double>::infinity(),
         "Hierarchical prior by group of blocks (D165): each block of a group is tied to the group's mean, focal "
         "lengths within focal_fraction of the group's mean focal length, the principal point within "
-        "principal_point_sigma pixels, distortion within distortion_sigma; the mean is tied to the group's current "
-        "mean by the group_* sigmas (inf leaves it free). group_of_block: one group per block, -1 for none. Which "
-        "groups are refined at all is still intrinsics_free.");
+        "principal_point_sigma pixels, distortion within distortion_sigma; the mean is tied to a target by the "
+        "group_* sigmas (inf leaves it free). Target and mean are cleared: the next solve takes both from the "
+        "members' mean (blocks used by an observation) and writes them back. group_of_block: one group per block, "
+        "-1 for none. Which groups are refined at all is still intrinsics_free.");
   m.def(
       "compiled_backends",
       [] {
