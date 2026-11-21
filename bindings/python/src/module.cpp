@@ -429,8 +429,8 @@ NB_MODULE(_core, m) {
       .def_rw("global_rotation_sigma", &jba::PriorDefaults::global_rotation_sigma, "Global priors, rotation, radians (provisional).")
       .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma, "Global priors, position, in the prior set's own units (provisional).")
       .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma, "Gravity priors, radians (provisional).")
-      .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma, "Manhattan segments: endpoint sigma in pixels; the residual's sigma is max(line_min_sigma, sqrt(2) * this / length).")
-      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma, "Smallest sigma of a segment's residual (the sine of an angle).")
+      .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma, "Manhattan segments: endpoint sigma in pixels; the residual (pixels) has sigma max(this, line_min_sigma * length / sqrt(2)).")
+      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma, "Floor on a segment's sigma, as the sine of an image angle (times length / sqrt(2) in pixels).")
       .def_rw("depth_sigma", &jba::PriorDefaults::depth_sigma, "Depth at keypoints: sigma = this + depth_sigma_per_metre * reading, metres.")
       .def_rw("depth_sigma_per_metre", &jba::PriorDefaults::depth_sigma_per_metre, "Metres of depth sigma per metre of reading.")
       .def_rw("depth_scale_sigma", &jba::PriorDefaults::depth_scale_sigma, "Prior on a free depth scale correction toward 1; +inf for none.")
@@ -558,7 +558,7 @@ NB_MODULE(_core, m) {
                    "Per observation: the corrected reading a d + b.", nb::rv_policy::move)
       .def_prop_ro("depth_weight", [](const jba::ResidualReport& r) { return to_numpy(r.depth_weight); }, nb::rv_policy::move)
       .def_prop_ro("line_angle", [](const jba::ResidualReport& r) { return to_numpy(r.line_angle); },
-                   "Per segment: angle by which its axis misses its plane, rad; NaN when not in the term.",
+                   "Per segment: image angle between it and the direction to its axis's vanishing point, rad; NaN when not in the term.",
                    nb::rv_policy::move)
       .def_prop_ro("line_weight", [](const jba::ResidualReport& r) { return to_numpy(r.line_weight); }, nb::rv_policy::move)
       .def_prop_ro("reprojection_error", [](const jba::ResidualReport& r) { return to_numpy(r.reprojection_error); }, nb::rv_policy::move)

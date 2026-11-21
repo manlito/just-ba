@@ -186,17 +186,24 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
   r.line_weight.assign(n_lines, 0.0);
   if (p.has_manhattan()) {
     for (std::size_t k = 0; k < n_lines; ++k) {
-      double n[3];
-      if (p.line_axis[k] < 0 || !line_normal(p, k, n)) continue;
+      if (p.line_axis[k] < 0) continue;
+      const auto i = static_cast<std::size_t>(p.line_image[k]);
+      const double* K = &p.intrinsics[static_cast<std::size_t>(np) * static_cast<std::size_t>(p.intrinsics_of_image(i))];
+      const double* xy = &p.line_xy[4 * k];
+      const double length = std::hypot(xy[2] - xy[0], xy[3] - xy[1]);
+      double uv[4];
+      if (!line_uv(p.model, K, xy, uv)) continue;  // not in the term (system.cpp); validate() refuses length 0
       double axis[3] = {0, 0, 0}, res;
       axis[p.line_axis[k]] = 1;
-      cpu::manhattan_line<double>(&p.poses[7 * static_cast<std::size_t>(p.line_image[k])], n, p.manhattan_frame.data(),
-                                  axis, &res, static_cast<double*>(nullptr), static_cast<double*>(nullptr));
+      double* none = nullptr;
+      cpu::manhattan_line<double>(p.model, &p.poses[7 * i], p.manhattan_frame.data(), axis, uv, uv + 2, K, &res, none,
+                                  none, none);
       const double w = 1 / line_residual_sigma(p, k, o.prior_defaults);
       double rho[3];
       evaluate_loss(o.line_loss, res * res * w * w, rho);
       r.line_cost += 0.5 * rho[0];
-      r.line_angle[k] = std::asin(std::min(1.0, std::abs(res)));
+      // The residual is L sin(alpha) / sqrt(2) in pixels (D163).
+      r.line_angle[k] = std::asin(std::min(1.0, std::sqrt(2.0) * std::abs(res) / length));
       r.line_weight[k] = rho[1];
     }
   }

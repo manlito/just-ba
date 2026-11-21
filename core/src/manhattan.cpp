@@ -81,9 +81,22 @@ double fold90(double a) {
 
 struct Segment {
   double n[3];    // plane normal, working frame
+  double c[3];    // bearing of the midpoint, working frame
   double length;  // pixels
   bool ok;
 };
+
+// Sine of the angle, at the segment's midpoint bearing c, between the segment's
+// great circle (normal n) and the great circle through c and the direction d: the
+// image angle between the segment and the direction towards d's vanishing point, to
+// first order (D163). n . c = 0, so n . (d - (d . c) c) = n . d. A midpoint at the
+// vanishing point itself fits any segment through it.
+double axis_miss(const Segment& s, const double* d) {
+  double x[3];
+  cross3(d, s.c, x);
+  const double dc = norm3(x);
+  return dc > 1e-9 ? std::min(1.0, std::abs(dot3(s.n, d)) / dc) : 0.0;
+}
 
 }  // namespace
 
@@ -101,11 +114,15 @@ bool line_normal(const Problem& p, std::size_t k, double* n) {
   return true;
 }
 
+bool line_uv(CameraModel model, const double* K, const double* xy, double* uv) {
+  return undistort(model, K, xy[0], xy[1], uv) && undistort(model, K, xy[2], xy[3], uv + 2);
+}
+
 double line_residual_sigma(const Problem& p, std::size_t k, const PriorDefaults& d) {
   const double* e = &p.line_xy[4 * k];
   const double length = std::hypot(e[2] - e[0], e[3] - e[1]);
   const double s = p.line_sigma.empty() ? d.line_endpoint_sigma : p.line_sigma[k];
-  return std::max(d.line_min_sigma, std::sqrt(2.0) * s / length);
+  return std::max(s, d.line_min_sigma * length / std::sqrt(2.0));
 }
 
 ManhattanAssignment assign_lines(const Problem& p, const ManhattanOptions& o, const double* frame_in) {
@@ -132,6 +149,17 @@ ManhattanAssignment assign_lines(const Problem& p, const ManhattanOptions& o, co
     const double* q = &p.poses[7 * static_cast<std::size_t>(p.line_image[k])];
     const double qc[4] = {q[0], -q[1], -q[2], -q[3]};
     quat_rotate(qc, nc, s.n);
+    // Midpoint bearing: the normalized sum of the endpoint bearings.
+    const auto i = static_cast<std::size_t>(p.line_image[k]);
+    const double* K = &p.intrinsics[static_cast<std::size_t>(num_params(p.model)) *
+                                    static_cast<std::size_t>(p.intrinsics_of_image(i))];
+    double b0[3], b1[3], mc[3];
+    unproject(p.model, K, e[0], e[1], b0);  // succeeded in line_normal
+    unproject(p.model, K, e[2], e[3], b1);
+    for (int a = 0; a < 3; ++a) mc[a] = b0[a] + b1[a];
+    const double mn = norm3(mc);
+    for (int a = 0; a < 3; ++a) mc[a] /= mn;
+    quat_rotate(qc, mc, s.c);
   }
 
   double g[3];
@@ -189,7 +217,7 @@ ManhattanAssignment assign_lines(const Problem& p, const ManhattanOptions& o, co
     std::vector<double> weight;
     for (std::size_t k = 0; k < L; ++k) {
       const Segment& s = seg[k];
-      if (!s.ok || std::abs(dot3(s.n, v)) < thr) continue;  // along the vertical
+      if (!s.ok || axis_miss(s, v) < thr) continue;  // along the vertical
       double h[3];
       cross3(v, s.n, h);
       const double hn = norm3(h);
@@ -243,7 +271,7 @@ ManhattanAssignment assign_lines(const Problem& p, const ManhattanOptions& o, co
     int fits = 0, axis = -1;
     for (int c = 0; c < 3; ++c) {
       const double d[3] = {R[c], R[3 + c], R[6 + c]};
-      miss[c] = std::abs(dot3(s.n, d));
+      miss[c] = axis_miss(s, d);
       if (miss[c] < thr) {
         ++fits;
         axis = c;

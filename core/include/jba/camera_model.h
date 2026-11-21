@@ -48,5 +48,7 @@ bool project(CameraModel model, const double* intrinsics, const double* p_cam, d
 // distortion iteratively. Returns false if the inversion does not converge (pixel
 // outside the model's valid range).
 bool unproject(CameraModel model, const double* intrinsics, double x, double y, double* bearing);
+// undistort: pixels to normalized coordinates (u, v) = (X / Z, Y / Z), as unproject.
+bool undistort(CameraModel model, const double* intrinsics, double x, double y, double* uv);
 
 }  // namespace jba

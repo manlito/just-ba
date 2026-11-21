@@ -18,8 +18,14 @@ namespace jba {
 // cannot be unprojected or the bearings coincide.
 bool line_normal(const Problem& problem, std::size_t k, double* n);
 
-// Standard deviation of segment k's residual (the sine of an angle): sqrt(2) times
-// its endpoint sigma over its length in pixels, at least defaults.line_min_sigma.
+// Normalized coordinates (u0, v0, u1, v1) of a segment's endpoints xy (x0, y0, x1, y1,
+// pixels) under intrinsics K: the inputs of the line residual (D163). False when an
+// endpoint cannot be undistorted.
+bool line_uv(CameraModel model, const double* K, const double* xy, double* uv);
+
+// Standard deviation of segment k's residual, in pixels (D163): its endpoint sigma,
+// at least defaults.line_min_sigma (the sine of an image angle) times its length in
+// pixels over sqrt(2).
 double line_residual_sigma(const Problem& problem, std::size_t k, const PriorDefaults& defaults);
 
 struct ManhattanOptions {
@@ -27,7 +33,9 @@ struct ManhattanOptions {
   // only the heading of the walls about the vertical is estimated; 3: the whole
   // rotation, the vertical taken as the strongest direction among the segments.
   int dof = 1;
-  double max_angle_deg = 3;      // a segment fits an axis when the axis misses its plane by less
+  // A segment fits an axis when the angle, in the image, between the segment and the
+  // direction towards the axis's vanishing point is below this (D163).
+  double max_angle_deg = 3;
   // Support test: the share of informative horizontal segment length (see
   // ManhattanAssignment::support) the frame must explain, and the fewest segments it
   // must assign. Provisional (D85).

@@ -24,8 +24,9 @@ struct PriorDefaults {
   double global_position_sigma = 0.05;                // the set's own units
   // Gravity priors (provisional, D82).
   double gravity_sigma = 0.01;                        // rad
-  // Manhattan line segments (provisional, D84): sigma = max(line_min_sigma,
-  // sqrt(2) * endpoint sigma / length in pixels), the sine of the angle.
+  // Manhattan line segments (provisional, D84, D163): the residual is in pixels, with
+  // sigma = max(endpoint sigma, line_min_sigma * length in pixels / sqrt(2));
+  // line_min_sigma is a floor on the sine of the image angle.
   double line_endpoint_sigma = 1.0;                   // pixels
   double line_min_sigma = 0.002;
   // Depth at keypoints (provisional, D87): sigma = base + per_metre * reading, metres;

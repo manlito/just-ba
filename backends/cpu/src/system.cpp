@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 
@@ -44,9 +45,6 @@ System::System(const Problem& p, const SolverOptions& o, const Gauge& gauge)
       if (p.line_axis[k] < 0) continue;
       const auto i = static_cast<std::size_t>(p.line_image[k]);
       img_seen[i] = 1;
-      const auto blk = static_cast<std::size_t>(image_block[i]);
-      if (!p.intrinsics_free.empty() && p.intrinsics_free[blk] != 0)
-        throw std::invalid_argument("the Manhattan term needs fixed intrinsics for images with assigned segments");
     }
     std::copy_n(p.manhattan_frame.data(), 4, cur.frame);
   }
@@ -227,7 +225,7 @@ FactorSet System::make_set(FactorKind kind, int rows, std::initializer_list<int>
 }
 
 std::uint8_t System::slot_mask_of(int off, int image) const {
-  if (off < 0) return 0x3f;
+  if (off < 0) return 0xff;  // every column of a block that is not a variable
   return image >= 0 ? pose_fixed_cols[static_cast<std::size_t>(image)] : std::uint8_t(0);
 }
 
@@ -340,15 +338,25 @@ void System::build_factors(const Problem& p, const SolverOptions& o) {
   }
 
   if (frame_dof > 0) {
-    FactorSet line_set = make_set(FactorKind::Line, 1, {6, frame_dof});
+    // Intrinsics are a slot of their own: a segment informs the focal length and the
+    // principal point through its vanishing point (D163). A block is a variable only
+    // when observations use it, so pose-only solves keep it fixed.
+    FactorSet line_set = make_set(FactorKind::Line, 1, {6, frame_dof, np});
     for (std::size_t k = 0; k < p.num_lines(); ++k) {
       if (p.line_axis[k] < 0) continue;
       LineFactor f;
       f.image = p.line_image[k];
       f.axis = p.line_axis[k];
-      if (!line_normal(p, k, f.n)) continue;  // an endpoint outside the camera model
+      f.block = image_block[static_cast<std::size_t>(f.image)];
+      const auto blk = static_cast<std::size_t>(f.block);
+      f.k_free = intr_off[blk] >= 0;
+      std::copy_n(&p.line_xy[4 * k], 4, f.xy);
+      // An endpoint outside the camera model at the start: left out.
+      if (!line_uv(model, &p.intrinsics[static_cast<std::size_t>(np) * blk], f.xy, f.uv)) continue;
       f.w = 1 / line_residual_sigma(p, k, o.prior_defaults);
-      add_factor(line_set, {{pose_off[static_cast<std::size_t>(f.image)], f.image}, {frame_off, -1}}, o.line_loss);
+      add_factor(line_set, {{pose_off[static_cast<std::size_t>(f.image)], f.image}, {frame_off, -1}, {intr_off[blk], -1}},
+                 o.line_loss);
+      if (f.k_free) line_set.slot_mask.back() = static_cast<std::uint8_t>(intr_fixed_cols[blk]);
       lines.push_back(f);
     }
     if (line_set.count > 0) fsets.push_back(std::move(line_set));
@@ -414,10 +422,28 @@ void System::eval_factor(const FactorSet& fs, std::size_t f, const Params& P, do
     }
     case FactorKind::Line: {
       const LineFactor& l = lines[f];
-      double axis[3] = {0, 0, 0}, Jl[6], Jm[3];
+      const double* K = &P.intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(l.block)];
+      double uv_now[4];
+      const double* uv = l.uv;
+      if (l.k_free) {
+        // The intrinsics moved: undistort again. Where an endpoint no longer can be
+        // (the distortion folds back inside the image), the candidate is invalid: a
+        // non-finite cost rejects the step, as Ceres does. Dropping the segment
+        // would lower the cost by its share and reward the step. The current point
+        // always undistorts: it was accepted, or it is the start, where segments that
+        // fail are left out.
+        if (!line_uv(model, K, l.xy, uv_now)) {
+          rw[0] = std::numeric_limits<double>::quiet_NaN();
+          if (J)
+            for (int c = 0; c < fs.cols; ++c) J[c] = 0;
+          return;
+        }
+        uv = uv_now;
+      }
+      double axis[3] = {0, 0, 0}, Jl[6], Jm[3], Jk[kMaxParams];
       axis[l.axis] = 1;
-      manhattan_line<double>(&P.poses[7 * static_cast<std::size_t>(l.image)], l.n, P.frame, axis, rw,
-                             J ? Jl : nullptr, J ? Jm : nullptr);
+      manhattan_line<double>(model, &P.poses[7 * static_cast<std::size_t>(l.image)], P.frame, axis, uv, uv + 2, K, rw,
+                             J ? Jl : nullptr, J ? Jm : nullptr, J && l.k_free ? Jk : nullptr);
       rw[0] *= l.w;
       if (J) {
         for (int c = 0; c < 6; ++c) J[c] = Jl[c] * l.w;
@@ -426,6 +452,8 @@ void System::eval_factor(const FactorSet& fs, std::size_t f, const Params& P, do
         } else {
           J[6] = (Jm[0] * up[0] + Jm[1] * up[1] + Jm[2] * up[2]) * l.w;
         }
+        const int base = fs.slot_base[2];
+        for (int c = 0; c < np; ++c) J[base + c] = l.k_free ? Jk[c] * l.w : 0.0;
       }
       return;
     }

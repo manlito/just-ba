@@ -73,7 +73,8 @@ struct Corrector {
 // cols per factor, row-major, slot s in columns slot_base[s] .. + slot_size[s].
 //
 // Pose priors: 6 rows; slot 0 the pose (0..5), slot 1 the other pose or the set's
-// rigid part (6..11), slot 2 the set's scale (12).
+// rigid part (6..11), slot 2 the set's scale (12). Lines: 1 row; slot 0 the pose,
+// slot 1 the Manhattan frame, slot 2 the image's intrinsics block.
 constexpr int kPriorRows = 6;
 constexpr int kPriorCols = 13;
 // Intrinsics priors (D161): one row per intrinsics parameter, so up to kMaxParams.
@@ -100,11 +101,17 @@ struct GravityPrior {
   double w = 1;  // 1 / sigma
 };
 
+// Manhattan line segment (D163). Its endpoints' normalized coordinates depend on the
+// intrinsics: kept from the start when the block is fixed, recomputed from the
+// pixels at every evaluation when it is a variable.
 struct LineFactor {
   int image = -1;
   int axis = 0;
-  double n[3];   // plane normal, camera axes
-  double w = 1;  // 1 / sigma
+  int block = -1;       // intrinsics block of the image
+  bool k_free = false;  // the block is a variable
+  double xy[4];         // endpoints, pixels
+  double uv[4];         // endpoints, normalized coordinates at the starting intrinsics
+  double w = 1;         // 1 / sigma, 1 / pixels
 };
 
 struct DepthPrior {
