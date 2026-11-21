@@ -725,6 +725,11 @@ NB_MODULE(_core, m) {
       "problem"_a, "options"_a.sig("ManhattanOptions()") = jba::ManhattanOptions{}, "frame"_a = nb::none(),
       "Estimates the Manhattan frame from the segments and current poses, assigns segments to axes, and runs "
       "the support test. With `frame`, assigns to that frame's axes.");
+  m.def(
+      "aligned_frame", [](const jba::Problem& p) { return to_numpy(jba::aligned_frame(p)); }, "problem"_a,
+      "Manhattan frame of a working frame already aligned with the building: axis 2 up (-gravity_world), axes 0 "
+      "and 1 along the most nearly horizontal working axes.",
+      nb::rv_policy::move);
   m.def("apply_assignment", &jba::apply_assignment, "problem"_a, "assignment"_a, "dof"_a = 1,
         "Stores an accepted assignment in the problem (line_axis, manhattan_frame); a refused one clears them.");
 
@@ -740,6 +745,9 @@ NB_MODULE(_core, m) {
       .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only, "Solve only the largest group of connected images; otherwise each in its own frame.")
       .def_rw("use_manhattan", &jba::RefineOptions::use_manhattan,
               "Manhattan prior from scene's line segments; opt-in.")
+      .def_rw("estimate_manhattan_frame", &jba::RefineOptions::estimate_manhattan_frame,
+              "With use_manhattan, estimate the building's axes from the segments. False when the working frame is "
+              "already Manhattan aligned: the frame is scene.manhattan_frame, or aligned_frame() when that is empty.")
       .def_rw("manhattan", &jba::RefineOptions::manhattan, "Options of the Manhattan prior (ManhattanOptions).")
       .def_rw("manhattan_min_angle_deg", &jba::RefineOptions::manhattan_min_angle_deg, "Smallest assignment angle of the segments, degrees (halved each round down to this).")
       .def_rw("min_observations", &jba::RefineOptions::min_observations,

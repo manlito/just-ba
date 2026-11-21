@@ -307,6 +307,32 @@ ManhattanAssignment assign_lines(const Problem& p, const ManhattanOptions& o, co
   return out;
 }
 
+std::vector<double> aligned_frame(const Problem& p) {
+  double g[3], up[3];
+  gravity_direction(p, g);
+  const double gn = norm3(g);
+  for (int a = 0; a < 3; ++a) up[a] = -g[a] / gn;
+  int k = 0;
+  for (int c = 1; c < 3; ++c)
+    if (std::abs(up[c]) < std::abs(up[k])) k = c;
+  double e0[3] = {0, 0, 0}, e1[3];
+  e0[k] = 1;
+  const double along = up[k];
+  for (int a = 0; a < 3; ++a) e0[a] -= along * up[a];
+  const double n0 = norm3(e0);
+  for (int a = 0; a < 3; ++a) e0[a] /= n0;
+  cross3(up, e0, e1);
+  double R[9];
+  for (int r = 0; r < 3; ++r) {
+    R[3 * r] = e0[r];
+    R[3 * r + 1] = e1[r];
+    R[3 * r + 2] = up[r];
+  }
+  std::vector<double> q(4);
+  quat_from_matrix(R, q.data());
+  return q;
+}
+
 void apply_assignment(Problem& p, const ManhattanAssignment& a, int dof) {
   if (!a.accepted) {
     p.line_axis.clear();

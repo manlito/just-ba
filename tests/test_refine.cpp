@@ -6,6 +6,7 @@
 #include <functional>
 #include <cstdio>
 #include <limits>
+#include <stdexcept>
 #include <string>
 
 #include "check.h"
@@ -340,6 +341,27 @@ int main() {
     EXPECT(with.result.manhattan.accepted);
     EXPECT(with.after.median_rotation < 0.7 * plain.after.median_rotation);
     EXPECT(with.after.median_centre < 1.05 * plain.after.median_centre);
+    // A working frame already Manhattan aligned (D164): the frame is not estimated,
+    // the room's walls lie along world x and z, so the aligned frame is the true one.
+    auto given = manhattan({});
+    given.estimate_manhattan_frame = false;
+    const auto aligned = run("room, heading drift, Manhattan, aligned frame", so, given);
+    EXPECT(aligned.result.manhattan.accepted);
+    EXPECT(aligned.after.median_rotation < 0.7 * plain.after.median_rotation);
+    EXPECT(aligned.after.median_rotation < 1.1 * with.after.median_rotation);
+    // A frame given in the scene is used, and checked: with one degree of freedom its
+    // axis 2 must be up.
+    {
+      auto in = jba_test::make_scene(so).input;
+      in.scene.manhattan_frame = {1, 0, 0, 0};
+      bool threw = false;
+      try {
+        jba::refine(in, given);
+      } catch (const std::invalid_argument&) {
+        threw = true;
+      }
+      EXPECT(threw);
+    }
 
     // Two rooms joined by a doorway: the images tie the rooms together weakly.
     so.kind = SceneKind::House;

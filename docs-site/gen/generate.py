@@ -46,7 +46,7 @@ API_GROUPS = [
      ["Backend", "LinearSolver", "backend_available", "compiled_backends", "resolve_linear_solver"]),
     ("Diagnostics and uncertainty", "", ["evaluate", "ResidualReport", "covariance", "Covariance"]),
     ("Manhattan prior", "Line segments assigned to the axes of a Manhattan frame.",
-     ["assign_lines", "apply_assignment", "ManhattanOptions", "ManhattanAssignment"]),
+     ["assign_lines", "aligned_frame", "apply_assignment", "ManhattanOptions", "ManhattanAssignment"]),
     ("Poses and conventions", "Converting tracker poses to the library's.",
      ["poses_from_camera_to_world", "camera_to_world_from_poses", "quat_from_matrix", "matrix_from_quat",
       "camera_centres"]),

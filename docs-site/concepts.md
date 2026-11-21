@@ -63,6 +63,11 @@ The Manhattan prior uses line segments detected in the images (`line_image`,
 `line_xy`): `refine` assigns them to the axes of a Manhattan frame and, when the
 scene supports it, constrains the poses' headings. It is opt-in
 (`RefineOptions.use_manhattan`), since it is wrong where the scene is not Manhattan.
+By default the frame is estimated from the segments. When the working frame is
+already aligned with the building, set `RefineOptions.estimate_manhattan_frame =
+False`: the segments are assigned to the axes of `scene.manhattan_frame`, or of
+`aligned_frame(scene)` (axis 2 up, axes 0 and 1 along the working frame's
+horizontal axes) when that is empty.
 
 ## Depth
 
