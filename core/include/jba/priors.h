@@ -65,4 +65,32 @@ void add_relative_priors_from_poses(Problem& problem, const std::vector<double>&
 void set_intrinsics_prior(Problem& problem, double focal_fraction, double principal_point_sigma,
                           double distortion_sigma);
 
+// The hierarchical intrinsics prior (D165) as the solver builds it, resolved from a
+// problem's fields, for the solver, evaluate() and the Ceres reference alike. [G, P]
+// arrays; a weight of 0 means no residual.
+struct IntrinsicsGroupTerms {
+  std::size_t groups = 0;
+  std::vector<std::uint8_t> member;  // per block: 1 when it is tied to its group's mean
+  std::vector<double> tie_w;         // 1 / sigma of member - mean, 0 where not tied
+  std::vector<double> anchor_w;      // 1 / sigma of mean - target, 0 for none
+  std::vector<double> mean;          // the mean the solve starts from
+  std::vector<double> target;        // the target of the mean
+  bool any() const;
+};
+IntrinsicsGroupTerms intrinsics_group_terms(const Problem& problem);
+
+// Hierarchical prior by group of blocks (D165): intrinsics_group = group_of_block (one
+// entry per block, -1 for none) and, per group, the sigmas of the ties to its mean
+// (focal lengths focal_fraction times the group's mean focal length over its blocks
+// used by an observation, or all its blocks before there are any; the principal point
+// principal_point_sigma pixels, distortion distortion_sigma) and of the mean to its
+// target (group_*: the same units; +inf leaves the mean free). The target and the mean
+// are cleared, so the next solve takes both from its members' mean as given and writes
+// them back. No block in a group clears the groups. Only groups freed in
+// intrinsics_free are refined; the mask stays the caller's.
+void set_intrinsics_groups(Problem& problem, const std::vector<std::int32_t>& group_of_block,
+                           double focal_fraction, double principal_point_sigma, double distortion_sigma,
+                           double group_focal_fraction, double group_principal_point_sigma,
+                           double group_distortion_sigma);
+
 }  // namespace jba

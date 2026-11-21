@@ -109,6 +109,22 @@ int main() {
     compare("free intrinsics with a prior", p, {});
   }
   {
+    // The group prior (D165): five blocks of two images each in one group, focal and
+    // k1 tied to the mean, the mean's focal tied to a target away from the start.
+    auto p = jba_test::random_problem(CameraModel::SimpleRadial, 10, 200, 16);
+    const std::vector<double> block = p.intrinsics;
+    p.intrinsics.clear();
+    for (int c = 0; c < 5; ++c) p.intrinsics.insert(p.intrinsics.end(), block.begin(), block.end());
+    p.image_intrinsics.resize(p.num_images());
+    for (std::size_t i = 0; i < p.num_images(); ++i) p.image_intrinsics[i] = static_cast<std::int32_t>(i / 2);
+    p.intrinsics_free.assign(5, jba::kFocal | jba::kDistortion);
+    const double inf = std::numeric_limits<double>::infinity();
+    jba::set_intrinsics_groups(p, {0, 0, 0, 0, 0}, 0.003, inf, 0.001, 0.02, inf, inf);
+    p.intrinsics_group_prior = {1.01 * block[0], std::nan(""), std::nan(""), std::nan("")};  // away from the start
+    perturb(p, 17);
+    compare("free intrinsics in a group", p, {});
+  }
+  {
     auto p = jba_test::random_problem(CameraModel::Pinhole, 10, 200, 7);
     std::vector<std::int32_t> pairs;
     for (int i = 0; i < 10; ++i) pairs.insert(pairs.end(), {i, (i + 1) % 10});

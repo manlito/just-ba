@@ -517,6 +517,34 @@ ceres::CostFunction* make_intrinsics_prior_cost(const double* target, const doub
 
 namespace {
 
+// The group prior's tie (D165): parameters (intrinsics n, the group's mean n);
+// residual (k - mean) * w per parameter. Linear, so its Jacobians are written out.
+class GroupTieCost : public ceres::CostFunction {
+ public:
+  explicit GroupTieCost(std::vector<double> w) : w_(std::move(w)) {
+    set_num_residuals(static_cast<int>(w_.size()));
+    mutable_parameter_block_sizes()->push_back(static_cast<int>(w_.size()));
+    mutable_parameter_block_sizes()->push_back(static_cast<int>(w_.size()));
+  }
+  bool Evaluate(double const* const* x, double* r, double** J) const override {
+    const std::size_t n = w_.size();
+    for (std::size_t a = 0; a < n; ++a) r[a] = (x[0][a] - x[1][a]) * w_[a];
+    for (int b = 0; b < 2; ++b) {
+      if (!J || !J[b]) continue;
+      std::fill(J[b], J[b] + n * n, 0.0);
+      for (std::size_t a = 0; a < n; ++a) J[b][a * n + a] = b == 0 ? w_[a] : -w_[a];
+    }
+    return true;
+  }
+
+ private:
+  std::vector<double> w_;
+};
+
+}  // namespace
+
+namespace {
+
 template <CameraModel M>
 ceres::CostFunction* make_line(const double* xy, int axis, double inv_sigma) {
   constexpr int np = M == CameraModel::SimplePinhole ? 3
@@ -800,6 +828,47 @@ Result solve(jba::Problem& p, const Options& o) {
     }
     ordering->AddElementToGroup(K, 1);
   }
+  // The group prior (D165), with just-ba's rules (intrinsics_group_terms): a mean
+  // block per group with a tied parameter, its other parameters constant, each member
+  // tied to it and the mean to its target.
+  const jba::IntrinsicsGroupTerms groups = jba::intrinsics_group_terms(p);
+  const auto unp = static_cast<std::size_t>(np);
+  std::vector<double> group_mean(groups.groups * unp, 0.0);
+  std::vector<char> group_built(groups.groups, 0);
+  if (groups.any()) {
+    for (std::size_t g = 0; g < groups.groups; ++g) {
+      double* mu = &group_mean[g * unp];
+      std::vector<int> constant;
+      for (std::size_t a = 0; a < unp; ++a) {
+        if (groups.tie_w[g * unp + a] == 0) constant.push_back(static_cast<int>(a));
+        else mu[a] = groups.mean[g * unp + a];
+      }
+      if (static_cast<int>(constant.size()) == np) continue;
+      group_built[g] = 1;
+      problem.AddParameterBlock(mu, np);
+      if (!constant.empty()) {
+        owned.push_back(std::make_unique<ceres::SubsetManifold>(np, constant));
+        problem.SetManifold(mu, owned.back().get());
+      }
+      std::vector<double> target(unp, 0.0), w(unp, 0.0);
+      bool any = false;
+      for (std::size_t a = 0; a < unp; ++a) {
+        w[a] = groups.anchor_w[g * unp + a];
+        if (w[a] != 0) target[a] = groups.target[g * unp + a];
+        any = any || w[a] != 0;
+      }
+      if (any) problem.AddResidualBlock(make_intrinsics_prior_cost(target.data(), w.data(), np), nullptr, mu);
+      ordering->AddElementToGroup(mu, 1);
+    }
+    for (std::size_t c = 0; c < groups.member.size(); ++c) {
+      if (!groups.member[c]) continue;
+      const auto g = static_cast<std::size_t>(p.intrinsics_group[c]);
+      problem.AddResidualBlock(
+          new GroupTieCost(std::vector<double>(groups.tie_w.begin() + static_cast<std::ptrdiff_t>(g * unp),
+                                               groups.tie_w.begin() + static_cast<std::ptrdiff_t>((g + 1) * unp))),
+          nullptr, &p.intrinsics[c * unp], &group_mean[g * unp]);
+    }
+  }
 
   ceres::Solver::Options opts;
   opts.minimizer_type = ceres::TRUST_REGION;
@@ -901,6 +970,14 @@ Result solve(jba::Problem& p, const Options& o) {
       if (problem.HasParameterBlock(X) && !problem.IsParameterBlockConstant(X))
         cov.GetCovarianceBlock(X, X, &r.point_covariance[9 * q]);
     }
+  }
+  // The group means (D165), written back as just-ba does: the tied parameters.
+  if (groups.any()) {
+    std::vector<double> mean = p.intrinsics_group_mean.empty() ? std::vector<double>(group_mean.size(), std::nan(""))
+                                                               : p.intrinsics_group_mean;
+    for (std::size_t at = 0; at < group_mean.size(); ++at)
+      if (group_built[at / unp] && groups.tie_w[at] != 0) mean[at] = group_mean[at];
+    p.intrinsics_group_mean = std::move(mean);
   }
   if (!o.solve) return r;
   r.initial_cost = summary.initial_cost;

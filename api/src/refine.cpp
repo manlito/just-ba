@@ -233,6 +233,10 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     for (std::size_t a = 0; a < base.intrinsics_prior.size(); ++a)
       if (std::isnan(base.intrinsics_prior[a])) base.intrinsics_prior[a] = base.intrinsics[a];
   }
+  // The group prior's targets (D165) are not pinned here: the first solve that has a
+  // group's members takes the target from their mean as given (the caller's values, a
+  // block being unchanged until it is used) and writes it back, and the rounds carry
+  // it, with the mean, so blocks unseen here do not vote.
 
   // The Manhattan term is set up by refine alone (below), so the scene's line axes
   // and frame are cleared before any solve. Without estimating, the scene's frame
@@ -365,6 +369,8 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     if (out.rejected_observations > 0) out.summaries.push_back(solve(problem, o.solver));
     base.poses = problem.poses;
     base.intrinsics = problem.intrinsics;
+    base.intrinsics_group_mean = problem.intrinsics_group_mean;
+    base.intrinsics_group_prior = problem.intrinsics_group_prior;
     base.set_transform = problem.set_transform;
     base.manhattan_frame = problem.manhattan_frame;
     base.depth_correction = problem.depth_correction;

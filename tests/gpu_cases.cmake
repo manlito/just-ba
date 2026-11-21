@@ -19,6 +19,12 @@ jba_gpu_case(intrinsics_prior "--model RADIAL --free-intrinsics 5 --intrinsics-p
 jba_gpu_case(intrinsics_prior_at_start "--model OPENCV --free-intrinsics 7 --intrinsics-prior 0.001,1,0.0005 --intrinsics-prior-at-start" "")
 jba_gpu_case(intrinsics_prior_per_image "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-prior 0.005,inf,0.002" "--max-centre-diff 0 --max-rotation-diff 0")
 jba_gpu_case(split_intrinsics_prior "--model OPENCV --free-intrinsics 5 --images 16 --points 2500 --intrinsics-prior 0.002,inf,0.001" "")
+jba_gpu_case(intrinsics_group "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-groups 1" "")
+jba_gpu_case(intrinsics_group_two_groups "--model OPENCV --per-image-intrinsics --free-intrinsics 7 --intrinsics-groups 2 --intrinsics-group-sigma 0.003,1,0.0005,0.02,4,inf" "")
+jba_gpu_case(intrinsics_group_free_mean "--model SIMPLE_RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-groups 1 --intrinsics-group-sigma 0.005,inf,0.001,inf,inf,inf" "--max-centre-diff 0 --max-rotation-diff 0")
+# Over 256 members (kGatherThreads): every thread of block_gather takes several of
+# the mean's ties; two poses are held.
+jba_gpu_case(intrinsics_group_many "--model SIMPLE_RADIAL --per-image-intrinsics --free-intrinsics 5 --images 300 --points 3000 --track-length 12 --fix-images 2 --intrinsics-groups 1" "--max-centre-diff 0 --max-rotation-diff 0")
 jba_gpu_case(shared_intrinsics_split "--model SIMPLE_RADIAL --free-intrinsics 5 --images 16 --points 2500" "")
 jba_gpu_case(split_fixed_blocks "--model SIMPLE_RADIAL --free-intrinsics 5 --images 16 --points 2500 --fix-images 2 --fix-points 200" "")
 jba_gpu_case(split_pose_blocks "--model RADIAL --images 3 --points 20000" "")

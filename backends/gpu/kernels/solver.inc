@@ -450,7 +450,8 @@ JBA_FUNC void gather_output(JBA_ARGS_REF a, int mode, JBA_DEVICE const float* x,
                             JBA_THREAD float* acc) {
   const FBlockDesc fb = a.fblocks[b];
   const int n = fb.size;
-  if (mode != 3) {
+  // A group's mean has its factors added by block_gather's threads instead.
+  if (mode != 3 && fb.kind != kIntrinsicsGroup) {
     for (uint e = a.fb_fac_begin[b]; e < a.fb_fac_begin[b + 1]; ++e) {
       const uint2 fs = a.fb_fac[e];
       const Factor F = a.factors[fs.x];
@@ -558,6 +559,30 @@ JBA_KERNEL(block_gather) {
             acc[8 + c] += jd * rd;
           } else {
             acc[c] += jd * rd;
+          }
+        }
+      }
+    }
+  }
+  // A group prior's mean (D165) has no observations and a factor per member: the
+  // threads share its factors as they share a block's observations, rather than one
+  // thread taking them all in gather_output. Other blocks keep their order.
+  if (fb.kind == kIntrinsicsGroup && op.mode != 3 && !(op.mode == 1 && s.done)) {
+    const int n = fb.size;
+    for (uint e = a.fb_fac_begin[b] + i; e < a.fb_fac_begin[b + 1]; e += kGatherThreads) {
+      const uint2 fs = a.fb_fac[e];
+      const Factor F = a.factors[fs.x];
+      const int base = F.base[fs.y];
+      JBA_DEVICE const float* J = a.fJ + F.joff;
+      for (int row = 0; row < F.rows; ++row) {
+        const float m = op.mode == 0 ? a.fr[F.roff + row] : a.fm[F.roff + row];
+        for (int c = 0; c < n; ++c) {
+          const float v = J[row * F.cols + base + c];
+          if (op.mode == 0) {
+            acc[c] += v * v;
+            acc[8 + c] += v * m;
+          } else {
+            acc[c] += v * m;
           }
         }
       }

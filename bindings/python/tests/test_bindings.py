@@ -187,6 +187,43 @@ def test_intrinsics_prior():
     assert bad.validate() != ""
 
 
+def test_intrinsics_groups():
+    # D165: per-image blocks tied to a shared mean; the mean and target written back.
+    start, _, _ = small_problem(seed=9)
+    perturb(start, seed=10)
+    n = start.num_images
+    k = np.repeat(start.intrinsics.reshape(1, -1), n, axis=0)
+    k[:, :2] *= 1.03  # PINHOLE: fx, fy
+    start.intrinsics = k
+    start.image_intrinsics = np.arange(n, dtype=np.int32)
+    start.intrinsics_free = [1] * n  # focal only
+    o = jba.SolverOptions()
+    o.max_iterations = 100
+
+    p = start.copy()
+    jba.set_intrinsics_groups(p, [0] * n, 0.002, group_focal_fraction=0.05)
+    assert p.num_intrinsics_groups == 1 and p.intrinsics_group.tolist() == [0] * n
+    assert p.intrinsics_group_sigma.shape == (1, 4) and np.isinf(p.intrinsics_group_sigma[0, 2:]).all()
+    assert p.intrinsics_group_prior.size == 0 and p.intrinsics_group_mean.size == 0  # the solve takes both
+    s = jba.solve(p, o)
+    mean = p.intrinsics_group_mean
+    assert p.intrinsics_group_prior[0, 0] == k[0, 0]  # the members' mean as given, written back
+    assert mean.shape == (1, 4) and np.isfinite(mean[0, :2]).all() and np.isnan(mean[0, 2:]).all()
+    spread = p.intrinsics[:, 0].std()
+    free = start.copy()
+    jba.solve(free, o)
+    assert spread < free.intrinsics[:, 0].std()
+
+    r = jba.evaluate(p, o)
+    assert r.intrinsics_group_cost > 0 and r.intrinsics_group_norm.shape == (n,)
+    assert r.intrinsics_group_param[0] in (0, 1) and r.intrinsics_group_target_param[0] in (0, 1)
+    assert abs(s.final_cost_by_type["reprojection"] - (r.reprojection_cost + r.intrinsics_group_cost)) < 1e-9 * s.final_cost
+
+    bad = p.copy()
+    bad.intrinsics_group = [1] * n  # no such group
+    assert bad.validate() != ""
+
+
 def test_conventions():
     # An ARKit camera at the origin with the identity transform looks down -z with
     # y up: in library axes that is a rotation by pi about x.

@@ -71,6 +71,7 @@ const kNoSlot: u32 = 0xffffffffu;
 const kPose: i32 = 0;
 const kIntrinsics: i32 = 1;
 const kDepth: i32 = 5;
+const kIntrinsicsGroup: i32 = 6;
 const kNone: i32 = 0;
 const kHuber: i32 = 1;
 const kCauchy: i32 = 2;
@@ -551,7 +552,8 @@ fn gather_output(b: u32, acc_in: array<f32, 16>) {
   var acc = acc_in;
   let fb = fblock(b);
   let n = fb.size;
-  if (op.mode != 3) {
+  // A group's mean has its factors added by block_gather's threads instead.
+  if (op.mode != 3 && fb.kind != kIntrinsicsGroup) {
     for (var e = ldu(a.fb_fac_begin + b); e < ldu(a.fb_fac_begin + b + 1u); e++) {
       var F = factor(ldu(a.fb_fac + 2u * e));
       let base = F.base[ldu(a.fb_fac + 2u * e + 1u)];
@@ -659,6 +661,27 @@ fn block_gather_body(gid: u32, group: u32, lid: u32) {
             acc[8u + c] += jd * rd;
           } else {
             acc[c] += jd * rd;
+          }
+        }
+      }
+    }
+  }
+  // A group prior's mean (D165): the threads share its factors (solver.inc).
+  if (!skip && fb.kind == kIntrinsicsGroup && op.mode != 3) {
+    let n = fb.size;
+    for (var e = ldu(a.fb_fac_begin + b) + i; e < ldu(a.fb_fac_begin + b + 1u); e += kGatherThreads) {
+      var F = factor(ldu(a.fb_fac + 2u * e));
+      let base = F.base[ldu(a.fb_fac + 2u * e + 1u)];
+      let J = at(a.fJ, F.joff);
+      for (var row = 0; row < F.rows; row++) {
+        let m = select(ld(at(a.fm, F.roff + row)), ld(at(a.fr, F.roff + row)), op.mode == 0);
+        for (var c = 0; c < n; c++) {
+          let v = ld(at(J, row * F.cols + base + c));
+          if (op.mode == 0) {
+            acc[c] += v * v;
+            acc[8 + c] += v * m;
+          } else {
+            acc[c] += v * m;
           }
         }
       }

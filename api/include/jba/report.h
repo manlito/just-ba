@@ -29,6 +29,17 @@ struct ResidualReport {
   // without one. Empty without intrinsics_prior_sigma.
   std::vector<double> intrinsics_prior_norm;
   std::vector<int> intrinsics_prior_param;
+  // The group prior (D165), also part of the solver's reprojection entry: the cost of
+  // the ties and the targets; per block tied to its group, the largest |k - mean| /
+  // sigma and its parameter, and per group with a target, the largest |mean - target|
+  // / sigma and its parameter (0 and -1 for none). The mean is
+  // Problem::intrinsics_group_mean, or the members' mean where it has none. Empty
+  // without groups.
+  double intrinsics_group_cost = 0;
+  std::vector<double> intrinsics_group_norm;
+  std::vector<int> intrinsics_group_param;
+  std::vector<double> intrinsics_group_target_norm;
+  std::vector<int> intrinsics_group_target_param;
 
   // Per observation: reprojection error in pixels (not divided by sigma), and
   // whether the point is in front of the camera.

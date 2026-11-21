@@ -600,6 +600,32 @@ Candidates for later: FULL_OPENCV, THIN_PRISM_FISHEYE, EUCM.
     `set_intrinsics_prior(problem, focal_fraction, principal_point_sigma,
     distortion_sigma)` fills the sigmas by group.
 
+  Beside it, or instead, blocks can share a hierarchical prior by group (D165): the
+  blocks of one group (several blocks of one camera, their focal lengths a little
+  apart by autofocus, say) are each tied to a mean `m_g` that the solve estimates,
+  and the mean is tied loosely to a target:
+
+  ```
+  r_ba = (k_ba - m_ga) / sigma_ga          for each member block b of group g
+  r_ga = (m_ga - target_ga) / tau_ga
+  ```
+
+  Both without a robust loss. The ties keep any one block from drifting away from
+  its siblings; the loose target lets the group's data together correct a poor
+  calibration, which a tight per-block prior cannot. `intrinsics_group` gives each
+  block its group (-1 none); sigma, target, tau and the mean are per group and
+  parameter. Members are the blocks used by an observation, free or not (a held
+  block pulls the mean as a constant). A parameter is tied when it is free in a
+  member, sigma is finite, and the group has two members or a finite tau; tau = +inf
+  leaves the mean free. The mean starts at `intrinsics_group_mean` or the members'
+  mean and is written back (clear it after changing the intrinsics by other means);
+  the target defaults to the members' mean as given and is written back too, and
+  `refine()` carries both from round to round. A group of one
+  with a target is the per-block prior with variance sigma^2 + tau^2. The cost
+  counts in the reprojection type. `set_intrinsics_groups(problem, group_of_block,
+  focal_fraction, principal_point_sigma, distortion_sigma, group_focal_fraction,
+  group_principal_point_sigma, group_distortion_sigma)` fills them by group.
+
 ## Gauge
 
 Which global freedoms remain, and how they are removed:

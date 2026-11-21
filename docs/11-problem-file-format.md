@@ -60,6 +60,11 @@ per block for the camera model.
 | `intrinsics.free` | u8 | [B] | no | Bit mask of freed groups: 1 focal length, 2 principal point, 4 distortion. Absent: all fixed (D26) |
 | `intrinsics.prior` | f64 | [B, P] | no | Target of the prior on free intrinsics (D161). Needs `intrinsics.prior_sigma`. Absent, or NaN for a parameter: the intrinsics as given; a solve writes the target it used here for the blocks it regularized |
 | `intrinsics.prior_sigma` | f64 | [B, P] | no | Standard deviation of each parameter's prior, in its units (pixels for focal lengths and the principal point); positive, +inf for none; only freed parameters are regularized. Absent: no prior (D161) |
+| `intrinsics.group` | i32 | [B] | no | Group of each block for the hierarchical prior (D165), -1 for none. Needs `intrinsics.group_sigma`. Absent: no groups |
+| `intrinsics.group_sigma` | f64 | [G, P] | with `intrinsics.group` | Standard deviation of each member's tie to its group's mean, in the parameter's units; positive, +inf for no tie. G is its number of rows |
+| `intrinsics.group_prior` | f64 | [G, P] | no | Target of each group's mean (D165). Needs `intrinsics.group_prior_sigma`. Absent, or NaN: the members' mean as given; a solve writes the target it used here |
+| `intrinsics.group_prior_sigma` | f64 | [G, P] | no | Standard deviation of the mean about its target; positive, +inf for none. Absent: the means are free of any target |
+| `intrinsics.group_mean` | f64 | [G, P] | no | Each group's mean, in and out (D165). Absent, or NaN: the members' mean as given; a solve writes its estimate here for the tied parameters |
 | `image.pose` | f64 | [N, 7] | yes | World to camera: qw, qx, qy, qz, tx, ty, tz. Unit quaternion. Camera axes x right, y down, z forward |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Intrinsics block of each image. Absent: every image uses block 0 |
 | `image.fixed` | u8 | [N] | no | 1 holds the pose fixed. Absent: all free |
@@ -159,7 +164,7 @@ sections). `P` points with a covariance.
 | `result.centre_covariance` | f64 | [N, 3, 3] | Camera centre covariance, working frame |
 | `result.point_covariance.index` | i32 | [P] | Points with a covariance |
 | `result.point_covariance` | f64 | [P, 3, 3] | Their covariances |
-| `result.cost_by_type` | f64 | [6] | Cost by residual type, in the order of `loss.type`; reprojection includes the intrinsics prior (D161) |
+| `result.cost_by_type` | f64 | [6] | Cost by residual type, in the order of `loss.type`; reprojection includes the intrinsics priors (D161, D165) |
 | `result.reprojection_error` | f64 | [K] | Pixels, not divided by sigma |
 | `result.relative_prior_weight`, `result.global_prior_weight`, `result.gravity_weight` | f64 | per prior | Robust weight rho', near 0 for a prior the solve overruled |
 | `result.line_angle` | f64 | [L] | Radians between a segment and the direction to its axis's vanishing point, in the image (D163); NaN when not in the term |

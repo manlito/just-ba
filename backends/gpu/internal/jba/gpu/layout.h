@@ -44,7 +44,7 @@ JBA_CONSTANT_DATA uint kGatherUnit = 16384;   // block_gather: observations per 
 JBA_CONSTANT_DATA uint kNoSlot = 0xffffffffu;  // GatherUnit::slot of a block's only unit
 
 // Equal to cpu::BlockKind and jba::LossType (checked on the host).
-enum BlockKind : int { kPose = 0, kIntrinsics = 1, kSetRigid = 2, kSetScale = 3, kFrame = 4, kDepth = 5 };
+enum BlockKind : int { kPose = 0, kIntrinsics = 1, kSetRigid = 2, kSetScale = 3, kFrame = 4, kDepth = 5, kIntrinsicsGroup = 6 };
 enum LossType : int { kNone = 0, kHuber = 1, kCauchy = 2, kGemanMcClure = 3 };
 
 // Reduction results in State::slot.
