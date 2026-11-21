@@ -36,6 +36,20 @@ jba.set_intrinsics_prior(p, 0.01,            # focal within about 1 %
 jba.solve(p)                                 # writes the target used back to p.intrinsics_prior
 ```
 
+Blocks of one camera can instead share a mean: with `set_intrinsics_groups` each
+block of a group is tied to the group's mean (focal lengths a little apart, as
+autofocus leaves them), and the mean only loosely to the calibration, so a poor
+calibration is corrected by all the group's images together while one image that
+sees little cannot drift off:
+
+```python
+p.intrinsics_free = [1] * p.intrinsics.shape[0]   # focal length of every block
+jba.set_intrinsics_groups(p, [0] * p.intrinsics.shape[0],
+                          0.005,                   # each block within about 0.5 % of the mean
+                          group_focal_fraction=0.05)  # the mean within about 5 % of the calibration
+jba.solve(p)                                      # writes the mean to p.intrinsics_group_mean
+```
+
 ## Pose priors
 
 - **Relative priors** (`rel_images`, `rel_pose`, `rel_sigma`) constrain the motion

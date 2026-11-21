@@ -237,6 +237,17 @@ NB_MODULE(_core, m) {
       .value("SPARSE_SCHUR", jba::LinearSolverType::SparseSchur);
   m.def("backend_available", &jba::backend_available, "kind"_a,
         "Whether this build has the backend and the machine can run it.");
+  m.def("set_intrinsics_groups", &jba::set_intrinsics_groups, "problem"_a, "group_of_block"_a, "focal_fraction"_a,
+        "principal_point_sigma"_a = std::numeric_limits<double>::infinity(),
+        "distortion_sigma"_a = std::numeric_limits<double>::infinity(),
+        "group_focal_fraction"_a = std::numeric_limits<double>::infinity(),
+        "group_principal_point_sigma"_a = std::numeric_limits<double>::infinity(),
+        "group_distortion_sigma"_a = std::numeric_limits<double>::infinity(),
+        "Hierarchical prior by group of blocks (D165): each block of a group is tied to the group's mean, focal "
+        "lengths within focal_fraction of the group's mean focal length, the principal point within "
+        "principal_point_sigma pixels, distortion within distortion_sigma; the mean is tied to the group's current "
+        "mean by the group_* sigmas (inf leaves it free). group_of_block: one group per block, -1 for none. Which "
+        "groups are refined at all is still intrinsics_free.");
   m.def(
       "compiled_backends",
       [] {
@@ -303,6 +314,39 @@ NB_MODULE(_core, m) {
           "Standard deviation of each intrinsics parameter's prior, shaped like intrinsics, in the parameter's units "
           "(pixels for focal lengths and the principal point). A freed group with a finite sigma is regularized, "
           "without one fully free; +inf for none; empty: no prior (D161). See set_intrinsics_prior.")
+      .def_prop_rw(
+          "intrinsics_group_sigma",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_sigma, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_sigma = intrinsics_like(p, h, "intrinsics_group_sigma"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) per group of the hierarchical prior (D165): sigma of each block's tie to its group's mean, in the parameter's units; +inf for no tie. See set_intrinsics_groups.")
+      .def_prop_rw(
+          "intrinsics_group_prior",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_prior, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_prior = intrinsics_like(p, h, "intrinsics_group_prior"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) target of each group's mean (D165); empty or NaN: the members' mean as given to solve(), which writes the target it used back here.")
+      .def_prop_rw(
+          "intrinsics_group_prior_sigma",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_prior_sigma, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_prior_sigma = intrinsics_like(p, h, "intrinsics_group_prior_sigma"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) sigma of each group's mean about its target (D165); +inf or empty: the mean free of any target.")
+      .def_prop_rw(
+          "intrinsics_group_mean",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_mean, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_mean = intrinsics_like(p, h, "intrinsics_group_mean"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) each group's mean (D165), in and out: empty or NaN, the members' mean as given; solve() writes the estimate back for the tied parameters.")
+      .def_prop_ro("num_intrinsics_groups", &jba::Problem::num_intrinsics_groups)
       .def_prop_ro("num_images", &jba::Problem::num_images)
       .def_prop_ro("num_points", &jba::Problem::num_points)
       .def_prop_ro("num_observations", &jba::Problem::num_observations)
@@ -319,6 +363,8 @@ NB_MODULE(_core, m) {
               "Per intrinsics block: bit mask of freed groups (1 focal, 2 principal point, 4 distortion).");
   array_field(problem, "poses", &jba::Problem::poses, {7},
               "(N, 7) world-to-camera poses; quaternions are normalised on the way in.", true);
+  array_field(problem, "intrinsics_group", &jba::Problem::intrinsics_group, {},
+              "Per intrinsics block: its group of the hierarchical prior (D165), -1 for none; empty: no groups.");
   array_field(problem, "image_intrinsics", &jba::Problem::image_intrinsics, {}, "(N,) intrinsics block per image.");
   array_field(problem, "image_fixed", &jba::Problem::image_fixed, {}, "(N,) 1 holds a pose fixed.");
   array_field(problem, "points", &jba::Problem::points, {3}, "(M, 3) world points.");
@@ -552,6 +598,24 @@ NB_MODULE(_core, m) {
                      return to_numpy(std::vector<std::int32_t>(r.intrinsics_prior_param.begin(), r.intrinsics_prior_param.end()));
                    },
                    "Per intrinsics block: the parameter of intrinsics_prior_norm, -1 for none.", nb::rv_policy::move)
+      .def_ro("intrinsics_group_cost", &jba::ResidualReport::intrinsics_group_cost,
+              "The group prior (D165), also part of the solver's reprojection entry.")
+      .def_prop_ro("intrinsics_group_norm", [](const jba::ResidualReport& r) { return to_numpy(r.intrinsics_group_norm); },
+                   "Per intrinsics block: largest abs(k - mean) / sigma over its tied parameters.", nb::rv_policy::move)
+      .def_prop_ro("intrinsics_group_param",
+                   [](const jba::ResidualReport& r) {
+                     return to_numpy(std::vector<std::int32_t>(r.intrinsics_group_param.begin(), r.intrinsics_group_param.end()));
+                   },
+                   "Per intrinsics block: the parameter of intrinsics_group_norm, -1 for none.", nb::rv_policy::move)
+      .def_prop_ro("intrinsics_group_target_norm",
+                   [](const jba::ResidualReport& r) { return to_numpy(r.intrinsics_group_target_norm); },
+                   "Per group: largest abs(mean - target) / sigma over its parameters with a target.", nb::rv_policy::move)
+      .def_prop_ro("intrinsics_group_target_param",
+                   [](const jba::ResidualReport& r) {
+                     return to_numpy(std::vector<std::int32_t>(r.intrinsics_group_target_param.begin(),
+                                                               r.intrinsics_group_target_param.end()));
+                   },
+                   "Per group: the parameter of intrinsics_group_target_norm, -1 for none.", nb::rv_policy::move)
       .def_prop_ro("depth_refined", [](const jba::ResidualReport& r) { return to_numpy(r.depth_refined); },
                    "Per observation: refined depth of its point, NaN without a reading.", nb::rv_policy::move)
       .def_prop_ro("depth_corrected", [](const jba::ResidualReport& r) { return to_numpy(r.depth_corrected); },

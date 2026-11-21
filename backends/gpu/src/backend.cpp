@@ -34,7 +34,8 @@ static_assert(static_cast<int>(LossType::None) == jba_gpu::kNone && static_cast<
               static_cast<int>(LossType::GemanMcClure) == jba_gpu::kGemanMcClure);
 static_assert(static_cast<int>(cpu::BlockKind::Pose) == jba_gpu::kPose &&
               static_cast<int>(cpu::BlockKind::Intrinsics) == jba_gpu::kIntrinsics &&
-              static_cast<int>(cpu::BlockKind::Depth) == jba_gpu::kDepth);
+              static_cast<int>(cpu::BlockKind::Depth) == jba_gpu::kDepth &&
+              static_cast<int>(cpu::BlockKind::IntrinsicsGroup) == jba_gpu::kIntrinsicsGroup);
 
 // A predicted decrease smaller than this share of the sum of its terms' magnitudes
 // cannot be resolved by the single-precision sums that form it.

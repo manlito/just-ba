@@ -63,7 +63,10 @@ bool same(const jba::Problem& a, const jba::Problem& b) {
          same_nan(a.obs_depth, b.obs_depth) && same_nan(a.obs_depth_sigma, b.obs_depth_sigma) &&
          a.depth_kind == b.depth_kind && a.depth_form == b.depth_form && a.depth_correction == b.depth_correction &&
          a.depth_correction_free == b.depth_correction_free && a.intrinsics_prior == b.intrinsics_prior &&
-         a.intrinsics_prior_sigma == b.intrinsics_prior_sigma && extra_same;
+         a.intrinsics_prior_sigma == b.intrinsics_prior_sigma && a.intrinsics_group == b.intrinsics_group &&
+         a.intrinsics_group_sigma == b.intrinsics_group_sigma && same_nan(a.intrinsics_group_prior, b.intrinsics_group_prior) &&
+         a.intrinsics_group_prior_sigma == b.intrinsics_group_prior_sigma &&
+         same_nan(a.intrinsics_group_mean, b.intrinsics_group_mean) && extra_same;
 }
 
 }  // namespace
@@ -110,6 +113,63 @@ int main() {
     EXPECT(!jba::validate(bad).empty());
     bad = p;
     bad.intrinsics_prior[2] = std::nan("");  // NaN: that parameter's starting value
+    EXPECT(jba::validate(bad).empty());
+  }
+
+  // The group prior (D165): every section round-trips, bad ones are refused.
+  {
+    auto p = jba_test::random_problem(jba::CameraModel::SimpleRadial, 4, 15, 5);
+    p.intrinsics.insert(p.intrinsics.end(), p.intrinsics.begin(), p.intrinsics.end());
+    p.intrinsics.insert(p.intrinsics.end(), p.intrinsics.begin(), p.intrinsics.begin() + 4);
+    p.image_intrinsics = {0, 1, 2, 2};
+    p.intrinsics_free = {jba::kFocal, jba::kFocal, 0};
+    const double inf = std::numeric_limits<double>::infinity();
+    jba::set_intrinsics_groups(p, {0, 0, -1}, 0.005, inf, 0.001, 0.05, inf, inf);
+    EXPECT(p.num_intrinsics_groups() == 1 && p.intrinsics_group_sigma[0] == 0.005 * p.intrinsics[0] &&
+           std::isinf(p.intrinsics_group_sigma[1]) && p.intrinsics_group_prior_sigma[0] == 0.05 * p.intrinsics[0]);
+    const auto path = temp_path("intrinsics_group.jba");
+    jba::write_problem(path, p);
+    EXPECT(same(p, jba::read_problem(path)));
+    p.intrinsics_group_mean = {p.intrinsics[0], std::nan(""), std::nan(""), 0.01};
+    jba::write_problem(path, p);
+    EXPECT(same(p, jba::read_problem(path)));
+    fs::remove(path);
+    EXPECT_THROWS(jba::set_intrinsics_groups(p, {0, 0}, 0.005, inf, inf, inf, inf, inf));  // one per block
+    EXPECT_THROWS(jba::set_intrinsics_groups(p, {0, 0, -1}, 0, inf, inf, inf, inf, inf));
+
+    auto bad = p;
+    bad.intrinsics_group.pop_back();
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group[2] = 1;  // no such group
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group[2] = -2;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group_sigma.clear();  // groups without sigma
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group.clear();  // sigma without groups
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group_sigma[0] = 0;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group_prior_sigma[0] = 1e-320;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group_prior_sigma.clear();  // a target without sigma
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group_prior[0] = inf;
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group_mean.push_back(0);
+    EXPECT(!jba::validate(bad).empty());
+    bad = p;
+    bad.intrinsics_group_prior.clear();
+    bad.intrinsics_group_prior_sigma.clear();  // the mean free of any target
     EXPECT(jba::validate(bad).empty());
   }
 

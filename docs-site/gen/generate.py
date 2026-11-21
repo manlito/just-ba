@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "residuals" / "symbolic"))
 API_GROUPS = [
     ("Problems and files", "A problem holds the camera, poses, points, observations and priors.",
      ["Problem", "make_problem", "CameraModel", "num_params", "FrameRelation", "DepthKind", "DepthForm",
-      "DEPTH_SCALE", "DEPTH_OFFSET", "add_relative_priors_from_poses", "set_intrinsics_prior", "read_problem",
+      "DEPTH_SCALE", "DEPTH_OFFSET", "add_relative_priors_from_poses", "set_intrinsics_prior", "set_intrinsics_groups", "read_problem",
       "write_problem", "read_bal",
       "write_result", "export_colmap"]),
     ("Refining a capture", "Keypoints, matches and pose priors in, a refined reconstruction out.",

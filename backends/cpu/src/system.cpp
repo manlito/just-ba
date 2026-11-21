@@ -143,6 +143,27 @@ System::System(const Problem& p, const SolverOptions& o, const Gauge& gauge)
     fblocks.push_back({off, 2, 0, BlockKind::Depth, static_cast<int>(i)});
     off += 2;
   }
+  // The group prior's means (D165): one block per group with a tied parameter, its
+  // other columns held. Nothing without groups, so such problems solve as before.
+  const IntrinsicsGroupTerms groups = intrinsics_group_terms(p);
+  if (groups.any()) {
+    group_off.assign(groups.groups, -1);
+    group_fixed_cols.assign(groups.groups, 0);
+    cur.groups.assign(groups.groups * static_cast<std::size_t>(np), 0.0);
+    for (std::size_t g = 0; g < groups.groups; ++g) {
+      std::uint16_t fixed_cols = 0;
+      for (int a = 0; a < np; ++a) {
+        const std::size_t at = static_cast<std::size_t>(np) * g + static_cast<std::size_t>(a);
+        if (groups.tie_w[at] == 0) fixed_cols |= std::uint16_t(1u << a);
+        else cur.groups[at] = groups.mean[at];
+      }
+      if (fixed_cols == (1u << np) - 1) continue;
+      group_off[g] = off;
+      group_fixed_cols[g] = fixed_cols;
+      fblocks.push_back({off, np, 0, BlockKind::IntrinsicsGroup, static_cast<int>(g)});
+      off += np;
+    }
+  }
   nf = static_cast<std::size_t>(off);
   int pinv = 0;
   for (auto& b : fblocks) {
@@ -337,6 +358,52 @@ void System::build_factors(const Problem& p, const SolverOptions& o) {
     }
   }
 
+  // The group prior (D165): each member tied to its group's mean, the mean tied to its
+  // target where it has one.
+  if (!group_off.empty()) {
+    const IntrinsicsGroupTerms groups = intrinsics_group_terms(p);
+    const std::size_t gsize = groups.groups * static_cast<std::size_t>(np);
+    group_mean_written = p.intrinsics_group_mean.empty() ? std::vector<double>(gsize, std::nan("")) : p.intrinsics_group_mean;
+    group_target_written =
+        p.intrinsics_group_prior.empty() ? std::vector<double>(gsize, std::nan("")) : p.intrinsics_group_prior;
+    FactorSet ties = make_set(FactorKind::GroupTie, np, {np, np});
+    ties.grain = std::size_t(1) << 20;  // inline
+    for (std::size_t c = 0; c < groups.member.size(); ++c) {
+      if (!groups.member[c]) continue;
+      GroupTie f;
+      f.block = static_cast<int>(c);
+      f.group = p.intrinsics_group[c];
+      const auto g = static_cast<std::size_t>(f.group);
+      std::copy_n(&groups.tie_w[static_cast<std::size_t>(np) * g], np, f.w);
+      add_factor(ties, {{intr_off[c], -1}, {group_off[g], -1}}, Loss{});
+      if (intr_off[c] >= 0) ties.slot_mask[ties.slot_mask.size() - 2] = static_cast<std::uint8_t>(intr_fixed_cols[c]);
+      ties.slot_mask.back() = static_cast<std::uint8_t>(group_fixed_cols[g]);
+      group_ties.push_back(f);
+    }
+    FactorSet targets = make_set(FactorKind::GroupTarget, np, {np});
+    targets.grain = std::size_t(1) << 20;
+    for (std::size_t g = 0; g < groups.groups; ++g) {
+      if (group_off[g] < 0) continue;
+      IntrinsicsPrior f;
+      f.block = static_cast<int>(g);
+      bool any = false;
+      for (int a = 0; a < np; ++a) {
+        const std::size_t at = static_cast<std::size_t>(np) * g + static_cast<std::size_t>(a);
+        f.w[a] = groups.anchor_w[at];
+        f.k0[a] = f.w[a] != 0 ? groups.target[at] : 0.0;
+        if (f.w[a] != 0) group_target_written[at] = f.k0[a];
+        any = any || f.w[a] != 0;
+      }
+      if (!any) continue;
+      add_factor(targets, {{group_off[g], -1}}, Loss{});
+      targets.slot_mask.back() = static_cast<std::uint8_t>(group_fixed_cols[g]);
+      group_targets.push_back(f);
+    }
+    if (ties.count > 0) fsets.push_back(std::move(ties));
+    if (targets.count > 0) fsets.push_back(std::move(targets));
+    if (group_targets.empty()) group_target_written.clear();
+  }
+
   if (frame_dof > 0) {
     // Intrinsics are a slot of their own: a segment informs the focal length and the
     // principal point through its vanishing point (D163). A block is a variable only
@@ -414,6 +481,31 @@ void System::eval_factor(const FactorSet& fs, std::size_t f, const Params& P, do
       const IntrinsicsPrior& q = intrinsics_priors[f];
       const double* k = &P.intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(q.block)];
       for (int a = 0; a < np; ++a) rw[a] = (k[a] - q.k0[a]) * q.w[a];
+      if (J) {
+        for (int a = 0; a < np * np; ++a) J[a] = 0;
+        for (int a = 0; a < np; ++a) J[a * np + a] = q.w[a];
+      }
+      return;
+    }
+    case FactorKind::GroupTie: {
+      const GroupTie& t = group_ties[f];
+      const double* k = &P.intr[static_cast<std::size_t>(np) * static_cast<std::size_t>(t.block)];
+      const double* mu = &P.groups[static_cast<std::size_t>(np) * static_cast<std::size_t>(t.group)];
+      for (int a = 0; a < np; ++a) rw[a] = (k[a] - mu[a]) * t.w[a];
+      if (J) {
+        const int cols = 2 * np;
+        for (int a = 0; a < np * cols; ++a) J[a] = 0;
+        for (int a = 0; a < np; ++a) {
+          J[a * cols + a] = t.w[a];
+          J[a * cols + np + a] = -t.w[a];
+        }
+      }
+      return;
+    }
+    case FactorKind::GroupTarget: {
+      const IntrinsicsPrior& q = group_targets[f];
+      const double* mu = &P.groups[static_cast<std::size_t>(np) * static_cast<std::size_t>(q.block)];
+      for (int a = 0; a < np; ++a) rw[a] = (mu[a] - q.k0[a]) * q.w[a];
       if (J) {
         for (int a = 0; a < np * np; ++a) J[a] = 0;
         for (int a = 0; a < np; ++a) J[a * np + a] = q.w[a];
@@ -565,7 +657,9 @@ void System::cost_by_type(double* out) {
         case FactorKind::Gravity: ty = kLossGravity; break;
         case FactorKind::Line: ty = kLossLine; break;
         case FactorKind::DepthPrior: ty = kLossDepth; break;
-        case FactorKind::IntrinsicsPrior: ty = kLossReprojection; break;
+        case FactorKind::IntrinsicsPrior:
+        case FactorKind::GroupTie:
+        case FactorKind::GroupTarget: ty = kLossReprojection; break;
       }
       out[ty] += 0.5 * rho[0];
     }
@@ -732,6 +826,13 @@ double System::retract(const T* dx_f, const T* dx_e) {
         add_difference(k, &cur.intr[at], fb.size);
         break;
       }
+      case BlockKind::IntrinsicsGroup: {
+        const std::size_t at = static_cast<std::size_t>(np) * idx;
+        double* mu = &cand.groups[at];
+        for (int c = 0; c < fb.size; ++c) mu[c] += delta[c];
+        add_difference(mu, &cur.groups[at], fb.size);
+        break;
+      }
       // A set's transform is two blocks, as in the Ceres harness: the rigid part
       // (7 stored values) and the scale (1).
       case BlockKind::SetRigid:
@@ -789,6 +890,7 @@ std::vector<char> System::free_columns() const {
     if (fb.kind == BlockKind::Pose) mask = pose_fixed_cols[static_cast<std::size_t>(fb.index)];
     else if (fb.kind == BlockKind::Intrinsics) mask = intr_fixed_cols[static_cast<std::size_t>(fb.index)];
     else if (fb.kind == BlockKind::Depth) mask = depth_fixed_cols[static_cast<std::size_t>(fb.index)];
+    else if (fb.kind == BlockKind::IntrinsicsGroup) mask = group_fixed_cols[static_cast<std::size_t>(fb.index)];
     for (int c = 0; c < fb.size; ++c)
       if (mask & (1u << c)) free[static_cast<std::size_t>(fb.offset + c)] = 0;
   }
@@ -808,6 +910,7 @@ double System::parameter_norm() const {
       case BlockKind::SetScale: v = &cur.sets[8 * idx + 7]; n = 1; break;
       case BlockKind::Frame: v = cur.frame; n = 4; break;
       case BlockKind::Depth: v = &cur.depth[2 * idx]; n = 2; break;
+      case BlockKind::IntrinsicsGroup: v = &cur.groups[static_cast<std::size_t>(np) * idx]; n = np; break;
     }
     for (int a = 0; a < n; ++a) s += v[a] * v[a];
   }
@@ -829,6 +932,20 @@ void System::write_back(Problem& problem) const {
   if (!problem.depth_correction.empty() || !problem.depth_correction_free.empty())
     problem.depth_correction = cur.depth;
   if (!intr_prior_target.empty()) problem.intrinsics_prior = intr_prior_target;
+  // The group prior (D165): the means of the tied parameters, and the targets used;
+  // other entries keep what they had.
+  if (!group_mean_written.empty()) {
+    std::vector<double> mean = group_mean_written;
+    for (std::size_t g = 0; g < group_off.size(); ++g) {
+      if (group_off[g] < 0) continue;
+      for (int a = 0; a < np; ++a) {
+        const std::size_t at = static_cast<std::size_t>(np) * g + static_cast<std::size_t>(a);
+        if (!(group_fixed_cols[g] & (1u << a))) mean[at] = cur.groups[at];
+      }
+    }
+    problem.intrinsics_group_mean = std::move(mean);
+  }
+  if (!group_target_written.empty()) problem.intrinsics_group_prior = group_target_written;
 }
 
 }  // namespace jba::cpu

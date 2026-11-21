@@ -177,6 +177,11 @@ int main(int argc, char** argv) {
       for (std::size_t a = 0; a < ours.intrinsics.size() && a < ref.intrinsics.size(); ++a)
         intrinsics_diff = std::max(intrinsics_diff, std::abs(ours.intrinsics[a] - ref.intrinsics[a]) /
                                                         std::max(1.0, std::abs(ref.intrinsics[a])));
+      // The group prior's means (D165), where both have one.
+      for (std::size_t a = 0; a < ours.intrinsics_group_mean.size() && a < ref.intrinsics_group_mean.size(); ++a)
+        if (!std::isnan(ref.intrinsics_group_mean[a]))
+          intrinsics_diff = std::max(intrinsics_diff, std::abs(ours.intrinsics_group_mean[a] - ref.intrinsics_group_mean[a]) /
+                                                          std::max(1.0, std::abs(ref.intrinsics_group_mean[a])));
       if (ours.manhattan_frame.size() == 4 && ref.manhattan_frame.size() == 4) {
         const double* q1 = ours.manhattan_frame.data();
         const double* q2 = ref.manhattan_frame.data();

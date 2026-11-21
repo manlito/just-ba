@@ -233,6 +233,23 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     for (std::size_t a = 0; a < base.intrinsics_prior.size(); ++a)
       if (std::isnan(base.intrinsics_prior[a])) base.intrinsics_prior[a] = base.intrinsics[a];
   }
+  // Likewise the group prior's targets (D165): the mean of each group's given blocks.
+  if (!base.intrinsics_group_prior_sigma.empty()) {
+    const auto np = static_cast<std::size_t>(num_params(base.model));
+    const std::size_t G = base.num_intrinsics_groups();
+    if (base.intrinsics_group_prior.empty()) base.intrinsics_group_prior.assign(G * np, std::nan(""));
+    std::vector<double> sum(G * np, 0.0);
+    std::vector<std::size_t> count(G, 0);
+    for (std::size_t c = 0; c < base.intrinsics_group.size(); ++c) {
+      if (base.intrinsics_group[c] < 0) continue;
+      const auto g = static_cast<std::size_t>(base.intrinsics_group[c]);
+      ++count[g];
+      for (std::size_t a = 0; a < np; ++a) sum[g * np + a] += base.intrinsics[c * np + a];
+    }
+    for (std::size_t at = 0; at < G * np; ++at)
+      if (std::isnan(base.intrinsics_group_prior[at]) && count[at / np] > 0)
+        base.intrinsics_group_prior[at] = sum[at] / static_cast<double>(count[at / np]);
+  }
 
   // The Manhattan term is set up by refine alone (below), so the scene's line axes
   // and frame are cleared before any solve. Without estimating, the scene's frame
@@ -365,6 +382,7 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     if (out.rejected_observations > 0) out.summaries.push_back(solve(problem, o.solver));
     base.poses = problem.poses;
     base.intrinsics = problem.intrinsics;
+    base.intrinsics_group_mean = problem.intrinsics_group_mean;
     base.set_transform = problem.set_transform;
     base.manhattan_frame = problem.manhattan_frame;
     base.depth_correction = problem.depth_correction;

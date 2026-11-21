@@ -67,6 +67,36 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
     }
   }
 
+  // The group prior (D165), with the solver's rules (intrinsics_group_terms).
+  if (!p.intrinsics_group.empty()) {
+    const IntrinsicsGroupTerms t = intrinsics_group_terms(p);
+    const auto n = static_cast<std::size_t>(np);
+    r.intrinsics_group_norm.assign(t.member.size(), 0.0);
+    r.intrinsics_group_param.assign(t.member.size(), -1);
+    r.intrinsics_group_target_norm.assign(t.groups, 0.0);
+    r.intrinsics_group_target_param.assign(t.groups, -1);
+    auto add = [&](double v, int a, double& norm, int& param) {
+      r.intrinsics_group_cost += 0.5 * v * v;
+      if (param < 0 || std::abs(v) > norm) {
+        norm = std::abs(v);
+        param = a;
+      }
+    };
+    for (std::size_t c = 0; c < t.member.size(); ++c) {
+      if (!t.member[c]) continue;
+      const auto g = static_cast<std::size_t>(p.intrinsics_group[c]);
+      for (std::size_t a = 0; a < n; ++a)
+        if (t.tie_w[g * n + a] != 0)
+          add((p.intrinsics[c * n + a] - t.mean[g * n + a]) * t.tie_w[g * n + a], static_cast<int>(a),
+              r.intrinsics_group_norm[c], r.intrinsics_group_param[c]);
+    }
+    for (std::size_t g = 0; g < t.groups; ++g)
+      for (std::size_t a = 0; a < n; ++a)
+        if (t.anchor_w[g * n + a] != 0)
+          add((t.mean[g * n + a] - t.target[g * n + a]) * t.anchor_w[g * n + a], static_cast<int>(a),
+              r.intrinsics_group_target_norm[g], r.intrinsics_group_target_param[g]);
+  }
+
   std::vector<double> W_rel, W_glob;
   prior_whitening(p, o.prior_defaults, W_rel, W_glob);
   auto whitened_norm2 = [](const double* W, const double* res) {

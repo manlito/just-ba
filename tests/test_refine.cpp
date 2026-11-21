@@ -221,6 +221,22 @@ int main() {
     EXPECT((f_reg - f0) * (f_free - f0) > 0 && std::abs(f_reg - f0) < std::abs(f_free - f0) &&
            std::abs(f_reg - f0) > sigma);
     EXPECT(reg.summaries.size() >= 3);
+
+    // The group prior (D165) likewise: the target pinned to the given mean, the mean
+    // carried from round to round. One block, so the group has a single member and
+    // needs its target to be built.
+    const double inf = std::numeric_limits<double>::infinity();
+    sc.intrinsics_prior.clear();
+    sc.intrinsics_prior_sigma.clear();
+    jba::set_intrinsics_groups(sc, {0}, 0.0005, inf, inf, 0.0005, inf, inf);
+    sc.intrinsics_group_prior.clear();  // empty: refine pins the given mean
+    const auto grouped = jba::refine(scene.input, ro);
+    std::printf("%-28s focal given %.2f, grouped %.2f, mean %.2f\n", "room, intrinsics groups", f0,
+                grouped.problem.intrinsics[0], grouped.problem.intrinsics_group_mean[0]);
+    EXPECT(grouped.problem.intrinsics_group_prior.size() == given.size() && grouped.problem.intrinsics_group_prior[0] == f0);
+    const double f_grp = grouped.problem.intrinsics[0], mu = grouped.problem.intrinsics_group_mean[0];
+    EXPECT((f_grp - f0) * (f_free - f0) > 0 && std::abs(f_grp - f0) < std::abs(f_free - f0));
+    EXPECT((mu - f0) * (f_grp - f0) > 0 && std::abs(mu - f0) < std::abs(f_grp - f0));  // the mean between
   }
 
   // Global priors from a drift-free source with arbitrary frame and scale,
