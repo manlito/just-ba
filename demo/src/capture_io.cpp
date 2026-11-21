@@ -75,6 +75,10 @@ CaptureFile read_capture(const std::string& path) {
     c.keypoints[i].assign(kp_xy.begin() + 2 * kp_begin[i], kp_xy.begin() + 2 * kp_begin[i + 1]);
   }
   c.image_intrinsics = get<std::int32_t>(s, path, "image.intrinsics", {n_img}, blocks > 1);
+  // Groups of blocks for the hierarchical intrinsics prior (D166).
+  c.intrinsics_group = get<std::int32_t>(s, path, "camera.group", {blocks}, false);
+  for (std::int32_t g : c.intrinsics_group)
+    if (g < -1) fail(path, "camera.group holds a group below -1");
   // Blocks whose focal length is only a guess. Files without the section: a focal length
   // of exactly 1.2 times the larger image side is COLMAP's guess when an image has no
   // focal length in its metadata.
@@ -162,6 +166,7 @@ void write_capture(const std::string& path, const CaptureFile& f) {
   if (!f.image_size.empty()) s.emplace_back("camera.size", make_section(f.image_size, {blocks, 2}));
   if (!c.image_intrinsics.empty()) s.emplace_back("image.intrinsics", make_section(c.image_intrinsics, {n_img}));
   if (!c.focal_unknown.empty()) s.emplace_back("camera.focal_unknown", make_section(c.focal_unknown, {blocks}));
+  if (!c.intrinsics_group.empty()) s.emplace_back("camera.group", make_section(c.intrinsics_group, {blocks}));
   if (!c.prior_position.empty()) s.emplace_back("image.prior_position", make_section(c.prior_position, {n_img, 3}));
   if (!c.prior_sigma.empty()) s.emplace_back("image.prior_sigma", make_section(c.prior_sigma, {n_img, 2}));
   if (!f.names.empty()) {

@@ -14,6 +14,7 @@
 #include "align.h"
 #include "geometry.h"
 #include "jba/camera_model.h"
+#include "jba/priors.h"
 #include "jba/report.h"
 #include "jba/triangulation.h"
 
@@ -92,6 +93,10 @@ struct Map {
   std::vector<char> obs_dead;                   // per observation: moved to a track split off
   std::vector<char> obs_filtered;               // per observation: dropped from its track's point by the filter
   std::vector<std::int64_t> split_tried;        // per track: leftovers at its last failed split
+  // The group prior (D166): its target, the groups' values as given, and its means,
+  // carried from one adjustment to the next; empty before the first. Cleared with the
+  // intrinsics they belong to.
+  std::vector<double> group_target, group_mean;
   bool aligned = false;                         // in the frame of the position priors (D150)
   int aligned_with = 0;                         // registered images with a prior at the last (re)alignment
   std::size_t n_images() const { return registered.size(); }
@@ -522,6 +527,41 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
     }
   }
 
+  // The group prior (D165, D166): ties per group to a mean the solve estimates, its
+  // target the groups' values when first used, the mean carried between adjustments.
+  const bool grouped = o.refine_intrinsics != 0 && !m.capture->intrinsics_group.empty();
+  if (grouped) {
+    jba::set_intrinsics_groups(p, m.capture->intrinsics_group, o.group_focal_fraction, o.group_principal_point_sigma,
+                               o.group_distortion_sigma, o.group_target_focal_fraction,
+                               o.group_target_principal_point_sigma, o.group_target_distortion_sigma);
+    if (!p.intrinsics_group.empty()) {
+      const std::size_t np = static_cast<std::size_t>(jba::num_params(p.model));
+      const std::size_t G = p.num_intrinsics_groups();
+      if (m.group_target.empty()) {
+        // Every block of the capture has images, so all of a group's blocks count.
+        m.group_target.assign(G * np, 0.0);
+        std::vector<double> count(G, 0.0);
+        for (std::size_t b = 0; b < m.capture->intrinsics_group.size(); ++b) {
+          const std::int32_t g = m.capture->intrinsics_group[b];
+          if (g < 0) continue;
+          count[static_cast<std::size_t>(g)] += 1.0;
+          for (std::size_t a = 0; a < np; ++a) m.group_target[static_cast<std::size_t>(g) * np + a] += m.cams.intrinsics[b * np + a];
+        }
+        for (std::size_t at = 0; at < G * np; ++at) m.group_target[at] /= count[at / np];
+      }
+      p.intrinsics_group_prior = m.group_target;
+      // A guessed focal length has nothing to hold the mean to.
+      for (std::size_t b = 0; b < m.capture->intrinsics_group.size() && b < m.capture->focal_unknown.size(); ++b) {
+        const std::int32_t g = m.capture->intrinsics_group[b];
+        if (g < 0 || !m.capture->focal_unknown[b]) continue;
+        for (std::size_t a = 0; a < np; ++a)
+          if (jba::intrinsics_group(p.model, static_cast<int>(a)) == jba::kFocal)
+            p.intrinsics_group_prior_sigma[static_cast<std::size_t>(g) * np + a] = INFINITY;
+      }
+      p.intrinsics_group_mean = m.group_mean;
+    }
+  }
+
   // Position priors once the map is in their frame (D150): the camera centre only (the
   // rotation rows of the whitening are zero), in the working frame, so nothing else
   // holds the gauge.
@@ -556,6 +596,7 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   for (std::size_t j = 0; j < a.track_of.size(); ++j)
     std::copy(&p.points[3 * j], &p.points[3 * j] + 3, &m.X[3 * static_cast<std::size_t>(a.track_of[j])]);
   m.cams.intrinsics = p.intrinsics;  // refined or as they were
+  if (grouped && !p.intrinsics_group.empty()) m.group_mean = p.intrinsics_group_mean;
 
   so.backend = jba::BackendKind::Cpu;  // the report is the host's
   const jba::ResidualReport rep = jba::evaluate(p, so);
@@ -592,6 +633,11 @@ Adjusted adjust(Map& m, const MapperOptions& o, int max_iterations, const jba::I
   kept_problem.model = p.model;
   kept_problem.intrinsics = p.intrinsics;
   kept_problem.intrinsics_free = p.intrinsics_free;
+  kept_problem.intrinsics_group = p.intrinsics_group;
+  kept_problem.intrinsics_group_sigma = p.intrinsics_group_sigma;
+  kept_problem.intrinsics_group_prior = p.intrinsics_group_prior;
+  kept_problem.intrinsics_group_prior_sigma = p.intrinsics_group_prior_sigma;
+  kept_problem.intrinsics_group_mean = p.intrinsics_group_mean;
   kept_problem.poses = p.poses;
   kept_problem.image_intrinsics = p.image_intrinsics;
   kept_problem.image_fixed = p.image_fixed;
@@ -1179,6 +1225,8 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
   m.split_tried.assign(m.tracks.size(), 0);
   m.cams.model = c.model;
   m.cams.intrinsics = start;
+  m.group_target.clear();
+  m.group_mean.clear();
   m.cams.image_intrinsics = c.image_intrinsics;
   m.cams.poses.assign(7 * n_img, 0.0);
   for (std::size_t i = 0; i < n_img; ++i) m.cams.poses[7 * i] = 1.0;
@@ -1989,6 +2037,8 @@ struct Session::State {
     start_floor = floor_used;
     focal_factor = factor;
     m.cams.intrinsics = intr;
+    m.group_target.clear();  // the searched values are the ones given
+    m.group_mean.clear();
     jba::TrackStats stats;
     m.tracks = components(m.keypoints, verified_of(c, pair_inliers, pair_kept, 0), stats);
     set_tracks(m, track_lists_fresh(m.tracks));

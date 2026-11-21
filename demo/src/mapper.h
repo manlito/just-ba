@@ -47,6 +47,11 @@ struct Capture {
   // Per block: its images' width and height in pixels (the capture file's camera.size);
   // empty: unknown, and MapperOptions::min_pair_coverage does not apply (D151).
   std::vector<std::int32_t> image_size;
+  // Per block: its group for the hierarchical intrinsics prior (D165, D166), -1 for none;
+  // empty: no groups. Blocks of one camera whose focal lengths differ a little (one
+  // block per focal value, autofocus) are refined each, tied to their group's mean,
+  // the mean tied loosely to the capture's values (MapperOptions::group_*).
+  std::vector<std::int32_t> intrinsics_group;
   std::size_t num_images() const { return keypoints.size(); }
   std::int32_t block(std::size_t image) const { return image_intrinsics.empty() ? 0 : image_intrinsics[image]; }
   bool has_prior(std::size_t image) const {
@@ -101,6 +106,22 @@ struct MapperOptions {
   // images use it; the refined values then serve triangulation and PnP too.
   std::uint8_t refine_intrinsics = 0;
   int refine_min_images = 1;
+  // With Capture::intrinsics_group (D166): in every adjustment that refines intrinsics,
+  // each block of a group is tied to the group's mean, focal lengths within
+  // group_focal_fraction of it (focus changes them by about 1 %; on the generated
+  // scenes 1 % did better than 0.5 %, which pulled well observed blocks too far), the principal point
+  // within group_principal_point_sigma pixels, distortion within
+  // group_distortion_sigma; the mean to the group's values as given (after a focal
+  // search), focal lengths within group_target_focal_fraction (a poor calibration is
+  // corrected by the group together), the others by group_target_*_sigma. A group
+  // whose focal length is a guess has no target on it. +inf: no tie, or no target. Only
+  // the groups refine_intrinsics frees are tied.
+  double group_focal_fraction = 0.01;
+  double group_principal_point_sigma = 1.0;
+  double group_distortion_sigma = 0.001;
+  double group_target_focal_fraction = 0.05;
+  double group_target_principal_point_sigma = INFINITY;
+  double group_target_distortion_sigma = INFINITY;
   // Before anything else, the focal lengths of the blocks marked focal_unknown are
   // searched for: the pairs are verified under focal lengths from a quarter to four
   // times the guess (61 steps of 4.7 %), all in one poselib-gpu call, and the factor

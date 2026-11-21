@@ -53,6 +53,20 @@ void set_camera(Scene& s, Rng& rng, jba::CameraModel model, double focal_over_wi
 // the scene has normals) is detected with probability 0.85, at its projection plus noise.
 void observe(Scene& s, Rng& rng, const SceneOptions& o, const std::vector<double>& normals, double max_view_deg) {
   const std::size_t n_img = s.poses.size() / 7, n_pts = s.points.size() / 3;
+  if (o.focal_jitter > 0.0) {
+    const std::vector<double> block = s.capture.intrinsics;
+    const int n_focal = s.capture.model == jba::CameraModel::Pinhole ? 2 : 1;
+    s.capture.intrinsics.clear();
+    s.capture.image_intrinsics.clear();
+    Rng jitter(o.seed + 1234);
+    for (std::size_t i = 0; i < n_img; ++i) {
+      const double scale = 1.0 + o.focal_jitter * jitter.normal();
+      s.capture.intrinsics.insert(s.capture.intrinsics.end(), block.begin(), block.end());
+      for (int k = 0; k < n_focal; ++k) s.capture.intrinsics[block.size() * i + static_cast<std::size_t>(k)] *= scale;
+      s.capture.image_intrinsics.push_back(static_cast<std::int32_t>(i));
+    }
+  }
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(s.capture.model));
   s.capture.keypoints.assign(n_img, {});
   s.kp_point.assign(n_img, {});
   const double cos_max = std::cos(max_view_deg * kPi / 180.0);
@@ -65,7 +79,9 @@ void observe(Scene& s, Rng& rng, const SceneOptions& o, const std::vector<double
       const double* X = &s.points[3 * j];
       double Y[3], u, v;
       apply(R, pose + 4, X, Y);
-      if (!(Y[2] > 0.1) || !jba::project(s.capture.model, s.capture.intrinsics.data(), Y, &u, &v)) continue;
+      if (!(Y[2] > 0.1) ||
+          !jba::project(s.capture.model, &s.capture.intrinsics[np * static_cast<std::size_t>(s.capture.block(i))], Y, &u, &v))
+        continue;
       if (u < 0.0 || v < 0.0 || u > s.width - 1.0 || v > s.height - 1.0) continue;
       if (!normals.empty()) {
         const double* n = &normals[3 * j];
@@ -271,7 +287,9 @@ CaptureFile to_capture_file(const Scene& s) {
     std::snprintf(name, sizeof(name), "%s_%03zu.jpg", s.name.c_str(), i);
     f.names.push_back(name);
   }
-  f.image_size = {static_cast<std::int32_t>(s.width), static_cast<std::int32_t>(s.height)};
+  const std::size_t blocks = s.capture.intrinsics.size() / static_cast<std::size_t>(jba::num_params(s.capture.model));
+  for (std::size_t b = 0; b < blocks; ++b)
+    f.image_size.insert(f.image_size.end(), {static_cast<std::int32_t>(s.width), static_cast<std::int32_t>(s.height)});
   f.truth_registered.assign(n_img, 1);
   f.truth_poses = s.poses;
   Reference& r = f.reference;

@@ -18,6 +18,9 @@ struct SceneOptions {
   double noise_px = 0.5;          // standard deviation per coordinate
   double wrong_fraction = 0.25;   // of each overlapping pair's matches
   int false_pairs = -1;           // pairs with no overlap that get random matches; -1: the scene's own
+  // > 0: a block per image, its focal length the scene's times 1 + focal_jitter times a
+  // standard normal draw (autofocus, D166); the keypoints are of each image's own.
+  double focal_jitter = 0.0;
 };
 
 struct Scene {
