@@ -162,7 +162,7 @@ sections). `P` points with a covariance.
 | `result.cost_by_type` | f64 | [6] | Cost by residual type, in the order of `loss.type`; reprojection includes the intrinsics prior (D161) |
 | `result.reprojection_error` | f64 | [K] | Pixels, not divided by sigma |
 | `result.relative_prior_weight`, `result.global_prior_weight`, `result.gravity_weight` | f64 | per prior | Robust weight rho', near 0 for a prior the solve overruled |
-| `result.line_angle` | f64 | [L] | Radians by which a segment's axis misses its plane; NaN when not in the term |
+| `result.line_angle` | f64 | [L] | Radians between a segment and the direction to its axis's vanishing point, in the image (D163); NaN when not in the term |
 | `result.depth_refined`, `result.depth_corrected` | f64 | [K] | Refined depth of each observation's point, and its corrected reading a d + b; NaN without a reading |
 | `result.obs_keypoint` | i32 | [K] | Keypoint (in its image) of each observation |
 

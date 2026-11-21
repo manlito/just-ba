@@ -414,22 +414,35 @@ working frame.
 
 #### Residual
 
-For a line segment in image `i` assigned to axis `k`:
+For a line segment in image `i` assigned to axis `k` (as built: D163, which replaced
+the plane-normal form below):
 
 ```
-n   = unit normal of the plane through the camera centre and the segment
-      (cross product of the two endpoint bearing vectors)
-d_k = R_M * e_k                      the axis direction in the working frame
-r   = n . ( R_i * d_k ) / sigma      (1 value)
+d   = R_i * R_M * e_k                the axis direction in camera i's axes
+b_j = bearing of endpoint j          (u_j = undistort(K, x_j), b_j = (u_j, 1) / |.|)
+s_j = pixels per radian across the great circle through b_j and d
+r   = s_0 s_1 (d . (b_0 x b_1)) / sqrt(s_0^2 |d x b_0|^2 + s_1^2 |d x b_1|^2) / sigma
+                                     (1 value; pixels before sigma)
 ```
 
-If the segment really runs along axis `k`, that axis direction lies in the plane and
-`r` is zero. `r` is the sine of the angle by which it misses.
+Lines along `d` project to the great circles through `d`. `r` is the pixel distance
+of the two endpoints from the best such circle, its one free angle eliminated in
+closed form (first order in the misfit). For a pinhole camera and a short segment it
+is `L sin(alpha) / sqrt(2)`, `alpha` the image angle between the segment and the
+direction towards the vanishing point, `L` the length in pixels.
 
-- Endpoints are converted to bearing vectors through the camera model, so lens
-  distortion and fisheye cameras are handled with no special case.
-- `sigma` shrinks with segment length: long segments fix a direction precisely,
-  short ones do not.
+- `d` is a direction and is never projected, so a vanishing point at infinity or
+  behind the camera needs no special case. Endpoints go through the camera model
+  (undistortion, and its Jacobian for `s_j`), so lens distortion and fisheye cameras
+  are handled; the image of a circle is a curve under distortion, and `s_j` measures
+  across that curve.
+- `sigma` is the endpoint sigma in pixels, with a floor proportional to the length:
+  long segments fix a direction precisely, short ones do not.
+- The first version used `r = n . (R_i d_k)`, `n` the normal of the plane through the
+  camera centre and the segment. That is `sin(psi) sin(alpha)`, `psi` the angle from
+  the segment to its vanishing point, so its angle-based sigma over-weighted segments
+  far from their vanishing point, and with a free focal length it biased the focal
+  long (D163).
 - Loss: robust, always. Some lines will be wrongly assigned.
 
 The same residual with the vertical axis gives a gravity constraint from the image
@@ -480,8 +493,13 @@ This prior is strong, so it must not be applied where it is false.
   global rotation.
 - The gauge is unaffected. `R_M` is free and is returned. The caller can use it to axis-align the model, which is
   useful for floor plans.
-- If intrinsics are being refined, endpoint bearings change with them. First
-  version: the Manhattan term requires fixed intrinsics, the normal case for phones.
+- If intrinsics are being refined, endpoint bearings change with them. The first
+  version required fixed intrinsics; since D163 the residual is a function of them:
+  the endpoints are undistorted with the current intrinsics, and the Jacobian holds
+  the pixels fixed (du/dK = -A^-1 dpi/dK, A = dpi/du). Two finite vanishing points in
+  an image constrain its focal length, three also the principal point; level cameras
+  facing a wall give none, so a prior on the intrinsics (D161) is advisable where the
+  segments are the main evidence.
 
 #### Not included
 
@@ -495,7 +513,8 @@ The single shared frame used here is the stricter, classical Manhattan form.
 
 #### As built (milestone 3)
 
-- Residual and weights: D84. Assignment, the vote and the support test: D85
+- Residual and weights: D84, replaced by D163 (pixels, free intrinsics). Assignment,
+  the vote and the support test: D85
   (`assign_lines` in `manhattan.h`). The gauge: the frame is held and each group
   with segments holds only its reference's position (D86).
 - In `refine` (opt-in, `use_manhattan`), segments are assigned after the prior-only

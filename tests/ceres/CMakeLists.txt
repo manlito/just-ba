@@ -126,6 +126,21 @@ jba_parity_case(lines_huber "--model SIMPLE_RADIAL --lines 40 --line-outliers 0.
 jba_parity_case(lines_gravity "--model PINHOLE --lines 40 --gravity-priors --relative-priors 2" "--check-parameters")
 jba_parity_case(lines_dof3_opencv "--model OPENCV --lines 40 --line-dof 3 --relative-priors 2" "--check-parameters")
 jba_parity_case(lines_global "--model PINHOLE --lines 40 --global-priors" "--check-parameters")
+# Free intrinsics with the segments (D163): the line term's intrinsics columns,
+# through the undistorted endpoints, against Ceres differentiating its own forward
+# model twice.
+jba_parity_case(lines_free_focal "--model PINHOLE --lines 40 --free-intrinsics 1" "--check-parameters")
+jba_parity_case(lines_per_image_free "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --lines 40" "")
+jba_parity_case(lines_free_radial "--model SIMPLE_RADIAL --lines 40 --free-intrinsics 7 --line-outliers 0.1"
+                "--check-parameters")
+jba_parity_case(lines_dof3_free_opencv "--model OPENCV --lines 40 --line-dof 3 --relative-priors 2 --free-intrinsics 7"
+                "--check-parameters")
+# Fisheye with free focal length and principal point converges slowly along a flat
+# direction (17 iterations, 4 without the segments): costs and histories agree to
+# 5e-13, the end points to a few 1e-6, about what Ceres's own end point moves between
+# 1 and 4 threads (as for fisheye_free_distortion).
+jba_parity_case(lines_free_fisheye "--model OPENCV_FISHEYE --lines 40 --free-intrinsics 3"
+                "--check-parameters --max-centre-diff 2e-5 --max-rotation-diff 1e-5")
 # Two groups of images joined only by the Manhattan frame: one holds a rotation, the
 # other its translation alone (D86).
 jba_parity_case(lines_two_groups "--model PINHOLE --points 0 --relative-priors 2 --prior-groups 2 --lines 40"

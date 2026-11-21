@@ -3,6 +3,7 @@
 // check is based on.
 
 #include <cmath>
+#include <functional>
 #include <cstdio>
 #include <limits>
 #include <string>
@@ -29,8 +30,10 @@ struct Outcome {
   jba::RefineResult result;
 };
 
-Outcome run(const char* name, const SceneOptions& so, jba::RefineOptions ro = {}, bool scale_free = false) {
-  const auto scene = jba_test::make_scene(so);
+Outcome run(const char* name, const SceneOptions& so, jba::RefineOptions ro = {}, bool scale_free = false,
+            const std::function<void(jba::RefineInput&)>& edit = {}) {
+  auto scene = jba_test::make_scene(so);
+  if (edit) edit(scene.input);
   Outcome out;
   const auto init = jba::initialize_poses(scene.input.scene, ro.solver.prior_defaults);
   std::vector<char> placed(init.group.size());
@@ -364,6 +367,42 @@ int main() {
     EXPECT(mixed_m.result.manhattan.accepted);
     EXPECT(mixed_m.after.median_rotation <= 1.05 * mixed_plain.after.median_rotation);
     EXPECT(mixed_m.after.median_centre <= 1.05 * mixed_plain.after.median_centre);
+
+    // Free focal length (D163): the segments take the intrinsics into account instead
+    // of refusing them. Focal length 3 % off and free, with and without the segments.
+    so.lines = jba_test::LineMode::Manhattan;
+    const double f_true = jba_test::make_scene(so).truth.intrinsics[0];
+    auto focal_off = [](jba::RefineInput& in) {
+      in.scene.intrinsics[0] *= 1.03;
+      in.scene.intrinsics[1] *= 1.03;
+      in.scene.intrinsics_free = {jba::kFocal};
+    };
+    const auto free_plain = run("room, free focal", so, {}, false, focal_off);
+    const auto free_m = run("room, free focal, Manhattan", so, manhattan({}), false, focal_off);
+    const double fe_plain = free_plain.result.problem.intrinsics[0] / f_true - 1;
+    const double fe_m = free_m.result.problem.intrinsics[0] / f_true - 1;
+    std::printf("  focal error: without segments %.4f %%, with %.4f %%\n", 100 * fe_plain, 100 * fe_m);
+    // Many points fix the focal length either way (0.011 % off); the segments still
+    // remove the heading drift as well as with fixed intrinsics.
+    EXPECT(free_m.result.manhattan.accepted);
+    EXPECT(std::abs(fe_m) < 0.001 && std::abs(fe_plain) < 0.001);
+    EXPECT(free_m.after.median_rotation < 0.7 * free_plain.after.median_rotation);
+    EXPECT(free_m.after.median_rotation < 1.1 * with.after.median_rotation);
+
+    // Weak focal evidence from the points (2 px keypoint noise, 1500 points).
+    SceneOptions weak = so;
+    weak.pixel_noise = 2.0;
+    weak.points = 1500;
+    const auto weak_plain = run("room, weak points, free focal", weak, {}, false, focal_off);
+    const auto weak_m = run("room, weak points, free focal, Manhattan", weak, manhattan({}), false, focal_off);
+    const double we_plain = weak_plain.result.problem.intrinsics[0] / f_true - 1;
+    const double we_m = weak_m.result.problem.intrinsics[0] / f_true - 1;
+    std::printf("  focal error: without segments %.4f %%, with %.4f %%\n", 100 * we_plain, 100 * we_m);
+    // The vanishing points carry the focal length: 0.57 % off without the segments,
+    // 0.10 % with them.
+    EXPECT(weak_m.result.manhattan.accepted);
+    EXPECT(std::abs(we_m) < 0.5 * std::abs(we_plain) && std::abs(we_m) < 0.002);
+    EXPECT(weak_m.after.median_rotation < weak_plain.after.median_rotation);
   }
 
   // Depth at keypoints (document 05): depth-assisted refinement against pose and

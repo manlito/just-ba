@@ -42,8 +42,9 @@ struct ResidualReport {
   // Per gravity prior: angle between the measured and the solved gravity direction
   // (radians), and the robust weight.
   std::vector<double> gravity_angle, gravity_weight;
-  // Per segment: the angle (radians) by which its assigned axis misses the segment's
-  // plane, and the robust weight; NaN and 0 for segments not in the Manhattan term
+  // Per segment: the image angle (radians) between the segment and the direction
+  // towards its assigned axis's vanishing point (from the pixel residual, D163), and
+  // the robust weight; NaN and 0 for segments not in the Manhattan term
   // (unassigned, or the term off).
   std::vector<double> line_angle, line_weight;
   // Per observation with a depth reading (NaN elsewhere, weight 0): the refined depth

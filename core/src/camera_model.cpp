@@ -130,6 +130,16 @@ bool project(CameraModel model, const double* k, const double* p, double* x, dou
 }
 
 bool unproject(CameraModel model, const double* k, double x, double y, double* bearing) {
+  double uv[2];
+  if (!undistort(model, k, x, y, uv)) return false;
+  const double n = std::sqrt(uv[0] * uv[0] + uv[1] * uv[1] + 1);
+  bearing[0] = uv[0] / n;
+  bearing[1] = uv[1] / n;
+  bearing[2] = 1 / n;
+  return std::isfinite(bearing[0]) && std::isfinite(bearing[1]);
+}
+
+bool undistort(CameraModel model, const double* k, double x, double y, double* uv) {
   double fx = 0, fy = 0, cx = 0, cy = 0;  // set by linear_part for every model
   linear_part(model, k, fx, fy, cx, cy);
   const double ud = (x - cx) / fx, vd = (y - cy) / fy;
@@ -186,11 +196,9 @@ bool unproject(CameraModel model, const double* k, double x, double y, double* b
     distort(model, k, u, v, fu, fv);
     if (!(std::abs(fu - ud) + std::abs(fv - vd) < 1e-9 * std::max(1.0, std::abs(ud) + std::abs(vd)))) return false;
   }
-  const double n = std::sqrt(u * u + v * v + 1);
-  bearing[0] = u / n;
-  bearing[1] = v / n;
-  bearing[2] = 1 / n;
-  return std::isfinite(bearing[0]) && std::isfinite(bearing[1]);
+  uv[0] = u;
+  uv[1] = v;
+  return std::isfinite(u) && std::isfinite(v);
 }
 
 std::optional<CameraModel> model_from_id(std::int32_t id) {
