@@ -60,7 +60,8 @@ namespace {
 int usage() {
   std::fprintf(stderr,
                "usage: jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f]\n"
-               "                      [--false-pairs n] [--focal-error f] [--priors sigma] [--write dir] [options]\n"
+               "                      [--false-pairs n] [--focal-error f] [--priors sigma] [--write dir]\n"
+               "                      [--focal-jitter f] [--focal-bias f] [--groups] [options]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
                "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [--no-priors]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share]\n"
@@ -70,7 +71,8 @@ int usage() {
                "                    [--thresholds colmap|demo]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
-               "         [--refine none|focal|focal+distortion] [--register-from-pairs] [--export dir] [-v]\n");
+               "         [--refine none|focal|focal+distortion] [--group-sigma tie,target] [--register-from-pairs]\n"
+               "         [--export dir] [-v]\n");
   return 2;
 }
 
@@ -109,7 +111,18 @@ bool common_option(const std::vector<std::string>& args, std::size_t& i, Common&
   else if (a == "--export" && has_value) c.export_dir = args[++i];
   else if (a == "--poses" && has_value) *bad = !pose_backend_from_name(args[++i], &c.mapper.pose_backend);
   else if (a == "--refine" && has_value) *bad = !refine_from_name(args[++i], &c.refine);
-  else if (a == "--ba" && has_value) {
+  else if (a == "--group-sigma" && has_value) {
+    // The group prior's focal sigmas (D166): tie to the mean, mean to its target; inf
+    // for none.
+    const std::string v = args[++i];
+    const auto comma = v.find(',');
+    *bad = comma == std::string::npos;
+    if (!*bad) {
+      c.mapper.group_focal_fraction = std::strtod(v.substr(0, comma).c_str(), nullptr);
+      c.mapper.group_target_focal_fraction = std::strtod(v.substr(comma + 1).c_str(), nullptr);
+      *bad = !(c.mapper.group_focal_fraction > 0.0) || !(c.mapper.group_target_focal_fraction > 0.0);
+    }
+  } else if (a == "--ba" && has_value) {
     const auto b = jba::backend_from_name(args[++i]);
     *bad = !b;
     if (b) c.mapper.ba_backend = *b;
@@ -232,7 +245,8 @@ void prior_frame_errors(const demo::Scene& scene, const demo::Reconstruction& r,
 
 int synth(const std::vector<std::string>& args) {
   std::string scene_arg = "all", write_dir;
-  double focal_error = 0.0, prior_sigma = 0.0;
+  double focal_error = 0.0, prior_sigma = 0.0, focal_bias = 0.0;
+  bool groups = false;
   demo::SceneOptions so;
   Common c;
   for (std::size_t i = 0; i < args.size(); ++i) {
@@ -247,6 +261,11 @@ int synth(const std::vector<std::string>& args) {
     else if (a == "--wrong" && has_value) so.wrong_fraction = std::atof(args[++i].c_str());
     else if (a == "--false-pairs" && has_value) so.false_pairs = std::atoi(args[++i].c_str());
     else if (a == "--focal-error" && has_value) focal_error = std::atof(args[++i].c_str());
+    // A block per image whose focal lengths differ (autofocus), a calibration that is
+    // known but off, and the blocks in one group of the intrinsics prior (D166).
+    else if (a == "--focal-jitter" && has_value) so.focal_jitter = std::atof(args[++i].c_str());
+    else if (a == "--focal-bias" && has_value) focal_bias = std::atof(args[++i].c_str());
+    else if (a == "--groups") groups = true;
     else if (a == "--priors" && has_value) prior_sigma = std::atof(args[++i].c_str());
     else if (a == "--write" && has_value) write_dir = args[++i];
     else return usage();
@@ -254,7 +273,8 @@ int synth(const std::vector<std::string>& args) {
   demo::MapperOptions& mo = c.mapper;
   mo.seed = 7 + static_cast<std::uint32_t>(so.seed);
   demo::thresholds_for_noise(so.noise_px, mo);
-  if (c.refine < 0 && focal_error != 0.0) c.refine = jba::kFocal | jba::kDistortion;
+  if (c.refine < 0 && (focal_error != 0.0 || focal_bias != 0.0 || so.focal_jitter > 0.0))
+    c.refine = jba::kFocal | jba::kDistortion;
   mo.search_focal = focal_error != 0.0;
   if (c.refine >= 0) mo.refine_intrinsics = static_cast<std::uint8_t>(c.refine);
   if (!available(mo)) return 2;
@@ -274,6 +294,20 @@ int synth(const std::vector<std::string>& args) {
     for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
       for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_error;
     if (focal_error != 0.0) start.focal_unknown.assign(start.intrinsics.size() / np, 1);
+    if (focal_bias != 0.0)
+      for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
+        for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_bias;
+    // The calibration given: one focal length for every block, the jitter unknown.
+    if (so.focal_jitter > 0.0) {
+      double sum = 0.0;
+      const std::size_t blocks = start.intrinsics.size() / np;
+      for (int k = 0; k < n_focal; ++k) {
+        sum = 0.0;
+        for (std::size_t b = 0; b < blocks; ++b) sum += start.intrinsics[np * b + static_cast<std::size_t>(k)];
+        for (std::size_t b = 0; b < blocks; ++b) start.intrinsics[np * b + static_cast<std::size_t>(k)] = sum / static_cast<double>(blocks);
+      }
+    }
+    if (groups) start.intrinsics_group.assign(start.intrinsics.size() / np, 0);
     const PriorFrame frame;
     if (prior_sigma > 0.0) {
       demo::Rng rng(so.seed + 99);
@@ -312,6 +346,25 @@ int synth(const std::vector<std::string>& args) {
                   " to the priors: %.4g horizontal, %.4g vertical (sigma %.4g)\n",
                   r.prior_images, mt.images, r.aligned ? "aligned" : "NOT aligned", prior_centre_pct, prior_rot_deg,
                   r.prior_error_horizontal, r.prior_error_vertical, frame.s * prior_sigma);
+    if ((so.focal_jitter > 0.0 || focal_bias != 0.0) && r.ok()) {
+      // Per registered image: its block's focal lengths against the truth's.
+      double sq = 0.0, sq_given = 0.0;
+      std::size_t n = 0;
+      for (std::size_t k = 0; k < r.problem.num_images(); ++k) {
+        const std::size_t b = static_cast<std::size_t>(r.problem.intrinsics_of_image(k));
+        for (int f = 0; f < n_focal; ++f) {
+          const double truth = scene.capture.intrinsics[np * b + static_cast<std::size_t>(f)];
+          sq += std::pow(r.problem.intrinsics[np * b + static_cast<std::size_t>(f)] / truth - 1.0, 2);
+          sq_given += std::pow(start.intrinsics[np * b + static_cast<std::size_t>(f)] / truth - 1.0, 2);
+          ++n;
+        }
+      }
+      n /= static_cast<std::size_t>(n_focal);
+      std::printf("       focal: per image rms %.4f %% (given %.4f %%) over %zu images%s\n",
+                  100.0 * std::sqrt(sq / static_cast<double>(n * static_cast<std::size_t>(n_focal))),
+                  100.0 * std::sqrt(sq_given / static_cast<double>(n * static_cast<std::size_t>(n_focal))), n,
+                  groups ? ", grouped" : "");
+    }
     if (focal_error != 0.0)
       std::printf("       focal: true %.1f px, given %.1f, searched x%.3f, refined %.1f\n",
                   demo::median_focal(scene.capture.model, scene.capture.intrinsics),
@@ -320,6 +373,7 @@ int synth(const std::vector<std::string>& args) {
     demo::CaptureFile file = demo::to_capture_file(scene);
     file.capture.intrinsics = start.intrinsics;
     file.capture.focal_unknown = start.focal_unknown;
+    file.capture.intrinsics_group = start.intrinsics_group;
     file.capture.prior_position = start.prior_position;
     file.capture.prior_sigma = start.prior_sigma;
     if (focal_error != 0.0) file.reference.intrinsics = scene.capture.intrinsics;  // the truth's

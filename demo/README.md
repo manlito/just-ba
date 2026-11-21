@@ -47,7 +47,13 @@ Each generated scene is reconstructed and compared with its ground truth. Option
 `--scene orbit|wall|grid|all`, `--seed n`, `--noise px`, `--wrong fraction`,
 `--false-pairs n`, `--focal-error f` (the mapper is given focal lengths that much too
 large, 1.2 being 2.2 times the truth, marked as a guess: it searches for them and
-refines them), `--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
+refines them), `--focal-jitter f` (a block per image, its true focal length off the
+scene's by f times a normal draw, as autofocus leaves them; the mapper is given their
+mean), `--focal-bias f` (the focal lengths given that much too large, not marked as a
+guess), `--groups` (the blocks in one group of the intrinsics prior, D166; with the
+two above it prints the per-image focal error), `--group-sigma tie,target` (the group
+prior's focal sigmas as fractions at 1 px of noise, inf for none; default 0.01,inf),
+`--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
 `--ba cpu|metal|cuda|webgpu` (the solver's), `--refine none|focal|focal+distortion`
 (the intrinsics the adjustments refine; none by default here), `--export dir`
 (COLMAP's text model per scene), `--write dir` (each scene as a capture file, its truth
@@ -190,6 +196,7 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 | `intrinsics` | f64 | [B, P] | yes | One block per camera |
 | `camera.size` | i32 | [B, 2] | no | Width, height |
 | `camera.focal_unknown` | u8 | [B] | no | 1: the block's focal length is only a guess. Without the section, a focal length of exactly 1.2 times the larger side of `camera.size` (COLMAP's guess) counts as one |
+| `camera.group` | i32 | [B] | no | Group of each block for the hierarchical intrinsics prior (D165, D166), -1 for none: the refined blocks of a group are tied to their shared mean, the mean loosely to the group's given values. Absent: no groups |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Block of each image |
 | `image.names` | u8 | [bytes] | no | N names, separated by `\n` |
 | `image.prior_position` | f64 | [N, 3] | no | Position priors (D150): each image's measured camera centre in a metric frame whose third axis is up (east, north, up); NaN for an image without one |
