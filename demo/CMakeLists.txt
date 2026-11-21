@@ -90,7 +90,8 @@ _demo_pair_inliers,_demo_last_error,_demo_capture_reconstruct"
             ${CMAKE_CURRENT_SOURCE_DIR}/web/demo.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.html
             ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture_worker.js
             ${CMAKE_CURRENT_SOURCE_DIR}/web/weights_worker.js ${CMAKE_CURRENT_SOURCE_DIR}/web/flexglue_weights.js
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/gates.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/gates.js ${CMAKE_CURRENT_SOURCE_DIR}/web/select.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/video_source.js
             ${CMAKE_CURRENT_SOURCE_DIR}/web/view.js ${_web}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/web/samples ${_web}/samples)
   if(EXISTS "${JBA_DEMO_MATCH_WEB_DIR}")
@@ -113,6 +114,9 @@ else()
     # one group of the intrinsics prior: the scenes still pass. demo_groups checks that
     # the focal lengths land nearer the truth than refined one by one, and the rest.
     add_test(NAME demo_synth_groups COMMAND jba_demo synth --focal-jitter 0.004 --focal-bias 0.05 --groups)
+    # D168: two cameras of one guessed focal length (the second's half the first's, both
+    # given 1.5 times the first's), each searched from its own pairs.
+    add_test(NAME demo_synth_two_cameras COMMAND jba_demo synth --focal-error 0.5 --second-focal 0.5)
     add_executable(test_demo_groups tests/test_groups.cpp)
     target_link_libraries(test_demo_groups PRIVATE jba_demo_mapper jba_warnings)
     add_test(NAME demo_groups COMMAND test_demo_groups)

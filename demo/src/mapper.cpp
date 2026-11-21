@@ -9,7 +9,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <stdexcept>
+#include <tuple>
 
 #include "align.h"
 #include "geometry.h"
@@ -30,6 +32,31 @@ double median_focal(jba::CameraModel model, const std::vector<double>& intrinsic
   if (f.empty()) return 0.0;
   std::nth_element(f.begin(), f.begin() + f.size() / 2, f.end());
   return f[f.size() / 2];
+}
+
+void simple_radial_blocks(Capture& c, int n, const std::int32_t* size, const double* focal, const std::int32_t* camera) {
+  c.model = jba::CameraModel::SimpleRadial;
+  c.intrinsics.clear();
+  c.focal_unknown.clear();
+  c.image_size.clear();
+  c.image_intrinsics.clear();
+  c.block_camera.clear();
+  std::map<std::tuple<std::int32_t, int, int, double>, std::int32_t> blocks;
+  for (int i = 0; i < n; ++i) {
+    const int w = size[2 * i], h = size[2 * i + 1];
+    const bool known = std::isfinite(focal[i]) && focal[i] > 0;
+    const double f = known ? focal[i] : 1.2 * std::max(w, h);
+    const auto key = std::make_tuple(camera ? camera[i] : 0, w, h, f);
+    auto it = blocks.find(key);
+    if (it == blocks.end()) {
+      it = blocks.emplace(key, static_cast<std::int32_t>(blocks.size())).first;
+      c.intrinsics.insert(c.intrinsics.end(), {f, 0.5 * w, 0.5 * h, 0.0});
+      c.focal_unknown.push_back(known ? 0 : 1);
+      c.image_size.insert(c.image_size.end(), {w, h});
+      c.block_camera.push_back(camera ? camera[i] : 0);
+    }
+    c.image_intrinsics.push_back(it->second);
+  }
 }
 
 namespace {
@@ -66,6 +93,8 @@ std::string check(const Capture& c) {
     return "prior_sigma needs 2 values per image";
   if (!c.image_size.empty() && c.image_size.size() != 2 * static_cast<std::size_t>(blocks))
     return "image_size needs a width and a height per intrinsics block";
+  if (!c.block_camera.empty() && c.block_camera.size() != static_cast<std::size_t>(blocks))
+    return "block_camera needs one camera per intrinsics block";
   if (!c.intrinsics_group.empty()) {
     if (c.intrinsics_group.size() != static_cast<std::size_t>(blocks))
       return "intrinsics_group needs one group per intrinsics block";
@@ -923,22 +952,16 @@ Mapper::~Mapper() { jpo_destroy(ctx_); }
 
 namespace {
 
-// search_focal: the factor on the guessed focal lengths that best explains the pairs
-// with the most matches, by poselib-gpu's MSAC score summed over them. 1 when there is
-// nothing to search; -1 when poselib-gpu fails.
-double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o) {
+// One search: the factor on the focal lengths of the blocks marked in `scaled` that best
+// explains the pairs `order` (the kPairs with the most matches of them), by
+// poselib-gpu's MSAC score summed over them; the other blocks stay as `base` has them.
+// -1 when poselib-gpu fails. at_end: whether the best factor is the first or the last tried.
+double search_factor(jpo_ctx* ctx, const Capture& c, const MapperOptions& o, const std::vector<double>& base,
+                     const std::vector<std::uint8_t>& scaled, std::vector<std::size_t> order, bool* at_end = nullptr) {
   const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
-  const std::size_t blocks = c.intrinsics.size() / np;
-  if (c.focal_unknown.size() != blocks ||
-      std::none_of(c.focal_unknown.begin(), c.focal_unknown.end(), [](std::uint8_t u) { return u != 0; }))
-    return 1.0;
+  const std::size_t blocks = base.size() / np;
   constexpr std::size_t kPairs = 50, kSteps = 61;
   constexpr double kLow = 0.25, kHigh = 4.0;
-  std::vector<std::size_t> order;
-  for (std::size_t i = 0; i < c.pairs.size(); ++i)
-    if (c.pairs[i].ka.size() >= std::max<std::size_t>(30, o.min_pair_inliers) &&
-        (c.focal_unknown[c.block(c.pairs[i].a)] || c.focal_unknown[c.block(c.pairs[i].b)]))
-      order.push_back(i);
   if (order.empty()) return 1.0;
   std::sort(order.begin(), order.end(), [&](std::size_t x, std::size_t y) {
     return c.pairs[x].ka.size() != c.pairs[y].ka.size() ? c.pairs[x].ka.size() > c.pairs[y].ka.size() : x < y;
@@ -952,8 +975,8 @@ double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o) {
   for (std::size_t k = 0; k < kSteps; ++k)
     for (std::size_t b = 0; b < blocks; ++b)
       for (std::size_t j = 0; j < np; ++j) {
-        const double v = c.intrinsics[np * b + j];
-        const bool scale = c.focal_unknown[b] && jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal;
+        const double v = base[np * b + j];
+        const bool scale = scaled[b] && jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal;
         intr.push_back(scale ? v * factor[k] : v);
       }
   const std::vector<jpo_camera> cameras = to_jpo(c.model, intr);
@@ -1000,7 +1023,94 @@ double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o) {
       best_score = score;
     }
   }
+  if (at_end) *at_end = best == 0 || best == kSteps - 1;
   return factor[best];
+}
+
+// search_focal: the factors on the guessed focal lengths that best explain the pairs
+// with the most matches. With cameras named (Capture::block_camera, D168), the guessed
+// blocks of each camera with kOwnPairs pairs between its own images are searched on
+// their own, from those pairs: two cameras of one guess (a phone's main and ultrawide
+// lens, each 1.2 times the larger side) need a factor each, and pairs across two
+// cameras can have no baseline (two videos of one walk), which says nothing of a focal
+// length. A camera whose own search ends at an end of the range, the cameras with too
+// few pairs of their own, and every guessed block of a capture without cameras share
+// one factor, from the pairs with an image in them, the cameras already searched at
+// what was found. `factors`: per block, 1 for a known one; empty when there is nothing
+// to search. Returns the scalar reported (the shared factor; with cameras searched on
+// their own, the median over the guessed blocks), 1 when there is nothing to search,
+// -1 when poselib-gpu fails.
+double search_focal(jpo_ctx* ctx, const Capture& c, const MapperOptions& o, std::vector<double>& factors) {
+  factors.clear();
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+  const std::size_t blocks = c.intrinsics.size() / np;
+  if (c.focal_unknown.size() != blocks ||
+      std::none_of(c.focal_unknown.begin(), c.focal_unknown.end(), [](std::uint8_t u) { return u != 0; }))
+    return 1.0;
+  constexpr std::size_t kOwnPairs = 3;
+  const std::size_t min_matches = std::max<std::size_t>(30, o.min_pair_inliers);
+  factors.assign(blocks, 1.0);
+  std::vector<double> base = c.intrinsics;
+  std::vector<std::uint8_t> rest = c.focal_unknown;  // the blocks still to search
+  bool own = false;
+  // One camera for every block is a capture without cameras.
+  if (o.search_focal_per_block && c.block_camera.size() == blocks &&
+      std::any_of(c.block_camera.begin(), c.block_camera.end(), [&](std::int32_t id) { return id != c.block_camera[0]; })) {
+    // Per camera: the pairs between its own images with a guessed block among the two.
+    std::map<std::int32_t, std::vector<std::size_t>> within;
+    for (std::size_t i = 0; i < c.pairs.size(); ++i) {
+      const auto ba = static_cast<std::size_t>(c.block(c.pairs[i].a)), bb = static_cast<std::size_t>(c.block(c.pairs[i].b));
+      if (c.pairs[i].ka.size() >= min_matches && c.block_camera[ba] == c.block_camera[bb] &&
+          (c.focal_unknown[ba] || c.focal_unknown[bb]))
+        within[c.block_camera[ba]].push_back(i);
+    }
+    for (const auto& [camera, pairs] : within) {
+      if (pairs.size() < kOwnPairs) continue;
+      std::vector<std::uint8_t> its(blocks, 0);
+      for (std::size_t b = 0; b < blocks; ++b) its[b] = c.block_camera[b] == camera && c.focal_unknown[b];
+      bool at_end = false;
+      const double f = search_factor(ctx, c, o, c.intrinsics, its, pairs, &at_end);
+      if (f < 0.0) return -1.0;
+      if (at_end) continue;  // not found within the range: with the rest, from more pairs
+      for (std::size_t b = 0; b < blocks; ++b) {
+        if (!its[b]) continue;
+        factors[b] = f;
+        rest[b] = 0;
+        for (std::size_t j = 0; j < np; ++j)
+          if (jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal) base[np * b + j] *= f;
+      }
+      own = true;
+    }
+  }
+  double shared = 1.0;
+  std::vector<std::size_t> order;
+  for (std::size_t i = 0; i < c.pairs.size(); ++i)
+    if (c.pairs[i].ka.size() >= min_matches && (rest[c.block(c.pairs[i].a)] || rest[c.block(c.pairs[i].b)]))
+      order.push_back(i);
+  if (!order.empty()) {
+    bool at_end = false;
+    shared = search_factor(ctx, c, o, base, rest, std::move(order), &at_end);
+    if (shared < 0.0) return -1.0;
+    // With cameras searched on their own, what is left is a camera whose own pairs did not
+    // settle it either: a factor at the range end is no answer, so its guess is kept.
+    if (own && at_end) shared = 1.0;
+  }
+  std::vector<double> found;
+  for (std::size_t b = 0; b < blocks; ++b) {
+    if (rest[b]) factors[b] = shared;
+    if (c.focal_unknown[b]) found.push_back(factors[b]);
+  }
+  if (!own) return shared;
+  std::sort(found.begin(), found.end());
+  return found[(found.size() - 1) / 2];
+}
+
+// The capture's intrinsics with search_focal's factors on their focal lengths.
+void apply_focal_factors(const Capture& c, const std::vector<double>& factors, std::vector<double>& intr) {
+  const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
+  for (std::size_t b = 0; b < factors.size() && b < intr.size() / np; ++b)
+    for (std::size_t j = 0; j < np; ++j)
+      if (jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal) intr[np * b + j] *= factors[b];
 }
 
 }  // namespace
@@ -1158,16 +1268,12 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
   if (from) run.focal_factor = from->focal_factor;
   if (o.search_focal && !from) {
     const auto ts = Clock::now();
-    run.focal_factor = search_focal(ctx_, c, o);
+    run.focal_factor = search_focal(ctx_, c, o, run.focal_factors);
     if (run.focal_factor < 0.0) {
       run.error = std::string("focal search: ") + jpo_last_error();
       return run;
     }
-    const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
-    for (std::size_t b = 0; b < start.size() / np; ++b)
-      for (std::size_t j = 0; j < np; ++j)
-        if (!c.focal_unknown.empty() && c.focal_unknown[b] && jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal)
-          start[np * b + j] *= run.focal_factor;
+    apply_focal_factors(c, run.focal_factors, start);
     run.time.focal_search = seconds_since(ts);
     if (!progress("focal search", nullptr)) {
       cancel();
@@ -2025,17 +2131,13 @@ struct Session::State {
     std::vector<double> intr = restart ? m.cams.intrinsics : c.intrinsics;
     double factor = restart ? focal_factor : 1.0;
     if (opt.search_focal && !restart) {
-      factor = search_focal(mapper->ctx_, c, opt);
+      std::vector<double> factors;
+      factor = search_focal(mapper->ctx_, c, opt, factors);
       if (factor < 0.0) {
         st.error = std::string("focal search: ") + jpo_last_error();
         return false;
       }
-      const std::size_t np = static_cast<std::size_t>(jba::num_params(c.model));
-      for (std::size_t b = 0; b < intr.size() / np; ++b)
-        for (std::size_t j = 0; j < np; ++j)
-          if (!c.focal_unknown.empty() && c.focal_unknown[b] &&
-              jba::intrinsics_group(c.model, static_cast<int>(j)) == jba::kFocal)
-            intr[np * b + j] *= factor;
+      apply_focal_factors(c, factors, intr);
     }
     pair_results.clear();
     pair_inliers.clear();

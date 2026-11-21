@@ -25,7 +25,6 @@
 #include <memory>
 #include <sstream>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "geometry.h"
@@ -138,13 +137,15 @@ EMSCRIPTEN_KEEPALIVE const std::int32_t* demo_colour_obs() { return colour_obs.d
 //   size: 2 per image, width and height in pixels
 //   focal: per image, its focal length in pixels if known; NaN or <= 0: unknown, then
 //          1.2 times the larger side, searched for and refined (D144)
+//   camera: per image, the camera that took it (D167: 0 for photos, a number per
+//          video), each with intrinsics of its own; null: one camera
 //   kp_begin: n + 1 offsets into kp_xy (2 floats per keypoint, COLMAP's convention: the
 //          centre of the first pixel at 0.5, 0.5)
 //   pair_images: 2 per pair; pair_begin: n_pairs + 1 offsets into matches (2 per match:
 //          a keypoint of the first image, one of the second)
 //   poses: "cpu" or "webgpu" (poselib-gpu); ba: "cpu" or "webgpu" (the solver)
 EMSCRIPTEN_KEEPALIVE const char* demo_reconstruct(int n, const std::int32_t* size, const double* focal,
-                                                  const std::int32_t* kp_begin, const float* kp_xy, int n_pairs,
+                                                  const std::int32_t* camera, const std::int32_t* kp_begin, const float* kp_xy, int n_pairs,
                                                   const std::int32_t* pair_images, const std::int32_t* pair_begin,
                                                   const std::int32_t* matches, const char* poses, const char* ba) {
   step_points.clear();
@@ -163,25 +164,10 @@ EMSCRIPTEN_KEEPALIVE const char* demo_reconstruct(int n, const std::int32_t* siz
     if (!mapper) mapper = std::make_unique<demo::Mapper>(mo);
     mapper->set_options(mo);
 
-    // One SIMPLE_RADIAL block per image size and focal length.
+    // One SIMPLE_RADIAL block per camera, image size and focal length.
     demo::Capture c;
-    c.model = jba::CameraModel::SimpleRadial;
-    std::map<std::tuple<int, int, double>, std::int32_t> blocks;
-    for (int i = 0; i < n; ++i) {
-      const int w = size[2 * i], h = size[2 * i + 1];
-      const bool known = std::isfinite(focal[i]) && focal[i] > 0;
-      const double f = known ? focal[i] : 1.2 * std::max(w, h);
-      const auto key = std::make_tuple(w, h, f);
-      auto it = blocks.find(key);
-      if (it == blocks.end()) {
-        it = blocks.emplace(key, static_cast<std::int32_t>(blocks.size())).first;
-        c.intrinsics.insert(c.intrinsics.end(), {f, 0.5 * w, 0.5 * h, 0.0});
-        c.focal_unknown.push_back(known ? 0 : 1);
-        c.image_size.insert(c.image_size.end(), {w, h});
-      }
-      c.image_intrinsics.push_back(it->second);
-      c.keypoints.emplace_back(kp_xy + 2 * kp_begin[i], kp_xy + 2 * kp_begin[i + 1]);
-    }
+    demo::simple_radial_blocks(c, n, size, focal, camera);
+    for (int i = 0; i < n; ++i) c.keypoints.emplace_back(kp_xy + 2 * kp_begin[i], kp_xy + 2 * kp_begin[i + 1]);
     std::size_t total_matches = 0;
     for (int p = 0; p < n_pairs; ++p) {
       demo::Pair pr;
@@ -247,6 +233,15 @@ EMSCRIPTEN_KEEPALIVE const char* demo_reconstruct(int n, const std::int32_t* siz
     num(j, r.mean_error_px);
     j << ", \"models\": " << r.models << ", \"focal_factor\": ";
     num(j, r.focal_factor);
+    // Per block: the search's factor (D168), and whether its focal length was a guess.
+    j << ", \"focal_factors\": [";
+    for (std::size_t k = 0; k < r.focal_factors.size(); ++k) {
+      if (k) j << ",";
+      num(j, r.focal_factors[k]);
+    }
+    j << "], \"focal_unknown\": [";
+    for (std::size_t k = 0; k < c.focal_unknown.size(); ++k) j << (k ? "," : "") << static_cast<int>(c.focal_unknown[k]);
+    j << "]";
     // The refined intrinsics: f, cx, cy, k per block.
     j << ", \"intrinsics\": [";
     for (std::size_t k = 0; k < r.problem.intrinsics.size(); ++k) {

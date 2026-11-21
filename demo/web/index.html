@@ -79,6 +79,10 @@
   .thumb canvas { width: 100%; height: 100%; display: block; }
   .thumb span { position: absolute; left: 3px; bottom: 3px; font-size: 10.5px; line-height: 1; padding: 2px 4px; border-radius: 4px;
                 background: rgba(0, 0, 0, 0.6); color: #fff; font-variant-numeric: tabular-nums; }
+  /* A video's frames: a bar in the video's colour (the first four; then they repeat). */
+  .thumb.video::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 4px; background: var(--video, var(--accent)); }
+  .thumb.video.v1 { --video: #1f9d6b; } .thumb.video.v2 { --video: #d9480f; } .thumb.video.v3 { --video: #8e44ad; } .thumb.video.v0 { --video: #c79100; }
+  #preview { display: block; width: 100%; max-height: 220px; margin: 10px 0 0; border-radius: 6px; background: #000; }
   .thumb.out canvas { opacity: 0.3; }
   .thumb.out::after { content: "not registered"; position: absolute; inset: auto 0 0 0; top: 30%; text-align: center; font-size: 10px; color: var(--bad); font-weight: 600; }
   .drop { border: 1.5px dashed var(--field); border-radius: 8px; padding: 10px; text-align: center; color: var(--faint); font-size: 12.5px; }
@@ -148,12 +152,18 @@
         <div class="row">
           <button id="samples">Sample set</button>
           <button id="add">Add images…</button>
+          <button id="add-videos">Add videos…</button>
           <button id="clear">Clear</button>
-          <input id="files" type="file" accept="image/*" multiple hidden>
+          <input id="files" type="file" accept="image/*,video/*" multiple hidden>
+          <input id="video-files" type="file" accept="video/*,.mp4,.mov,.m4v" multiple hidden>
         </div>
+        <video id="preview" muted playsinline hidden></video>
         <div id="thumbs" class="thumbs"></div>
-        <div id="drop" class="drop">Or drop images here.</div>
-        <p class="hint">Photos of one scene, taken from different places, each overlapping others. Up to 60; every pair is matched.</p>
+        <div id="drop" class="drop">Or drop images and videos here.</div>
+        <p class="hint">Photos of one scene, taken from different places, each overlapping others. Up to 60; every pair is matched.
+          Of a video the page keeps the frames that overlap the last one kept by about half, as the
+          <a href="capture.html">live capture</a> does with a camera; each video is a camera of its own, so two
+          lenses or two resolutions can go into one model.</p>
       </section>
 
       <section class="panel">

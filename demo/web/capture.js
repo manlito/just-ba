@@ -2,7 +2,7 @@
 // them (gates.js), a map grown from the keyframes while capturing (demo::Session in
 // capture_worker.js), then Finish, the whole capture reconstructed from that map.
 //
-// Per camera frame, on this page's thread: ALIKED keypoints (just-keypoints; XFeat's with
+// Per camera frame, on this page's thread (select.js's FrameSelector): ALIKED keypoints (just-keypoints; XFeat's with
 // LighterGlue), the matcher's features of the frame (just-matching: FlexGlue's dense
 // features, or LightGlue's or LighterGlue's of the keypoints), its matches to the last keyframe at the live depth
 // (FlexGlue's layer-0 head), checked against a relative pose on the CPU
@@ -17,8 +17,10 @@
 //
 // URL parameters: matcher=flexglue|lightglue|lighterglue, keypoints=1024|2048, side=<px> (the
 // working image's longer side), debug=1 (timings in the console), video=<url> (a recorded
-// video instead of the camera, for testing; rate=<playback rate>, 0.5 by default).
+// video instead of the camera, for testing; rate=<playback rate>, 0.5 by default). The
+// Camera panel takes a video file the same way.
 import * as G from './gates.js';
+import { FIXED, FrameSelector, minKeypointsFor } from './select.js';
 import { ModelView } from './view.js';
 import * as FW from './flexglue_weights.js';
 
@@ -26,12 +28,9 @@ const params = new URLSearchParams(location.search);
 const $ = (id) => document.getElementById(id);
 const DEBUG = params.get('debug') === '1';
 
-// Like Recon's numbers (src-tauri/src/capture.rs, online.rs).
-// LightGlue's live and map depths: on a Pixel 9a at 640 px, 2 layers take 160 ms (342
+// Like Recon's numbers (src-tauri/src/capture.rs, online.rs). The live depths are
+// select.js's; the map's: on a Pixel 9a at 640 px, LightGlue's 2 layers take 160 ms (342
 // matches), 3 take 215 ms (481), 5 take 330 ms, adaptive 9 about 510 ms.
-// LighterGlue (XFeat's) at the same depths: its layers are about a third of LightGlue's work.
-const FIXED = { depthConfidence: -1, widthConfidence: -1 };
-const LIVE = { flexglue: { layers: 0 }, lightglue: { layers: 2, ...FIXED }, lighterglue: { layers: 2, ...FIXED } };
 const ONLINE = { flexglue: { layers: 3 }, lightglue: { layers: 3, ...FIXED }, lighterglue: { layers: 3, ...FIXED } };
 // Finish's pairs: FlexGlue as the map's; LightGlue and LighterGlue at full, adaptive depth (they have the time; the
 // matcher's own adaptivity: LightGlue 0.95 and 0.99, LighterGlue all six layers and width 0.95).
@@ -79,8 +78,7 @@ const S = {
   session: null,       // { width, height }
   keyframes: [],       // { index, seq, xy, desc, feat, w, h, jpeg, placed, shoot, thumb }
   keyframesModel: null, // the keypoints' model of this capture's keyframes ('aliked' or 'xfeat')
-  reference: null, before: null, twoBack: false, held: [], cursor: 0,
-  picker: new G.Picker(), speed: new G.Speed(), blur: new G.Blur(),
+  selector: null,      // the keep loop (select.js): the reference, the held keyframes, the picker
   floor: G.floorOf(), settings: G.defaultSettings(),
   jobs: [],            // online work: one keyframe at a time
   links: new Set(),    // "a-b" pairs already matched for the map
@@ -135,61 +133,6 @@ function startWorker() {
   S.worker.onerror = (e) => setStatus('The mapper stopped: ' + (e.message || 'worker error'), true);
 }
 
-// ---- a frame's matches checked against a relative pose (on the CPU, this thread)
-
-function verified(refXy, curXy, matches, w, h) {
-  const M = S.live;
-  const n = matches.length / 2;
-  if (n < G.MIN_INLIERS) return [];
-  const a = new Float32Array(2 * n), b = new Float32Array(2 * n);
-  for (let k = 0; k < n; k++) {
-    const i = matches[2 * k], j = matches[2 * k + 1];
-    a[2 * k] = refXy[2 * i]; a[2 * k + 1] = refXy[2 * i + 1];
-    b[2 * k] = curXy[2 * j]; b[2 * k + 1] = curXy[2 * j + 1];
-  }
-  const pa = M._malloc(8 * n), pb = M._malloc(8 * n), pm = M._malloc(n);
-  try {
-    M.HEAPF32.set(a, pa >> 2);
-    M.HEAPF32.set(b, pb >> 2);
-    const got = M._demo_pair_inliers(n, pa, pb, w, h, G.INLIER_PX, pm);
-    if (got < 0) throw new Error(JSON.parse(M.UTF8ToString(M._demo_last_error())).error);
-    const mask = M.HEAPU8.subarray(pm, pm + n);
-    const seen = [];
-    for (let k = 0; k < n; k++) if (mask[k]) seen.push([matches[2 * k], matches[2 * k + 1]]);
-    return seen;
-  } finally {
-    M._free(pa); M._free(pb); M._free(pm);
-  }
-}
-
-// The frame (features f, keypoints xy, size w x h) against keyframe r.
-async function measure(r, f, xy, w, h) {
-  if (!r.feat || !xy.length || !r.xy.length) return { overlap: 0, support: { inliers: 0, coverage: 0 }, seen: [] };
-  const m = await S.matcher.match(r.feat, r.xy, f, xy, LIVE[S.matcherKind]);
-  const seen = verified(r.xy, xy, m.matches, w, h);
-  return {
-    overlap: seen.length >= G.MIN_INLIERS ? G.overlap(r.xy, xy, seen, w, h) : 0,
-    support: G.supportOf(r.xy, xy, seen, w, h),
-    seen,
-  };
-}
-
-// Held keyframes other than the reference, a few a frame (all for a Shoot now): the one it overlaps most.
-async function relocalize(f, xy, w, h, all) {
-  const others = S.held.filter((k) => k !== S.reference && k.feat).reverse();
-  if (!others.length) return null;
-  const n = all ? others.length : Math.min(RELOCALIZE_PER_FRAME, others.length);
-  const start = all ? 0 : S.cursor % others.length;
-  let best = null;
-  for (let k = 0; k < n; k++) {
-    const r = others[(start + k) % others.length];
-    const found = await measure(r, f, xy, w, h);
-    if (found.overlap >= G.LOST_OVERLAP && (!best || found.overlap > best.m.overlap)) best = { r, m: found };
-  }
-  S.cursor = start + n;
-  return best;
-}
-
 // ---- the camera's loop
 
 const grabCanvas = document.createElement('canvas');
@@ -208,15 +151,6 @@ function grab() {
   return { w, h, image: grabCtx.getImageData(0, 0, w, h) };
 }
 
-async function describe(image, kp) {
-  return S.matcherKind === 'flexglue' ? S.matcher.describe(image) : S.matcher.describeKeypoints(image, kp.xy, kp.desc);
-}
-
-// Candidates hold GPU features: those neither held by the picker nor kept are freed.
-function freeCandidate(c) {
-  if (c && !c.kept && c !== S.picker.good?.frame && c !== S.picker.refused?.frame) c.feat?.destroy();
-}
-
 async function liveStep() {
   const t0 = performance.now();
   const frame = grab();
@@ -227,117 +161,33 @@ async function liveStep() {
   }
   const shoot = S.shoot;
   S.shoot = false;
-  const tKp = performance.now();
-  const kp = await S.extractor.extract(frame.image);
-  const tDescribe = performance.now();
-  const confidentNow = G.confident(kp.score, S.kpModel);
-  const sharp = G.sharpness(frame.image.data, w, h);
-  const blurry = S.blur.blurry(sharp);
-  const ratio = S.blur.ratio(sharp);
-  const f = await describe(frame.image, kp);
-  const tMatch = performance.now();
-  let now = null, overlap2 = null, relocalized = false;
-  if (S.reference) {
-    now = await measure(S.reference, f, kp.xy, w, h);
-    if (now.overlap < G.LOST_OVERLAP && (shoot || !S.picker.holds())) {
-      const found = await relocalize(f, kp.xy, w, h, shoot);
-      if (found) {
-        S.reference = found.r;
-        S.before = null;
-        S.lastOverlap2 = null;
-        S.twoBack = false;
-        clearPicker();
-        S.speed.rebase();
-        now = found.m;
-        relocalized = true;
-      }
-    }
-    // The keyframe before last (redundancy): every frame on a computer; every other frame
-    // on a phone, where each live match is ~160 ms, keeping the last measure in between.
-    // Without it a phone capture chained keyframes to their neighbour only (pairs two
-    // apart had 2-21 matches) and broke into pieces.
-    // Also above EARLY_MAX_OVERLAP, where it can't make a keep: it is what arms the rule
-    // (twoBack), which a keyframe kept late would otherwise never do.
-    if (S.settings.redundant && S.before?.feat) {
-      if (!phone || S.stats.frames % 2 === 0 || S.lastOverlap2 == null || relocalized) {
-        const m2 = await measure(S.before, f, kp.xy, w, h);
-        S.twoBack ||= m2.overlap > G.REDUNDANT_OVERLAP;
-        S.lastOverlap2 = m2.overlap;
-      }
-      overlap2 = S.lastOverlap2;
-    }
-  }
-  const tRules = performance.now();
-  const overlapNow = now ? now.overlap : null;
-  const speed = S.speed.update(overlapNow);
-  const verdict = G.decide(S.settings, S.floor, {
-    shoot, hasMatcher: true, hasReference: !!S.reference, keypoints: confidentNow, blurry,
-    // Judged at the next check (G.anticipate): the speed is the drop per check.
-    overlap: G.anticipate(overlapNow, speed), support: now?.support ?? { inliers: 0, coverage: 0 },
-    overlap2: S.twoBack ? G.anticipate(overlap2, speed) : null,
-  });
-  // The descriptors are kept whatever the matcher: Reconstruct again may match with LightGlue (ALIKED's) or
-  // LighterGlue (XFeat's).
-  const cand = { xy: kp.xy, desc: kp.desc, feat: f, w, h, image: frame.image,
-                 overlap: overlapNow, relocalized };
-  let pick;
-  if (shoot) {
-    clearPicker();
-    pick = { frame: cand, why: 'shoot', relaxed: false };
-  } else {
-    const quality = confidentNow * (0.5 + 0.5 * ratio);
-    const before = [S.picker.good?.frame, S.picker.refused?.frame];
-    pick = S.picker.step(verdict.urge, verdict.gate !== 'lost' ? { quality, acceptable: verdict.acceptable, frame: cand } : null);
-    if (pick) pick.frame.kept = true;
-    for (const c of before) freeCandidate(c);
-  }
-  if (pick) await keep(pick.frame, pick.why, shoot);
-  freeCandidate(cand);
-
-  const gate = pick ? 'kept' : verdict.gate === 'kept' ? 'waiting' : verdict.gate;
-  showGate(gate, pick?.why, overlapNow, G.slowDown(speed, blurry && S.settings.rejectBlur), relocalized);
+  const r = await S.selector.step(frame.image, { shoot });
+  if (r.kept) await keep(r.kept, r.keptImage);
+  showGate(r.gate, r.why, r.overlap, r.slowDown, r.relocalized);
   const ms = performance.now() - t0;
   const avg = (old, v) => (S.stats.frames ? 0.8 * old + 0.2 * v : v);
   S.stats.frameMs = avg(S.stats.frameMs, ms);
-  S.stats.kpMs = avg(S.stats.kpMs, tDescribe - tKp);
-  S.stats.describeMs = avg(S.stats.describeMs, tMatch - tDescribe);
-  S.stats.matchMs = avg(S.stats.matchMs, tRules - tMatch);
+  S.stats.kpMs = avg(S.stats.kpMs, r.ms.keypoints);
+  S.stats.describeMs = avg(S.stats.describeMs, r.ms.describe);
+  S.stats.matchMs = avg(S.stats.matchMs, r.ms.match);
   S.stats.frames++;
-  if (DEBUG) console.log(`frame ${ms.toFixed(0)} ms, ${kp.n} kp (${confidentNow} sure), overlap ${fmt(overlapNow)}, ${gate}`);
+  if (DEBUG) console.log(`frame ${ms.toFixed(0)} ms, ${r.keypoints} kp (${r.confident} sure), overlap ${fmt(r.overlap)}, ${r.gate}`);
 }
 
-function clearPicker() {
-  const held = [S.picker.good?.frame, S.picker.refused?.frame];
-  S.picker.clear();
-  for (const c of held) freeCandidate(c);
-}
-
-// A kept frame becomes a keyframe: the reference for the next frames (when it can anchor
-// the chain), and the map's next image.
-async function keep(c, why, shoot) {
-  c.kept = true;
-  const kf = { index: S.keyframes.length, seq: S.keyframes.length + 1, xy: c.xy, desc: c.desc, feat: c.feat, w: c.w,
-               h: c.h, shoot, why, placed: false, jpeg: null, keptAt: performance.now() };
+// A frame the selector kept (its keyframe, already the reference for the next frames when
+// it can anchor the chain) becomes the map's next image.
+async function keep(kf, image) {
+  Object.assign(kf, { placed: false, jpeg: null, keptAt: performance.now() });
   S.keyframes.push(kf);
   S.keyframesModel = S.kpModel;
   // A small JPEG of it, for its thumbnail, the points' colours and the finish's features.
-  const cv = new OffscreenCanvas(c.w, c.h);
-  cv.getContext('2d').putImageData(c.image, 0, 0);
+  const cv = new OffscreenCanvas(kf.w, kf.h);
+  cv.getContext('2d').putImageData(image, 0, 0);
   kf.jpeg = await cv.convertToBlob({ type: 'image/jpeg', quality: 0.9 });
   addThumb(kf, cv);
   showLastKeyframe(cv);
   const partners = S.keyframes.slice(Math.max(0, kf.index - SEQUENTIAL), kf.index);
-  if (c.relocalized && S.reference && !partners.includes(S.reference)) partners.push(S.reference);
-  if (G.usableReference(c.xy)) {
-    S.before = S.reference;
-    S.reference = kf;
-    S.twoBack = false;
-    S.lastOverlap2 = null;
-    S.speed.rebase();
-    const anchors = S.keyframes.filter((k) => G.usableReference(k.xy));
-    const keepIt = G.hold(anchors.map((k) => k.seq));
-    S.held = anchors.filter((_, i) => keepIt[i]);
-  }
+  if (kf.relocalizedTo && !partners.includes(kf.relocalizedTo)) partners.push(kf.relocalizedTo);
   if (sparse(S.matcherKind)) {
     // The worker matches the pairs and places the keyframe (D159); the answer is taken in
     // between camera frames (onlineStep), in order.
@@ -357,7 +207,7 @@ async function keep(c, why, shoot) {
 // keyframes' partners) and, thinned, older ones for the appearance shortlist.
 function freeFeatures() {
   const withFeat = S.keyframes.filter((k) => k.feat);
-  const keepSet = new Set([S.reference, S.before, ...S.held]);
+  const keepSet = new Set(S.selector?.measured() ?? []);
   for (const j of S.jobs) { keepSet.add(j.kf); for (const p of j.partners) keepSet.add(p); }
   // Past the cache, every other one of the older half goes (online.rs's thin).
   if (withFeat.length > FEATURE_CACHE) {
@@ -635,7 +485,7 @@ async function finish() {
     if (n < 2) throw new Error('fewer than two keyframes');
     // The live features go, the Picker's held frames too (before the matcher that made them):
     // the pairs are matched with features made afresh (matchKeyframes).
-    clearPicker();
+    S.selector?.clearPicker();
     for (const k of S.keyframes) { k.feat?.destroy(); k.feat = null; }
     let r;
     if (sparse(S.matcherKind)) {
@@ -855,17 +705,22 @@ function downloadPly() {
 
 async function openCamera(deviceId) {
   stopCamera();
-  if (params.get('video')) {
+  // A recorded video instead: the visitor's file (the Camera panel), or video=<url>.
+  const recorded = S.videoFile ?? (params.get('video') ? new URL(params.get('video'), location.href).href : null);
+  if (recorded) {
     const v = $('video');
-    v.src = new URL(params.get('video'), location.href).href;
-    v.playbackRate = Number(params.get('rate')) || 0.5;
+    v.srcObject = null;
+    v.src = recorded;
     await new Promise((r, e) => { v.onloadeddata = r; v.onerror = () => e(new Error('the video did not load')); });
-    await v.play();
+    // Its first frame, waiting: it plays once the capture is ready for frames (start), so none of it is missed.
+    v.pause();
+    S.recorded = true;
     S.stream = { getTracks: () => [] };
     v.hidden = false;
     $('placeholder').hidden = true;
     return;
   }
+  S.recorded = false;
   const video = { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } };
   if (deviceId) video.deviceId = { exact: deviceId };
   else video.facingMode = { ideal: 'environment' };
@@ -1000,6 +855,8 @@ function setButtons() {
   $('download').hidden = !S.result;
   for (const i of document.querySelectorAll('input[name=matcher], input[name=keypoints]')) i.disabled = capturing || S.finishing || S.busy;
   $('pick').disabled = S.busy || !$('accept').checked;
+  $('video-pick').disabled = $('video-clear').disabled = capturing || S.finishing || S.busy || S.done || S.keyframes.length > 0;
+  $('video-clear').hidden = !S.videoFile;
   // The weights can't go while the matcher made from them is at work.
   $('remove').disabled = capturing || S.finishing || S.busy;
 }
@@ -1019,6 +876,11 @@ async function start() {
       await call('matcher', { url: weightsUrl(S.matcherKind), precision: S.precision });
     }
     const [w, h] = workingSize();
+    S.selector?.dispose();
+    S.selector = new FrameSelector({
+      extractor: S.extractor, matcher: S.matcher, matcherKind: S.matcherKind, kpModel: S.kpModel, module: S.live,
+      settings: S.settings, floor: S.floor, phone, anticipate: true, relocalizePerFrame: RELOCALIZE_PER_FRAME,
+    });
     setStatus('Starting the map…');
     const backends = S.backends;
     await call('new', {
@@ -1026,8 +888,7 @@ async function start() {
       minPairInliers: ONLINE_MIN_PAIR_INLIERS, poses: backends.poses.includes('webgpu') ? 'webgpu' : 'cpu', ba: 'cpu',
     });
     S.session = { width: w, height: h };
-    // Like Recon's 800 confident keypoints are for a 1280 x 720 frame.
-    S.settings.minKeypoints = Math.max(150, Math.round(800 * Math.min(1, (w * h) / (1280 * 720))));
+    S.settings.minKeypoints = minKeypointsFor(w, h);
     // A phone checks a few frames a second: at walking pace the overlap falls ~0.2 between
     // checks. Before the overlap was anticipated (G.anticipate), keyframes landed far past
     // the target and pairs two apart had 4-42 matches; a slightly higher target leaves
@@ -1038,6 +899,10 @@ async function start() {
     S.busy = false;
     setStatus('Capturing. Move slowly; Finish when done.');
     setButtons();
+    if (S.recorded) {
+      $('video').playbackRate = Number(params.get('rate')) || 0.5;
+      await $('video').play();
+    }
     S.loopDone = loop();
     await S.loopDone;
   } catch (e) {
@@ -1051,11 +916,11 @@ async function start() {
 
 async function reset() {
   for (const k of S.keyframes) k.feat?.destroy();
-  clearPicker();
+  S.selector?.dispose();
   Object.assign(S, {
-    keyframes: [], keyframesModel: null, reference: null, before: null, twoBack: false, lastOverlap2: null, held: [], cursor: 0, jobs: [], links: new Set(),
+    keyframes: [], keyframesModel: null, selector: null, jobs: [], links: new Set(),
     map: null, lastStep: null, result: null, done: false, session: null,
-    picker: new G.Picker(), speed: new G.Speed(), blur: new G.Blur(), stats: { frameMs: 0, mapMs: 0, frames: 0, kpMs: 0, describeMs: 0, matchMs: 0, loopMs: 0 },
+    stats: { frameMs: 0, mapMs: 0, frames: 0, kpMs: 0, describeMs: 0, matchMs: 0, loopMs: 0 },
   });
   await call('free');
   $('strip').innerHTML = '';
@@ -1081,7 +946,35 @@ $('finish').addEventListener('click', () => {
 $('reset').addEventListener('click', reset);
 $('again').addEventListener('click', reconstructAgain);
 $('download').addEventListener('click', downloadPly);
-$('camera').addEventListener('change', (e) => { if (!S.running) openCamera(e.target.value).catch((err) => setStatus(err.message, true)); });
+// From a picked video file back to the camera (opened at the next Start, or now when one is chosen).
+function backToCamera() {
+  if (!S.videoFile) return;
+  URL.revokeObjectURL(S.videoFile);
+  S.videoFile = null;
+  stopCamera();
+  $('video').removeAttribute('src');
+  $('video').load();
+  $('video-name').textContent = 'A recorded video instead of the camera, played at half speed.';
+  setButtons();
+}
+$('camera').addEventListener('change', (e) => {
+  if (S.running) return;
+  backToCamera();
+  openCamera(e.target.value).catch((err) => setStatus(err.message, true));
+});
+$('video-clear').addEventListener('click', () => { if (!S.running && !S.finishing) backToCamera(); });
+// A video file as the camera: played at rate= (0.5 by default) from Start, as video=<url> is.
+$('video-pick').addEventListener('click', () => $('video-file').click());
+$('video-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file || S.running || S.finishing) return;
+  if (S.videoFile) URL.revokeObjectURL(S.videoFile);
+  S.videoFile = URL.createObjectURL(file);
+  stopCamera();
+  $('video-name').textContent = `${file.name}: played as the camera from Start.`;
+  setButtons();
+});
 for (const i of document.querySelectorAll('input[name=matcher]')) i.addEventListener('change', refreshWeights);
 $('accept').addEventListener('change', setButtons);
 $('pick').addEventListener('click', () => $('file').click());

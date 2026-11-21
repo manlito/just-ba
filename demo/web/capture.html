@@ -212,6 +212,14 @@
         <select id="camera" disabled><option>—</option></select>
       </div>
       <div class="field">
+        <div class="row">
+          <button id="video-pick">Use a video file…</button>
+          <button id="video-clear" hidden>Use the camera</button>
+          <input id="video-file" type="file" accept="video/*" hidden>
+        </div>
+        <p class="hint" id="video-name">A recorded video instead of the camera, played at half speed.</p>
+      </div>
+      <div class="field">
         <span class="label">Keypoints per frame</span>
         <div class="seg">
           <label><input type="radio" name="keypoints" value="1024">1024</label>

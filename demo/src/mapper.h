@@ -52,6 +52,11 @@ struct Capture {
   // block per focal value, autofocus) are refined each, tied to their group's mean,
   // the mean tied loosely to the capture's values (MapperOptions::group_*).
   std::vector<std::int32_t> intrinsics_group;
+  // Per block: the camera its images come from, any numbers (the capture file's
+  // camera.id); empty: one camera. A camera can have several blocks (its photos of two
+  // sizes, or of two focal values). The focal search treats each camera on its own
+  // (D168); nothing else reads it.
+  std::vector<std::int32_t> block_camera;
   std::size_t num_images() const { return keypoints.size(); }
   std::int32_t block(std::size_t image) const { return image_intrinsics.empty() ? 0 : image_intrinsics[image]; }
   bool has_prior(std::size_t image) const {
@@ -127,9 +132,14 @@ struct MapperOptions {
   double group_target_distortion_sigma = INFINITY;
   // Before anything else, the focal lengths of the blocks marked focal_unknown are
   // searched for: the pairs are verified under focal lengths from a quarter to four
-  // times the guess (61 steps of 4.7 %), all in one poselib-gpu call, and the factor
-  // with the lowest total MSAC score is applied. The adjustments then refine it.
+  // times the guess (61 steps of 4.7 %), all in one poselib-gpu call a search, and the
+  // factor with the lowest total MSAC score is applied. The adjustments then refine it.
   bool search_focal = false;
+  // With cameras named (Capture::block_camera), each camera's guessed blocks are
+  // searched on their own, from the pairs between its images (D168); false, or without
+  // cameras: one factor for every guessed block, from every pair with an image in one,
+  // as before it.
+  bool search_focal_per_block = true;
   // When no image sees min_pnp_inliers of the map's points, the image with the most
   // inliers to a registered one, in a kept pair with at least min_register_pair_inliers
   // of them, and on which no PnP was tried (one rejected stays rejected), is registered
@@ -162,6 +172,15 @@ struct MapperOptions {
   double prior_sigma_horizontal = 3.0;
   double prior_sigma_vertical = 5.0;
 };
+
+// The live demo's cameras (D156, D167): SIMPLE_RADIAL, one block per camera, image
+// size and focal length, the principal point at the centre. size: 2 per image, width
+// and height; focal: per image, pixels, NaN or <= 0 for unknown (then 1.2 times the
+// larger side, marked a guess); camera: per image, which camera took it (a video's
+// frames share one; two videos of one size and unknown focal length are two blocks),
+// null: one camera. Sets c's model, intrinsics, focal_unknown, image_size,
+// image_intrinsics and block_camera.
+void simple_radial_blocks(Capture& c, int n, const std::int32_t* size, const double* focal, const std::int32_t* camera);
 
 // The median focal length over the intrinsics blocks, pixels (fx and fy averaged).
 double median_focal(jba::CameraModel model, const std::vector<double>& intrinsics);
@@ -238,6 +257,11 @@ struct Reconstruction {
   // the result is incomplete.
   bool cancelled = false;
   double focal_factor = 1.0;  // the search's factor (search_focal), 1 without one
+  // The search's factor per intrinsics block (D168), 1 for a block whose focal length
+  // is known; empty without a search. focal_factor is the one shared by the blocks
+  // searched together or, with blocks searched on their own, the median over the
+  // guessed blocks.
+  std::vector<double> focal_factors;
 
   std::vector<double> poses;        // 7 per image of the capture
   std::vector<char> registered;
