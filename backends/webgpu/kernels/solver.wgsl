@@ -71,6 +71,7 @@ const kNoSlot: u32 = 0xffffffffu;
 const kPose: i32 = 0;
 const kIntrinsics: i32 = 1;
 const kDepth: i32 = 5;
+const kIntrinsicsGroup: i32 = 6;
 const kNone: i32 = 0;
 const kHuber: i32 = 1;
 const kCauchy: i32 = 2;
@@ -551,7 +552,8 @@ fn gather_output(b: u32, acc_in: array<f32, 16>) {
   var acc = acc_in;
   let fb = fblock(b);
   let n = fb.size;
-  if (op.mode != 3) {
+  // A group's mean has its factors added by block_gather's threads instead.
+  if (op.mode != 3 && fb.kind != kIntrinsicsGroup) {
     for (var e = ldu(a.fb_fac_begin + b); e < ldu(a.fb_fac_begin + b + 1u); e++) {
       var F = factor(ldu(a.fb_fac + 2u * e));
       let base = F.base[ldu(a.fb_fac + 2u * e + 1u)];
@@ -659,6 +661,27 @@ fn block_gather_body(gid: u32, group: u32, lid: u32) {
             acc[8u + c] += jd * rd;
           } else {
             acc[c] += jd * rd;
+          }
+        }
+      }
+    }
+  }
+  // A group prior's mean (D165): the threads share its factors (solver.inc).
+  if (!skip && fb.kind == kIntrinsicsGroup && op.mode != 3) {
+    let n = fb.size;
+    for (var e = ldu(a.fb_fac_begin + b) + i; e < ldu(a.fb_fac_begin + b + 1u); e += kGatherThreads) {
+      var F = factor(ldu(a.fb_fac + 2u * e));
+      let base = F.base[ldu(a.fb_fac + 2u * e + 1u)];
+      let J = at(a.fJ, F.joff);
+      for (var row = 0; row < F.rows; row++) {
+        let m = select(ld(at(a.fm, F.roff + row)), ld(at(a.fr, F.roff + row)), op.mode == 0);
+        for (var c = 0; c < n; c++) {
+          let v = ld(at(J, row * F.cols + base + c));
+          if (op.mode == 0) {
+            acc[c] += v * v;
+            acc[8 + c] += v * m;
+          } else {
+            acc[c] += v * m;
           }
         }
       }
@@ -1062,9 +1085,30 @@ fn jf_times(x: u32, k: u32) -> vec3f {
   return vec3f(t0, t1, td);
 }
 
+// m = J_factor x for factor f.
+fn factor_times(x: u32, f: u32) {
+  var F = factor(f);
+  let J = at(a.fJ, F.joff);
+  for (var row = 0; row < F.rows; row++) {
+    var m = 0.0;
+    for (var sl = 0; sl < F.nslots; sl++) {
+      if (F.off[sl] < 0) { continue; }
+      for (var c = 0; c < F.size[sl]; c++) {
+        m += ld(at(J, row * F.cols + F.base[sl] + c)) * ld(at(x, F.off[sl] + c));
+      }
+    }
+    st(at(a.fm, F.roff + row), m);
+  }
+}
+
+// Threads past the points do the factors' m = J_factor x (as solver.inc).
 fn schur_points_body(gid: u32, group: u32, lid: u32) {
   let j = gid;
-  if (j >= a.npts || done()) { return; }
+  if (done()) { return; }
+  if (j >= a.npts) {
+    if (j - a.npts < a.nfac) { factor_times(op.x, j - a.npts); }
+    return;
+  }
   let e = ldi(a.point_off + j);
   var u = vec3f(0.0);
   let depth = a.has_depth != 0;
@@ -1099,18 +1143,7 @@ fn schur_points_body(gid: u32, group: u32, lid: u32) {
 fn factors_times_body(gid: u32, group: u32, lid: u32) {
   let f = gid;
   if (f >= a.nfac || (op.mode == 1 && done())) { return; }
-  var F = factor(f);
-  let J = at(a.fJ, F.joff);
-  for (var row = 0; row < F.rows; row++) {
-    var m = 0.0;
-    for (var sl = 0; sl < F.nslots; sl++) {
-      if (F.off[sl] < 0) { continue; }
-      for (var c = 0; c < F.size[sl]; c++) {
-        m += ld(at(J, row * F.cols + F.base[sl] + c)) * ld(at(op.x, F.off[sl] + c));
-      }
-    }
-    st(at(a.fm, F.roff + row), m);
-  }
+  factor_times(op.x, f);
 }
 
 fn rhs_points_body(gid: u32, group: u32, lid: u32) {

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Fetch the live demo's keypoints and matcher (D152): just-keypoints' browser module with
-# ALIKED's weights, and just-matching's with LightGlue's (Apache-2.0, float16), from their
+# Fetch the live demo's keypoints and matcher (D156): just-keypoints' browser module with
+# ALIKED's and XFeat's weights, and just-matching's with LightGlue's (Apache-2.0, float16) and
+# LighterGlue's (XFeat's LightGlue, Apache-2.0), from their
 # documentation sites into third_party/match-web (not committed), checked against pinned
 # hashes:
 #
@@ -16,12 +17,14 @@ DEST="$ROOT/third_party/match-web"
 FILES=(
   "jkp https://just-keypoints.pages.dev/lib jkp.js d459bd7cbb03187b0662a289e8235ce4b70d83969b93b3a750f71e89972d0262"
   "jkp https://just-keypoints.pages.dev/lib jkp_wasm.js 54d4ddebaa5187427297c2c1ef401ca8ba4016367ad763f96a4bc58b7e36ae9a"
-  "jkp https://just-keypoints.pages.dev/lib jkp_wasm.wasm 3fc11898ad410815e8a399c7e110bc9cb218362088c91bba6f84ec8a12711d20"
+  "jkp https://just-keypoints.pages.dev/lib jkp_wasm.wasm 6f11dd0839b57488d3f63e48e07e8b1fa3cdeaca7381e9302800ee67389d5919"
   "jkp https://just-keypoints.pages.dev/lib aliked-n16.jkpw 8002a58d4f374335b58941dd3eac210daa2d19270105932c60fbf6ae2d33f3a8"
-  "jmt https://just-matching.pages.dev/lib jmt.js a49941abea10e1a4a396057d4791942f5eab1ebc5734dab545122c84cf7cb914"
-  "jmt https://just-matching.pages.dev/lib jmt_wasm.js ef1c61658f8a2004fe5573cda1cc5b9534c986084ff4c4b899d895f5da5691a8"
-  "jmt https://just-matching.pages.dev/lib jmt_wasm.wasm ec25dcc8bd3e8ee07944ee01613531f74c44574041d58df4e9e454de16311a78"
+  "jmt https://just-matching.pages.dev/lib jmt.js 481d6a5c383bd22f02f5f4701f6a1899e3f974bcd5a4d5882399d65c382eed14"
+  "jmt https://just-matching.pages.dev/lib jmt_wasm.js 18718e16d4af9b0966e9605404286bef30d9356fcce175a607bcfb9ac3ad2015"
+  "jmt https://just-matching.pages.dev/lib jmt_wasm.wasm 69f1da090b7eab2b0fb435d9376649ea266ee577902bc3d1804caa1c2e7e6082"
   "jmt https://just-matching.pages.dev/lib lightglue-aliked-fp16.jmtw 3541ba0088b4578f7009b97c54468c0712d6b98dd39fa50c52d7f33bfc5b5b97"
+  "jkp https://just-keypoints.pages.dev/lib xfeat.jkpw c67999d3f9cc647d9ad03258b5df758cb4269ece10270f14168249d06ced3434"
+  "jmt https://just-matching.pages.dev/lib lightglue-xfeat.jmtw 61df510fb7b4e00878075f7e6e1486351112820b9002acec92754cc55c4e7a7c"
 )
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }

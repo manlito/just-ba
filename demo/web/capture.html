@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Live capture · just-ba</title>
+<meta name="description" content="Point your laptop's or phone's camera at a scene and move around it: the page keeps keyframes as you go and reconstructs them while you capture, on your GPU, in the browser.">
+<link rel="modulepreload" href="jba_demo.js">
+<style>
+  :root {
+    --page: #f9fafb; --panel: #ffffff; --text: #16181d; --body: #374151; --muted: #5b6472; --faint: #8a93a3;
+    --line: #e4e7ec; --field: #d0d5dd; --empty: #eef0f3; --accent: #1f4fd1; --on-accent: #ffffff;
+    --ok: #0f7a4a; --bad: #b42318; --warn-bg: #fff4e5; --warn-text: #5c3a00;
+    --view: #ffffff; --point: #6b7280; --cam: #16181d; --cam-new: #d9480f; --kp: #ffd24a; --kp-in: #34d399;
+    --sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0f1115; --panel: #161a20; --text: #eef0f3; --body: #c9ced6; --muted: #9aa3b2; --faint: #7c8594;
+      --line: #262b33; --field: #343b46; --empty: #1c2128; --accent: #7aa2ff; --on-accent: #0f1115;
+      --ok: #a5d6a7; --bad: #ff8a80; --warn-bg: #2a1d0c; --warn-text: #f3d9b1;
+      --view: #0b0d11; --point: #8a93a3; --cam: #eef0f3; --cam-new: #ff8a50;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--page); color: var(--body); font: 14px/1.5 var(--sans); }
+  a { color: var(--accent); }
+
+  .jb-skip { position: absolute; left: -9999px; top: 8px; z-index: 10; }
+  .jb-skip:focus { left: 12px; background: var(--panel); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); }
+  .jb-top { border-bottom: 1px solid var(--line); background: var(--panel); }
+  .jb-top-in { max-width: 1320px; margin: 0 auto; padding: 12px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
+  .jb-top a { text-decoration: none; }
+  .jb-top a:hover { text-decoration: underline; }
+  a.jb-brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 700; font-size: 17px; }
+  a.jb-brand:hover { text-decoration: none; }
+  .jb-brand svg { color: var(--accent); }
+  .jb-grow { flex: 1 1 40px; }
+  a.jb-toplink { font-size: 14px; color: var(--muted); }
+  a.jb-toplink[aria-current="page"] { color: var(--text); font-weight: 600; }
+
+  main { max-width: 1320px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { color: var(--text); font-size: 22px; margin: 0 0 6px; }
+  h2 { color: var(--text); font-size: 15px; margin: 0 0 10px; }
+  p { margin: 4px 0 10px; }
+  .lede { color: var(--muted); max-width: 90ch; margin-bottom: 16px; }
+  .notice { background: var(--warn-bg); color: var(--warn-text); border-radius: 8px; padding: 10px 14px; margin: 0 0 14px; }
+  .notice strong { display: block; margin-bottom: 2px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+  .hint { color: var(--faint); font-size: 12.5px; margin: 4px 0 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .muted { color: var(--muted); }
+  button, select {
+    font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--field); border-radius: 8px; padding: 7px 12px;
+    min-height: 40px;
+  }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; padding: 7px 20px; }
+  .seg { display: inline-flex; border: 1px solid var(--field); border-radius: 8px; overflow: hidden; flex-wrap: wrap; }
+  .seg label { padding: 6px 12px; cursor: pointer; border-right: 1px solid var(--field); user-select: none; }
+  .seg label:last-child { border-right: 0; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label:has(input:checked) { background: var(--accent); color: var(--on-accent); }
+  .seg label:has(input:disabled) { opacity: 0.45; cursor: default; }
+  .seg label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .field { margin: 0 0 12px; }
+  .field > .label { display: block; color: var(--muted); font-size: 12.5px; margin-bottom: 4px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  td { padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+  td.n { text-align: right; font-family: var(--mono); font-size: 12.5px; color: var(--text); padding-right: 0; }
+  tr:last-child td { border-bottom: 0; }
+  progress { width: 100%; height: 8px; accent-color: var(--accent); }
+
+  /* The map is the view; a corner shows the last keyframe, with the live camera inset in it. */
+  .stage { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--view); }
+  #view { display: block; width: 100%; height: min(72vh, 720px); touch-action: none; cursor: grab; }
+  .pip { position: absolute; right: 10px; bottom: 10px; width: min(30%, 320px); border-radius: 8px; overflow: hidden;
+         background: #000; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35); border: 2px solid rgba(255, 255, 255, 0.85); }
+  .pip canvas, .pip video { display: block; width: 100%; height: auto; }
+  .pip.has-kf video { position: absolute; left: 6px; top: 6px; width: 38%; border-radius: 5px; border: 1.5px solid #fff; }
+  .pip .placeholder { aspect-ratio: 3 / 4; display: flex; align-items: center; justify-content: center; color: #9aa3b2; padding: 10px; text-align: center; font-size: 12px; }
+  .pip.flash { border-color: #34d399; }
+  .chip { position: absolute; left: 10px; top: 10px; padding: 6px 12px; border-radius: 999px; font-size: 14px; font-weight: 600;
+          background: rgba(0, 0, 0, 0.62); color: #fff; pointer-events: none; max-width: calc(100% - 20px); }
+  .chip.kept, .chip.ok { background: rgba(15, 122, 74, 0.9); }
+  .chip.warn { background: rgba(180, 35, 24, 0.9); }
+  .stats { position: absolute; left: 12px; bottom: 10px; max-width: calc(64% - 24px); font-size: 12px; color: var(--muted); pointer-events: none; font-family: var(--mono); }
+  .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--faint); pointer-events: none; padding: 16px; text-align: center; }
+
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0; }
+  .controls .status { flex: 1 1 240px; color: var(--text); font-weight: 500; }
+  .controls .status.error { color: var(--bad); }
+  .strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 16px; min-height: 8px; }
+  .strip canvas { flex: 0 0 auto; height: 54px; border-radius: 5px; background: var(--empty); outline: 2px solid transparent; }
+  .strip canvas.placed { outline-color: var(--ok); }
+  .strip canvas.unplaced { opacity: 0.45; }
+  .cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+  .licence { max-height: 140px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; color: var(--muted); margin: 8px 0; }
+  .drop { border: 1.5px dashed var(--field); border-radius: 8px; padding: 12px; text-align: center; color: var(--faint); font-size: 12.5px; margin-top: 8px; }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
+  .ok { color: var(--ok); font-weight: 600; }
+  .credits { color: var(--faint); font-size: 12.5px; margin-top: 8px; max-width: 120ch; }
+
+  @media (max-width: 1040px) { .cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+  @media (max-width: 760px) {
+    main { padding: 12px 12px 120px; }
+    h1 { display: none; }
+    .lede { display: none; }
+    /* The map fills the screen above the buttons. */
+    #view { height: calc(100svh - 250px); min-height: 300px; }
+    .pip { width: 34%; }
+    .cols { grid-template-columns: minmax(0, 1fr); }
+    /* The buttons stay under the thumb. */
+    .controls { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; margin: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+                background: var(--panel); border-top: 1px solid var(--line); }
+    .controls .status { order: -1; flex-basis: 100%; font-size: 13px; }
+    .controls button { flex: 1 1 0; min-height: 46px; }
+  }
+</style>
+</head>
+<body>
+<a class="jb-skip" href="#content">Skip to content</a>
+<header class="jb-top">
+  <div class="jb-top-in">
+    <a class="jb-brand" href="../index.html">
+      <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2.5"></circle><circle cx="17" cy="5" r="2.5"></circle><circle cx="11" cy="17" r="2.5"></circle><path d="M7.3 6.8 9.6 15M14.9 6.6 12.3 15M7.5 5.8h7"></path></svg>
+      <span>just-ba</span>
+    </a>
+    <span class="jb-grow"></span>
+    <a class="jb-toplink" href="../index.html">Documentation</a>
+    <a class="jb-toplink" href="index.html">Live demo</a>
+    <a class="jb-toplink" href="capture.html" aria-current="page">Live capture</a>
+  </div>
+</header>
+
+<main id="content">
+  <h1>Live capture</h1>
+  <p class="lede">Walk around a scene; keyframes become a 3D map, on your GPU. Nothing is uploaded.</p>
+  <div id="unsupported" class="notice" hidden></div>
+  <div id="notice" class="notice" hidden></div>
+
+  <div class="stage" id="stage">
+    <canvas id="view" aria-label="The map"></canvas>
+    <div id="empty" class="empty">The map appears here once two keyframes far enough apart are kept.</div>
+    <div id="chip" class="chip" hidden></div>
+    <div id="stats" class="stats"></div>
+    <div id="pip" class="pip" title="The last keyframe, and the camera">
+      <canvas id="lastkf" hidden></canvas>
+      <video id="video" playsinline muted hidden></video>
+      <div id="placeholder" class="placeholder">Camera</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <span id="status" class="status">Loading…</span>
+    <button id="start" class="primary" disabled>Start</button>
+    <button id="shoot" disabled title="Keep the next frame, whatever the rules say">Shoot now</button>
+    <button id="finish" disabled>Finish</button>
+    <button id="again" hidden title="Match the keyframes again with the matcher chosen below, and reconstruct">Reconstruct again</button>
+    <button id="reset" hidden>New capture</button>
+    <button id="download" hidden>Download PLY</button>
+  </div>
+  <progress id="progress" hidden></progress>
+  <div id="strip" class="strip" aria-label="Keyframes"></div>
+
+  <div class="cols">
+    <section class="panel" id="weights-panel">
+      <h2>Matcher</h2>
+      <div class="field">
+        <div class="seg" id="matcher">
+          <label><input type="radio" name="matcher" value="flexglue">FlexGlue</label>
+          <label><input type="radio" name="matcher" value="lightglue">LightGlue</label>
+          <label><input type="radio" name="matcher" value="lighterglue">LighterGlue</label>
+        </div>
+        <p class="hint" id="matcher-hint"></p>
+      </div>
+      <div id="flexglue" hidden>
+        <p id="weights-status" class="muted"></p>
+        <div id="weights-get" hidden>
+          <p>FlexGlue's weights are not served by this page: its backbone is under Meta's DINOv3 License. Download
+            <code>flexglue.pth</code> (567 MB) from <a href="https://github.com/cvg/FlexGlue/releases/tag/v0.1" target="_blank" rel="noopener">FlexGlue's release</a>
+            and give it to the page below. It is checked, converted to half precision (284 MB) and kept in this browser,
+            so it is needed only once.</p>
+          <label class="row"><input type="checkbox" id="accept"> I accept the licences below, under which I use FlexGlue's weights.</label>
+          <div class="licence">
+            <p><strong>DINOv3 License</strong> (Meta), for the backbone: the weights may be used, copied and modified,
+              with this agreement passed on to anyone they are given to; research using them must acknowledge them; use
+              must comply with trade controls, and not for military, nuclear, espionage or weapons purposes.
+              <a href="https://github.com/cvg/FlexGlue/blob/99920296d082c9405ebfd612d674efe288e74881/DINOv3_LICENSE.md" target="_blank" rel="noopener">Read the full licence</a>.</p>
+            <p><strong>MIT licence</strong>, for FlexGlue's matcher.
+              <a href="https://github.com/cvg/FlexGlue/blob/99920296d082c9405ebfd612d674efe288e74881/LICENSE" target="_blank" rel="noopener">Read it</a>.</p>
+          </div>
+          <div class="row">
+            <button id="pick" disabled>Choose flexglue.pth…</button>
+            <input id="file" type="file" accept=".pth" hidden>
+          </div>
+          <div id="drop" class="drop">Or drop flexglue.pth here.</div>
+        </div>
+        <div class="row" style="margin-top:8px"><button id="remove" hidden>Remove from this browser</button></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Camera</h2>
+      <div class="field">
+        <span class="label">Camera</span>
+        <select id="camera" disabled><option>—</option></select>
+      </div>
+      <div class="field">
+        <span class="label">Keypoints per frame</span>
+        <div class="seg">
+          <label><input type="radio" name="keypoints" value="1024">1024</label>
+          <label><input type="radio" name="keypoints" value="2048">2048</label>
+        </div>
+      </div>
+      <p class="hint">Move slowly and keep the scene in view: when the page loses the last keyframe it says so, and
+        moving back finds it again. Keep the phone the same way up for the whole capture.</p>
+      <p class="hint" id="gpu-info"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Map</h2>
+      <table id="numbers"><tr><td class="muted">Not started.</td></tr></table>
+    </section>
+  </div>
+
+  <p class="credits">Keypoints: ALIKED (BSD-3-Clause), or XFeat (Apache-2.0) with LighterGlue, through just-keypoints.
+    Matches: FlexGlue (matcher MIT, backbone DINOv3 License; your own copy), LightGlue or LighterGlue (weights
+    Apache-2.0) through just-matching. Pose estimation: poselib-gpu.
+    Mapping and bundle adjustment: just-ba. The keep rules are Like Recon's.</p>
+</main>
+
+<script type="module" src="capture.js"></script>
+</body>
+</html>

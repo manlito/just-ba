@@ -20,6 +20,26 @@ struct ResidualReport {
   double gravity_cost = 0;
   double line_cost = 0;
   double depth_cost = 0;  // depth readings and the priors on free corrections
+  // Priors on free intrinsics (D161). Kept apart from reprojection_cost, which stays
+  // the pixels' own; the solver's reprojection entry (SolverSummary::*_cost_by_type)
+  // is the sum of the two.
+  double intrinsics_prior_cost = 0;
+  // Per intrinsics block with a prior: the largest |k - target| / sigma over its
+  // free parameters, and that parameter's index (COLMAP order); 0 and -1 for blocks
+  // without one. Empty without intrinsics_prior_sigma.
+  std::vector<double> intrinsics_prior_norm;
+  std::vector<int> intrinsics_prior_param;
+  // The group prior (D165), also part of the solver's reprojection entry: the cost of
+  // the ties and the targets; per block tied to its group, the largest |k - mean| /
+  // sigma and its parameter, and per group with a target, the largest |mean - target|
+  // / sigma and its parameter (0 and -1 for none). The mean is
+  // Problem::intrinsics_group_mean, or the members' mean where it has none. Empty
+  // without groups.
+  double intrinsics_group_cost = 0;
+  std::vector<double> intrinsics_group_norm;
+  std::vector<int> intrinsics_group_param;
+  std::vector<double> intrinsics_group_target_norm;
+  std::vector<int> intrinsics_group_target_param;
 
   // Per observation: reprojection error in pixels (not divided by sigma), and
   // whether the point is in front of the camera.
@@ -33,8 +53,9 @@ struct ResidualReport {
   // Per gravity prior: angle between the measured and the solved gravity direction
   // (radians), and the robust weight.
   std::vector<double> gravity_angle, gravity_weight;
-  // Per segment: the angle (radians) by which its assigned axis misses the segment's
-  // plane, and the robust weight; NaN and 0 for segments not in the Manhattan term
+  // Per segment: the image angle (radians) between the segment and the direction
+  // towards its assigned axis's vanishing point (from the pixel residual, D163), and
+  // the robust weight; NaN and 0 for segments not in the Manhattan term
   // (unassigned, or the term off).
   std::vector<double> line_angle, line_weight;
   // Per observation with a depth reading (NaN elsewhere, weight 0): the refined depth

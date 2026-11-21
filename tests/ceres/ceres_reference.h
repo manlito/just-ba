@@ -123,15 +123,19 @@ ceres::CostFunction* make_global_prior_cost(const double* q_prior, const double*
 // Gravity prior: parameters (pose 7); residual R g_world - g_camera divided by sigma.
 ceres::CostFunction* make_gravity_prior_cost(const double* g_world, const double* g_camera, double inv_sigma);
 
-// Manhattan line: parameters (pose 7, frame 4); residual n . (R R_M e_axis) divided by
-// sigma, with n the segment's plane normal in camera axes.
-ceres::CostFunction* make_line_cost(const double* normal, int axis, double inv_sigma);
+// Manhattan line (D163): parameters (pose 7, frame 4, intrinsics); residual the pixel
+// distance of the endpoints xy (x0, y0, x1, y1) from the best circle through the
+// axis R R_M e_axis, divided by sigma (pixels).
+ceres::CostFunction* make_line_cost(jba::CameraModel model, const double* xy, int axis, double inv_sigma);
 
 // Depth at a keypoint: parameters (pose 7, point 3, correction 2); residual
 // (depth - b) / a - d, or a / (depth - b) - 1 / d, divided by sigma.
 ceres::CostFunction* make_depth_cost(jba::DepthKind kind, jba::DepthForm form, double reading, double inv_sigma);
 // Prior on a depth correction toward (1, 0): parameters (correction 2), weights per part.
 ceres::CostFunction* make_depth_prior_cost(double w_scale, double w_offset);
+// Prior on an intrinsics block (D161): parameters (intrinsics n); residual
+// (k - target) * weight per parameter.
+ceres::CostFunction* make_intrinsics_prior_cost(const double* target, const double* weight, int n);
 
 // A ceres::LossFunction matching `loss`, or nullptr for none. Caller owns it.
 ceres::LossFunction* make_loss(const jba::Loss& loss);

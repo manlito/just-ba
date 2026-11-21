@@ -12,6 +12,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -89,6 +90,16 @@ In<T> as_array(nb::handle h, const char* name) {
 template <typename T>
 std::vector<T> from_optional(const std::optional<In<T>>& a, const std::vector<std::size_t>& tail, const char* name) {
   return a ? from_numpy(*a, tail, name) : std::vector<T>{};
+}
+
+// An array shaped like Problem::intrinsics: (B, num_params) or one 1-d block; an
+// empty array clears it.
+std::vector<double> intrinsics_like(const jba::Problem& p, nb::handle h, const char* name) {
+  const auto a = as_array<double>(h, name);
+  if (a.size() == 0) return {};
+  const auto np = static_cast<std::size_t>(jba::num_params(p.model));
+  if (a.ndim() == 1 && a.shape(0) == np) return std::vector<double>(a.data(), a.data() + np);
+  return from_numpy(a, {np}, name);
 }
 
 jba::CameraModel model_of(const nb::handle& h) {
@@ -226,6 +237,18 @@ NB_MODULE(_core, m) {
       .value("SPARSE_SCHUR", jba::LinearSolverType::SparseSchur);
   m.def("backend_available", &jba::backend_available, "kind"_a,
         "Whether this build has the backend and the machine can run it.");
+  m.def("set_intrinsics_groups", &jba::set_intrinsics_groups, "problem"_a, "group_of_block"_a, "focal_fraction"_a,
+        "principal_point_sigma"_a = std::numeric_limits<double>::infinity(),
+        "distortion_sigma"_a = std::numeric_limits<double>::infinity(),
+        "group_focal_fraction"_a = std::numeric_limits<double>::infinity(),
+        "group_principal_point_sigma"_a = std::numeric_limits<double>::infinity(),
+        "group_distortion_sigma"_a = std::numeric_limits<double>::infinity(),
+        "Hierarchical prior by group of blocks (D165): each block of a group is tied to the group's mean, focal "
+        "lengths within focal_fraction of the group's mean focal length, the principal point within "
+        "principal_point_sigma pixels, distortion within distortion_sigma; the mean is tied to a target by the "
+        "group_* sigmas (inf leaves it free). Target and mean are cleared: the next solve takes both from the "
+        "members' mean (blocks used by an observation) and writes them back. group_of_block: one group per block, "
+        "-1 for none. Which groups are refined at all is still intrinsics_free.");
   m.def(
       "compiled_backends",
       [] {
@@ -273,6 +296,58 @@ NB_MODULE(_core, m) {
           },
           nb::for_getter(nb::rv_policy::move),
           "Intrinsics blocks, (B, num_params(model)); one block (a 1-d array) is the normal case. Set the model first.")
+      .def_prop_rw(
+          "intrinsics_prior",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_prior, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_prior = intrinsics_like(p, h, "intrinsics_prior"); },
+          nb::for_getter(nb::rv_policy::move),
+          "Target of the prior on free intrinsics (D161), shaped like intrinsics; empty ([]) or NaN for a parameter: "
+          "the intrinsics given to solve(), which writes the target it used back here for the blocks it regularized.")
+      .def_prop_rw(
+          "intrinsics_prior_sigma",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_prior_sigma, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_prior_sigma = intrinsics_like(p, h, "intrinsics_prior_sigma"); },
+          nb::for_getter(nb::rv_policy::move),
+          "Standard deviation of each intrinsics parameter's prior, shaped like intrinsics, in the parameter's units "
+          "(pixels for focal lengths and the principal point). A freed group with a finite sigma is regularized, "
+          "without one fully free; +inf for none; empty: no prior (D161). See set_intrinsics_prior.")
+      .def_prop_rw(
+          "intrinsics_group_sigma",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_sigma, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_sigma = intrinsics_like(p, h, "intrinsics_group_sigma"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) per group of the hierarchical prior (D165): sigma of each block's tie to its group's mean, in the parameter's units; +inf for no tie. See set_intrinsics_groups.")
+      .def_prop_rw(
+          "intrinsics_group_prior",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_prior, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_prior = intrinsics_like(p, h, "intrinsics_group_prior"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) target of each group's mean (D165); empty or NaN: the members' mean as given to solve(), which writes the target it used back here.")
+      .def_prop_rw(
+          "intrinsics_group_prior_sigma",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_prior_sigma, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_prior_sigma = intrinsics_like(p, h, "intrinsics_group_prior_sigma"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) sigma of each group's mean about its target (D165); +inf or empty: the mean free of any target.")
+      .def_prop_rw(
+          "intrinsics_group_mean",
+          [](const jba::Problem& p) {
+            return to_numpy(p.intrinsics_group_mean, {static_cast<std::size_t>(jba::num_params(p.model))});
+          },
+          [](jba::Problem& p, nb::handle h) { p.intrinsics_group_mean = intrinsics_like(p, h, "intrinsics_group_mean"); },
+          nb::for_getter(nb::rv_policy::move),
+          "(G, num_params) each group's mean (D165), in and out: empty or NaN, the members' mean as given; solve() writes the estimate back for the tied parameters.")
+      .def_prop_ro("num_intrinsics_groups", &jba::Problem::num_intrinsics_groups)
       .def_prop_ro("num_images", &jba::Problem::num_images)
       .def_prop_ro("num_points", &jba::Problem::num_points)
       .def_prop_ro("num_observations", &jba::Problem::num_observations)
@@ -289,6 +364,8 @@ NB_MODULE(_core, m) {
               "Per intrinsics block: bit mask of freed groups (1 focal, 2 principal point, 4 distortion).");
   array_field(problem, "poses", &jba::Problem::poses, {7},
               "(N, 7) world-to-camera poses; quaternions are normalised on the way in.", true);
+  array_field(problem, "intrinsics_group", &jba::Problem::intrinsics_group, {},
+              "Per intrinsics block: its group of the hierarchical prior (D165), -1 for none; empty: no groups.");
   array_field(problem, "image_intrinsics", &jba::Problem::image_intrinsics, {}, "(N,) intrinsics block per image.");
   array_field(problem, "image_fixed", &jba::Problem::image_fixed, {}, "(N,) 1 holds a pose fixed.");
   array_field(problem, "points", &jba::Problem::points, {3}, "(M, 3) world points.");
@@ -363,6 +440,12 @@ NB_MODULE(_core, m) {
   m.def("read_problem", &jba::read_problem, "path"_a, "Reads a .jba problem file.");
   m.def("write_problem", &jba::write_problem, "path"_a, "problem"_a, "Writes a .jba problem file.");
   m.def("read_bal", &jba::read_bal, "path"_a, "Reads a Bundle Adjustment in the Large problem.");
+  m.def("set_intrinsics_prior", &jba::set_intrinsics_prior, "problem"_a, "focal_fraction"_a,
+        "principal_point_sigma"_a = std::numeric_limits<double>::infinity(),
+        "distortion_sigma"_a = std::numeric_limits<double>::infinity(),
+        "Regularizes free intrinsics toward their current values (D161): focal lengths within focal_fraction of "
+        "their value, the principal point within principal_point_sigma pixels, distortion within distortion_sigma; "
+        "inf leaves a group fully free. Which groups are refined at all is still intrinsics_free.");
   m.def(
       "add_relative_priors_from_poses",
       [](jba::Problem& p, nb::handle poses, nb::handle pairs) {
@@ -393,8 +476,8 @@ NB_MODULE(_core, m) {
       .def_rw("global_rotation_sigma", &jba::PriorDefaults::global_rotation_sigma, "Global priors, rotation, radians (provisional).")
       .def_rw("global_position_sigma", &jba::PriorDefaults::global_position_sigma, "Global priors, position, in the prior set's own units (provisional).")
       .def_rw("gravity_sigma", &jba::PriorDefaults::gravity_sigma, "Gravity priors, radians (provisional).")
-      .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma, "Manhattan segments: endpoint sigma in pixels; the residual's sigma is max(line_min_sigma, sqrt(2) * this / length).")
-      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma, "Smallest sigma of a segment's residual (the sine of an angle).")
+      .def_rw("line_endpoint_sigma", &jba::PriorDefaults::line_endpoint_sigma, "Manhattan segments: endpoint sigma in pixels; the residual (pixels) has sigma max(this, line_min_sigma * length / sqrt(2)).")
+      .def_rw("line_min_sigma", &jba::PriorDefaults::line_min_sigma, "Floor on a segment's sigma, as the sine of an image angle (times length / sqrt(2) in pixels).")
       .def_rw("depth_sigma", &jba::PriorDefaults::depth_sigma, "Depth at keypoints: sigma = this + depth_sigma_per_metre * reading, metres.")
       .def_rw("depth_sigma_per_metre", &jba::PriorDefaults::depth_sigma_per_metre, "Metres of depth sigma per metre of reading.")
       .def_rw("depth_scale_sigma", &jba::PriorDefaults::depth_scale_sigma, "Prior on a free depth scale correction toward 1; +inf for none.")
@@ -506,13 +589,41 @@ NB_MODULE(_core, m) {
       .def_ro("gravity_cost", &jba::ResidualReport::gravity_cost)
       .def_ro("line_cost", &jba::ResidualReport::line_cost)
       .def_ro("depth_cost", &jba::ResidualReport::depth_cost)
+      .def_ro("intrinsics_prior_cost", &jba::ResidualReport::intrinsics_prior_cost,
+              "Priors on free intrinsics; the solver's reprojection entry is reprojection_cost plus this.")
+      .def_prop_ro("intrinsics_prior_norm", [](const jba::ResidualReport& r) { return to_numpy(r.intrinsics_prior_norm); },
+                   "Per intrinsics block: largest abs(k - target) / sigma over its regularized parameters.",
+                   nb::rv_policy::move)
+      .def_prop_ro("intrinsics_prior_param",
+                   [](const jba::ResidualReport& r) {
+                     return to_numpy(std::vector<std::int32_t>(r.intrinsics_prior_param.begin(), r.intrinsics_prior_param.end()));
+                   },
+                   "Per intrinsics block: the parameter of intrinsics_prior_norm, -1 for none.", nb::rv_policy::move)
+      .def_ro("intrinsics_group_cost", &jba::ResidualReport::intrinsics_group_cost,
+              "The group prior (D165), also part of the solver's reprojection entry.")
+      .def_prop_ro("intrinsics_group_norm", [](const jba::ResidualReport& r) { return to_numpy(r.intrinsics_group_norm); },
+                   "Per intrinsics block: largest abs(k - mean) / sigma over its tied parameters.", nb::rv_policy::move)
+      .def_prop_ro("intrinsics_group_param",
+                   [](const jba::ResidualReport& r) {
+                     return to_numpy(std::vector<std::int32_t>(r.intrinsics_group_param.begin(), r.intrinsics_group_param.end()));
+                   },
+                   "Per intrinsics block: the parameter of intrinsics_group_norm, -1 for none.", nb::rv_policy::move)
+      .def_prop_ro("intrinsics_group_target_norm",
+                   [](const jba::ResidualReport& r) { return to_numpy(r.intrinsics_group_target_norm); },
+                   "Per group: largest abs(mean - target) / sigma over its parameters with a target.", nb::rv_policy::move)
+      .def_prop_ro("intrinsics_group_target_param",
+                   [](const jba::ResidualReport& r) {
+                     return to_numpy(std::vector<std::int32_t>(r.intrinsics_group_target_param.begin(),
+                                                               r.intrinsics_group_target_param.end()));
+                   },
+                   "Per group: the parameter of intrinsics_group_target_norm, -1 for none.", nb::rv_policy::move)
       .def_prop_ro("depth_refined", [](const jba::ResidualReport& r) { return to_numpy(r.depth_refined); },
                    "Per observation: refined depth of its point, NaN without a reading.", nb::rv_policy::move)
       .def_prop_ro("depth_corrected", [](const jba::ResidualReport& r) { return to_numpy(r.depth_corrected); },
                    "Per observation: the corrected reading a d + b.", nb::rv_policy::move)
       .def_prop_ro("depth_weight", [](const jba::ResidualReport& r) { return to_numpy(r.depth_weight); }, nb::rv_policy::move)
       .def_prop_ro("line_angle", [](const jba::ResidualReport& r) { return to_numpy(r.line_angle); },
-                   "Per segment: angle by which its axis misses its plane, rad; NaN when not in the term.",
+                   "Per segment: image angle between it and the direction to its axis's vanishing point, rad; NaN when not in the term.",
                    nb::rv_policy::move)
       .def_prop_ro("line_weight", [](const jba::ResidualReport& r) { return to_numpy(r.line_weight); }, nb::rv_policy::move)
       .def_prop_ro("reprojection_error", [](const jba::ResidualReport& r) { return to_numpy(r.reprojection_error); }, nb::rv_policy::move)
@@ -679,6 +790,11 @@ NB_MODULE(_core, m) {
       "problem"_a, "options"_a.sig("ManhattanOptions()") = jba::ManhattanOptions{}, "frame"_a = nb::none(),
       "Estimates the Manhattan frame from the segments and current poses, assigns segments to axes, and runs "
       "the support test. With `frame`, assigns to that frame's axes.");
+  m.def(
+      "aligned_frame", [](const jba::Problem& p) { return to_numpy(jba::aligned_frame(p)); }, "problem"_a,
+      "Manhattan frame of a working frame already aligned with the building: axis 2 up (-gravity_world), axes 0 "
+      "and 1 along the most nearly horizontal working axes.",
+      nb::rv_policy::move);
   m.def("apply_assignment", &jba::apply_assignment, "problem"_a, "assignment"_a, "dof"_a = 1,
         "Stores an accepted assignment in the problem (line_axis, manhattan_frame); a refused one clears them.");
 
@@ -694,6 +810,9 @@ NB_MODULE(_core, m) {
       .def_rw("largest_group_only", &jba::RefineOptions::largest_group_only, "Solve only the largest group of connected images; otherwise each in its own frame.")
       .def_rw("use_manhattan", &jba::RefineOptions::use_manhattan,
               "Manhattan prior from scene's line segments; opt-in.")
+      .def_rw("estimate_manhattan_frame", &jba::RefineOptions::estimate_manhattan_frame,
+              "With use_manhattan, estimate the building's axes from the segments. False when the working frame is "
+              "already Manhattan aligned: the frame is scene.manhattan_frame, or aligned_frame() when that is empty.")
       .def_rw("manhattan", &jba::RefineOptions::manhattan, "Options of the Manhattan prior (ManhattanOptions).")
       .def_rw("manhattan_min_angle_deg", &jba::RefineOptions::manhattan_min_angle_deg, "Smallest assignment angle of the segments, degrees (halved each round down to this).")
       .def_rw("min_observations", &jba::RefineOptions::min_observations,

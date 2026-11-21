@@ -10,8 +10,20 @@
 //                    [--lines N] [--line-dof 1|3] [--line-outliers FRACTION] [--prior-groups 2]
 //                    [--depth FRACTION] [--depth-kind z|range] [--depth-form linear|inverse]
 //                    [--depth-free MASK] [--depth-outliers FRACTION] [--far-points FRACTION]
+//                    [--intrinsics-prior FOCAL_FRACTION,PP_PX,DISTORTION] [--intrinsics-prior-at-start]
+//                    [--intrinsics-groups G] [--intrinsics-group-sigma F,PP,DIST,GROUP_F,GROUP_PP,GROUP_DIST]
+//                    [--intrinsics-group-at-start]
 //
 // MASK is the IntrinsicsGroup bit mask: 1 focal, 2 principal point, 4 distortion.
+// --intrinsics-prior: a prior on the intrinsics (D161, set_intrinsics_prior) toward
+// the true values, which the free groups then start away from; inf leaves a group
+// without one. With --intrinsics-prior-at-start the target is left empty, so it is
+// the (perturbed) starting values.
+// --intrinsics-groups G: the hierarchical prior (D165, set_intrinsics_groups), block c
+// in group c % G (with --per-image-intrinsics, image i's block in group i % G), with
+// the ties' and the targets' sigmas of --intrinsics-group-sigma (default
+// 0.005,inf,0.001,0.05,inf,inf), the target the true values; with
+// --intrinsics-group-at-start the target is left empty, the members' starting mean.
 // --track-length N: each point is seen by N neighbouring images on the ring only (a
 // walked capture); by default every image sees every point.
 // Priors come from the true poses with noise: relative priors tie each image to
@@ -60,6 +72,11 @@ int main(int argc, char** argv) {
     int relative_priors = 0;
     jba::FrameRelation relation = jba::FrameRelation::Identity;
     double prior_noise[2] = {0.002, 0.005}, prior_sigma[2] = {0, 0}, prior_outliers = 0;
+    double intr_prior[3] = {0, 0, 0};  // focal fraction, principal point, distortion; 0: no prior
+    bool intr_prior_at_start = false;
+    int intr_groups = 0;
+    double group_sigma[6] = {0.005, INFINITY, 0.001, 0.05, INFINITY, INFINITY};
+    bool group_at_start = false;
     auto pair_of = [](const std::string& v, double* out) {
       const auto comma = v.find(',');
       if (comma == std::string::npos) throw std::invalid_argument("expected ROT,TRANS: " + v);
@@ -78,6 +95,14 @@ int main(int argc, char** argv) {
       }
       if (key == "--gravity-priors") {
         gravity_priors = true;
+        continue;
+      }
+      if (key == "--intrinsics-prior-at-start") {
+        intr_prior_at_start = true;
+        continue;
+      }
+      if (key == "--intrinsics-group-at-start") {
+        group_at_start = true;
         continue;
       }
       if (a + 1 >= argc) throw std::invalid_argument("missing value for " + key);
@@ -109,6 +134,25 @@ int main(int argc, char** argv) {
       else if (key == "--prior-groups") prior_groups = std::stoi(val);
       else if (key == "--depth") depth_fraction = std::stod(val);
       else if (key == "--depth-free") depth_free = std::stoi(val);
+      else if (key == "--intrinsics-prior") {
+        std::size_t at = 0;
+        for (int c = 0; c < 3; ++c) {
+          const auto comma = c < 2 ? val.find(',', at) : std::string::npos;
+          if (c < 2 && comma == std::string::npos) throw std::invalid_argument("expected F,PP,DIST: " + val);
+          intr_prior[c] = std::stod(val.substr(at, comma == std::string::npos ? std::string::npos : comma - at));
+          at = comma + 1;
+        }
+      }
+      else if (key == "--intrinsics-groups") intr_groups = std::stoi(val);
+      else if (key == "--intrinsics-group-sigma") {
+        std::size_t at = 0;
+        for (int c = 0; c < 6; ++c) {
+          const auto comma = c < 5 ? val.find(',', at) : std::string::npos;
+          if (c < 5 && comma == std::string::npos) throw std::invalid_argument("expected six sigmas: " + val);
+          group_sigma[c] = std::stod(val.substr(at, comma == std::string::npos ? std::string::npos : comma - at));
+          at = comma + 1;
+        }
+      }
       else if (key == "--depth-outliers") depth_outliers = std::stod(val);
       else if (key == "--depth-kind") depth_kind = val == "range" ? jba::DepthKind::Range : jba::DepthKind::Z;
       else if (key == "--depth-form") depth_form = val == "inverse" ? jba::DepthForm::Inverse : jba::DepthForm::Linear;
@@ -363,6 +407,27 @@ int main(int argc, char** argv) {
       for (int i = 0; i < images; ++i) p.intrinsics.insert(p.intrinsics.end(), block.begin(), block.end());
       p.image_intrinsics.resize(static_cast<std::size_t>(images));
       for (int i = 0; i < images; ++i) p.image_intrinsics[static_cast<std::size_t>(i)] = i;
+    }
+    if (intr_prior[0] > 0) {
+      jba::set_intrinsics_prior(p, intr_prior[0], intr_prior[1], intr_prior[2]);
+      if (intr_prior_at_start) p.intrinsics_prior.clear();
+    }
+    if (intr_groups > 0) {
+      std::vector<std::int32_t> group(p.num_intrinsics_blocks());
+      for (std::size_t c = 0; c < group.size(); ++c) group[c] = static_cast<std::int32_t>(c % static_cast<std::size_t>(intr_groups));
+      jba::set_intrinsics_groups(p, group, group_sigma[0], group_sigma[1], group_sigma[2], group_sigma[3], group_sigma[4],
+                                 group_sigma[5]);
+      // The target: the true values (every block is used), unless left to the start.
+      if (!group_at_start && !p.intrinsics_group.empty()) {
+        const auto gn = static_cast<std::size_t>(np);
+        p.intrinsics_group_prior.assign(p.intrinsics_group_sigma.size(), 0.0);
+        std::vector<double> count(p.num_intrinsics_groups(), 0.0);
+        for (std::size_t c = 0; c < group.size(); ++c) {
+          count[static_cast<std::size_t>(group[c])] += 1;
+          for (std::size_t a = 0; a < gn; ++a) p.intrinsics_group_prior[static_cast<std::size_t>(group[c]) * gn + a] += p.intrinsics[c * gn + a];
+        }
+        for (std::size_t at = 0; at < p.intrinsics_group_prior.size(); ++at) p.intrinsics_group_prior[at] /= count[at / gn];
+      }
     }
     if (free_mask != 0) {
       p.intrinsics_free.assign(p.num_intrinsics_blocks(), static_cast<std::uint8_t>(free_mask));

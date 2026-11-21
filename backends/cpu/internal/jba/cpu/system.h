@@ -73,15 +73,20 @@ struct Corrector {
 // cols per factor, row-major, slot s in columns slot_base[s] .. + slot_size[s].
 //
 // Pose priors: 6 rows; slot 0 the pose (0..5), slot 1 the other pose or the set's
-// rigid part (6..11), slot 2 the set's scale (12).
+// rigid part (6..11), slot 2 the set's scale (12). Lines: 1 row; slot 0 the pose,
+// slot 1 the Manhattan frame, slot 2 the image's intrinsics block.
 constexpr int kPriorRows = 6;
 constexpr int kPriorCols = 13;
-constexpr int kMaxFactorRows = 6;
+// Intrinsics priors (D161) and the group prior's ties and targets (D165): one row per
+// intrinsics parameter, so up to kMaxParams. A tie has two slots: the block, then its
+// group's mean.
+constexpr int kMaxFactorRows = 8;
+static_assert(kMaxParams <= kMaxFactorRows && kMaxParams <= 8, "slot masks are 8 bits wide");
 constexpr double kIdentityTransform[8] = {1, 0, 0, 0, 0, 0, 0, 1};
 
-enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale, Frame, Depth };
+enum class BlockKind : std::uint8_t { Pose, Intrinsics, SetRigid, SetScale, Frame, Depth, IntrinsicsGroup };
 
-enum class FactorKind : std::uint8_t { PosePrior, Gravity, Line, DepthPrior };
+enum class FactorKind : std::uint8_t { PosePrior, Gravity, Line, DepthPrior, IntrinsicsPrior, GroupTie, GroupTarget };
 
 struct PosePrior {
   bool relative = true;
@@ -98,11 +103,17 @@ struct GravityPrior {
   double w = 1;  // 1 / sigma
 };
 
+// Manhattan line segment (D163). Its endpoints' normalized coordinates depend on the
+// intrinsics: kept from the start when the block is fixed, recomputed from the
+// pixels at every evaluation when it is a variable.
 struct LineFactor {
   int image = -1;
   int axis = 0;
-  double n[3];   // plane normal, camera axes
-  double w = 1;  // 1 / sigma
+  int block = -1;       // intrinsics block of the image
+  bool k_free = false;  // the block is a variable
+  double xy[4];         // endpoints, pixels
+  double uv[4];         // endpoints, normalized coordinates at the starting intrinsics
+  double w = 1;         // 1 / sigma, 1 / pixels
 };
 
 struct DepthPrior {
@@ -110,11 +121,30 @@ struct DepthPrior {
   double w[2];  // 1 / sigma of scale and offset; 0 leaves that part out
 };
 
+// Prior on one free intrinsics block (D161): residual (k - k0) * w per parameter.
+struct IntrinsicsPrior {
+  int block = -1;
+  double k0[kMaxParams];
+  double w[kMaxParams];  // 1 / sigma; 0 for no prior or a fixed parameter
+};
+
+// The group prior (D165): a block tied to its group's mean, (k - mean) * w, and the
+// mean tied to its target, (mean - k0) * w (an IntrinsicsPrior whose block is the
+// group).
+struct GroupTie {
+  int block = -1, group = -1;
+  double w[kMaxParams];  // 1 / sigma; 0 where the parameter is not tied
+};
+
 struct FactorSet {
   FactorKind kind{};
   int rows = 0, cols = 0, nslots = 0;
   int slot_base[3] = {0, 0, 0}, slot_size[3] = {0, 0, 0};
   std::size_t count = 0;
+  // Smallest range of factors a thread takes in parallel loops over the set. The
+  // intrinsics priors are a few tiny factors, run inline: a thread hand-off per
+  // conjugate gradients product would cost more than the work (D161).
+  std::size_t grain = 16;
   std::vector<int> slot_off;            // nslots per factor: f offset, -1 when fixed or absent
   std::vector<std::uint8_t> slot_mask;  // nslots per factor: columns that are not variables
   std::vector<int> slot_image;          // nslots per factor: image of a pose slot, else -1
@@ -139,9 +169,10 @@ struct FactorSet {
 };
 
 // Parameter values: the current ones, or a candidate. `sets`: 8 per prior set
-// (q, t, s); `frame`: the Manhattan frame (q); `depth`: 2 per image (a, b).
+// (q, t, s); `frame`: the Manhattan frame (q); `depth`: 2 per image (a, b); `groups`:
+// the intrinsics groups' means (D165), num_params per group.
 struct Params {
-  std::vector<double> poses, points, intr, sets, depth;
+  std::vector<double> poses, points, intr, sets, depth, groups;
   double frame[4] = {1, 0, 0, 0};
   void swap(Params& o) {
     poses.swap(o.poses);
@@ -149,6 +180,7 @@ struct Params {
     intr.swap(o.intr);
     sets.swap(o.sets);
     depth.swap(o.depth);
+    groups.swap(o.groups);
     std::swap(frame, o.frame);
   }
 };
@@ -167,7 +199,7 @@ struct System {
     int size;
     int pinv_offset;
     BlockKind kind;
-    int index;  // image, intrinsics block or prior set
+    int index;  // image, intrinsics block, prior set or intrinsics group
   };
   std::vector<FBlock> fblocks;
   std::vector<int> pose_off, intr_off, point_off, rigid_off, scale_off;  // -1 when fixed
@@ -205,6 +237,18 @@ struct System {
   std::vector<int> depth_off;                   // per image, -1 when fixed or unused
   std::vector<std::uint8_t> depth_fixed_cols;   // per image: bit 0 scale, bit 1 offset
   std::vector<DepthPrior> depth_priors;
+  std::vector<IntrinsicsPrior> intrinsics_priors;
+  // The intrinsics prior's target to write back (D161): resolved for the blocks with a
+  // factor, the caller's (or NaN) elsewhere; empty when no factor was built.
+  std::vector<double> intr_prior_target;
+  // The group prior (D165): per group its mean's f offset (-1 when not built) and
+  // the mean's columns that are not variables (parameters not tied); the ties and
+  // targets; and the mean and target to write back (empty when nothing was built).
+  std::vector<int> group_off;
+  std::vector<std::uint16_t> group_fixed_cols;
+  std::vector<GroupTie> group_ties;
+  std::vector<IntrinsicsPrior> group_targets;
+  std::vector<double> group_mean_written, group_target_written;
 
   // Poses whose heading is held by the gauge (D83): rotation tangent basis, from the
   // current pose at each linearization, and its index per image (-1 for none).

@@ -414,22 +414,35 @@ working frame.
 
 #### Residual
 
-For a line segment in image `i` assigned to axis `k`:
+For a line segment in image `i` assigned to axis `k` (as built: D163, which replaced
+the plane-normal form below):
 
 ```
-n   = unit normal of the plane through the camera centre and the segment
-      (cross product of the two endpoint bearing vectors)
-d_k = R_M * e_k                      the axis direction in the working frame
-r   = n . ( R_i * d_k ) / sigma      (1 value)
+d   = R_i * R_M * e_k                the axis direction in camera i's axes
+b_j = bearing of endpoint j          (u_j = undistort(K, x_j), b_j = (u_j, 1) / |.|)
+s_j = pixels per radian across the great circle through b_j and d
+r   = s_0 s_1 (d . (b_0 x b_1)) / sqrt(s_0^2 |d x b_0|^2 + s_1^2 |d x b_1|^2) / sigma
+                                     (1 value; pixels before sigma)
 ```
 
-If the segment really runs along axis `k`, that axis direction lies in the plane and
-`r` is zero. `r` is the sine of the angle by which it misses.
+Lines along `d` project to the great circles through `d`. `r` is the pixel distance
+of the two endpoints from the best such circle, its one free angle eliminated in
+closed form (first order in the misfit). For a pinhole camera and a short segment it
+is `L sin(alpha) / sqrt(2)`, `alpha` the image angle between the segment and the
+direction towards the vanishing point, `L` the length in pixels.
 
-- Endpoints are converted to bearing vectors through the camera model, so lens
-  distortion and fisheye cameras are handled with no special case.
-- `sigma` shrinks with segment length: long segments fix a direction precisely,
-  short ones do not.
+- `d` is a direction and is never projected, so a vanishing point at infinity or
+  behind the camera needs no special case. Endpoints go through the camera model
+  (undistortion, and its Jacobian for `s_j`), so lens distortion and fisheye cameras
+  are handled; the image of a circle is a curve under distortion, and `s_j` measures
+  across that curve.
+- `sigma` is the endpoint sigma in pixels, with a floor proportional to the length:
+  long segments fix a direction precisely, short ones do not.
+- The first version used `r = n . (R_i d_k)`, `n` the normal of the plane through the
+  camera centre and the segment. That is `sin(psi) sin(alpha)`, `psi` the angle from
+  the segment to its vanishing point, so its angle-based sigma over-weighted segments
+  far from their vanishing point, and with a free focal length it biased the focal
+  long (D163).
 - Loss: robust, always. Some lines will be wrongly assigned.
 
 The same residual with the vertical axis gives a gravity constraint from the image
@@ -480,8 +493,13 @@ This prior is strong, so it must not be applied where it is false.
   global rotation.
 - The gauge is unaffected. `R_M` is free and is returned. The caller can use it to axis-align the model, which is
   useful for floor plans.
-- If intrinsics are being refined, endpoint bearings change with them. First
-  version: the Manhattan term requires fixed intrinsics, the normal case for phones.
+- If intrinsics are being refined, endpoint bearings change with them. The first
+  version required fixed intrinsics; since D163 the residual is a function of them:
+  the endpoints are undistorted with the current intrinsics, and the Jacobian holds
+  the pixels fixed (du/dK = -A^-1 dpi/dK, A = dpi/du). Two finite vanishing points in
+  an image constrain its focal length, three also the principal point; level cameras
+  facing a wall give none, so a prior on the intrinsics (D161) is advisable where the
+  segments are the main evidence.
 
 #### Not included
 
@@ -495,12 +513,14 @@ The single shared frame used here is the stricter, classical Manhattan form.
 
 #### As built (milestone 3)
 
-- Residual and weights: D84. Assignment, the vote and the support test: D85
+- Residual and weights: D84, replaced by D163 (pixels, free intrinsics). Assignment,
+  the vote and the support test: D85
   (`assign_lines` in `manhattan.h`). The gauge: the frame is held and each group
   with segments holds only its reference's position (D86).
 - In `refine` (opt-in, `use_manhattan`), segments are assigned after the prior-only
   solve, the priors are solved again with them, then assigned again each round
-  with a tighter angle.
+  with a tighter angle. With `estimate_manhattan_frame` off the first assignment
+  uses the scene's frame, or the aligned one, instead of estimating it (D164).
 - Synthetic results (document 07): heading drift in a room and in two rooms joined
   by a doorway is removed far better than by the images alone; random segments are
   refused; a mixed scene is not made worse.
@@ -561,7 +581,50 @@ Candidates for later: FULL_OPENCV, THIN_PRISM_FISHEYE, EUCM.
   point, distortion. (COLMAP's GPU backend cannot free focal length and distortion
   separately; ours should.)
 - Images sharing a physical camera share one intrinsics block.
-- An optional prior keeps refined intrinsics near their starting values.
+- An optional prior keeps refined intrinsics near a target (D161), for refining the
+  output of another process. Each group of each block is then in one of three modes:
+  - fixed: its bit clear in `intrinsics_free` (the default), whatever its sigma;
+  - fully free: its bit set and no finite sigma for its parameters;
+  - regularized: its bit set and a finite sigma, with residual per parameter
+
+    ```
+    r_a = (k_a - target_a) / sigma_a
+    ```
+
+    without a robust loss, sigma in the parameter's own units (pixels for focal
+    lengths and the principal point; a focal length within 1 % is sigma = 0.01 f).
+    The target defaults (empty, or NaN per parameter) to the intrinsics given to
+    `solve()`, which writes it back to `intrinsics_prior` for the blocks it
+    regularized so later solves keep the same anchor; `refine()` anchors
+    every round to the caller's values. The cost counts in the reprojection type.
+    `set_intrinsics_prior(problem, focal_fraction, principal_point_sigma,
+    distortion_sigma)` fills the sigmas by group.
+
+  Beside it, or instead, blocks can share a hierarchical prior by group (D165): the
+  blocks of one group (several blocks of one camera, their focal lengths a little
+  apart by autofocus, say) are each tied to a mean `m_g` that the solve estimates,
+  and the mean is tied loosely to a target:
+
+  ```
+  r_ba = (k_ba - m_ga) / sigma_ga          for each member block b of group g
+  r_ga = (m_ga - target_ga) / tau_ga
+  ```
+
+  Both without a robust loss. The ties keep any one block from drifting away from
+  its siblings; the loose target lets the group's data together correct a poor
+  calibration, which a tight per-block prior cannot. `intrinsics_group` gives each
+  block its group (-1 none); sigma, target, tau and the mean are per group and
+  parameter. Members are the blocks used by an observation, free or not (a held
+  block pulls the mean as a constant). A parameter is tied when it is free in a
+  member, sigma is finite, and the group has two members or a finite tau; tau = +inf
+  leaves the mean free. The mean starts at `intrinsics_group_mean` or the members'
+  mean and is written back (clear it after changing the intrinsics by other means);
+  the target defaults to the members' mean as given and is written back too, and
+  `refine()` carries both from round to round. A group of one
+  with a target is the per-block prior with variance sigma^2 + tau^2. The cost
+  counts in the reprojection type. `set_intrinsics_groups(problem, group_of_block,
+  focal_fraction, principal_point_sigma, distortion_sigma, group_focal_fraction,
+  group_principal_point_sigma, group_distortion_sigma)` fills them by group.
 
 ## Gauge
 

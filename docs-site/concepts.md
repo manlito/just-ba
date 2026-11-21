@@ -24,6 +24,32 @@ Blocks can be held: `image_fixed` holds a pose, `point_fixed` a point, and
 `intrinsics_free` frees groups of intrinsics per block (1 focal length, 2
 principal point, 4 distortion); intrinsics are held unless freed.
 
+A freed group can be fully free or regularized: with `intrinsics_prior_sigma` (per
+parameter, in its units; +inf for none) it is pulled toward `intrinsics_prior`, by
+default the values it started from. This is for refining another process's
+calibration without letting it wander:
+
+```python
+p.intrinsics_free = [1 | 4]                  # focal length and distortion
+jba.set_intrinsics_prior(p, 0.01,            # focal within about 1 %
+                         distortion_sigma=0.005)  # principal point: held anyway
+jba.solve(p)                                 # writes the target used back to p.intrinsics_prior
+```
+
+Blocks of one camera can instead share a mean: with `set_intrinsics_groups` each
+block of a group is tied to the group's mean (focal lengths a little apart, as
+autofocus leaves them), and the mean only loosely to the calibration, so a poor
+calibration is corrected by all the group's images together while one image that
+sees little cannot drift off:
+
+```python
+p.intrinsics_free = [1] * p.intrinsics.shape[0]   # focal length of every block
+jba.set_intrinsics_groups(p, [0] * p.intrinsics.shape[0],
+                          0.005,                   # each block within about 0.5 % of the mean
+                          group_focal_fraction=0.05)  # the mean within about 5 % of the calibration
+jba.solve(p)                                      # writes the mean to p.intrinsics_group_mean
+```
+
 ## Pose priors
 
 - **Relative priors** (`rel_images`, `rel_pose`, `rel_sigma`) constrain the motion
@@ -51,6 +77,11 @@ The Manhattan prior uses line segments detected in the images (`line_image`,
 `line_xy`): `refine` assigns them to the axes of a Manhattan frame and, when the
 scene supports it, constrains the poses' headings. It is opt-in
 (`RefineOptions.use_manhattan`), since it is wrong where the scene is not Manhattan.
+By default the frame is estimated from the segments. When the working frame is
+already aligned with the building, set `RefineOptions.estimate_manhattan_frame =
+False`: the segments are assigned to the axes of `scene.manhattan_frame`, or of
+`aligned_frame(scene)` (axis 2 up, axes 0 and 1 along the working frame's
+horizontal axes) when that is empty.
 
 ## Depth
 

@@ -19,9 +19,13 @@ not, and a default build does not look for it.
 | `tools/colmap_compare.sh` | One scene from its images: COLMAP, then the capture file, then `jba_demo run`. |
 | `tools/colmap_table.py` | The comparison over several capture files, as Markdown tables. |
 | `tools/colmap_fixture.py`, `tools/test_colmap_roundtrip.py` | The COLMAP path tested without COLMAP. |
-| `web/demo_wasm.cpp`, `web/index.html`, `web/demo.js` | The live demo (D152): the WebAssembly entry points, the page and its script. |
+| `web/demo_wasm.cpp`, `web/index.html`, `web/demo.js` | The live demo (D156): the WebAssembly entry points, the page and its script. |
 | `web/samples/` | The live demo's sample set: 44 images of ETH3D's *delivery_area* and `samples.json` (their focal lengths). |
 | `tools/fetch_match_web.sh` | The live demo's keypoints and matcher modules, from just-keypoints' and just-matching's sites. |
+| `web/capture.html`, `web/capture.js`, `web/capture_worker.js`, `web/weights_worker.js` | The live capture (D157): the page, its camera loop, the mapper session in a worker (which matches LightGlue's and LighterGlue's map pairs too, D159), FlexGlue's weights from the visitor's checkpoint. |
+| `web/flexglue_weights.js` | FlexGlue's weights kept in the browser, shared by the live capture and the live demo (D160). |
+| `web/gates.js`, `web/gates.test.mjs` | The live capture's keep rules, ported from Like Recon, and their tests (`node --test demo/web/gates.test.mjs`). |
+| `web/view.js` | The live capture's 3D view. |
 
 ## Build
 
@@ -43,7 +47,13 @@ Each generated scene is reconstructed and compared with its ground truth. Option
 `--scene orbit|wall|grid|all`, `--seed n`, `--noise px`, `--wrong fraction`,
 `--false-pairs n`, `--focal-error f` (the mapper is given focal lengths that much too
 large, 1.2 being 2.2 times the truth, marked as a guess: it searches for them and
-refines them), `--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
+refines them), `--focal-jitter f` (a block per image, its true focal length off the
+scene's by f times a normal draw, as autofocus leaves them; the mapper is given their
+mean), `--focal-bias f` (the focal lengths given that much too large, not marked as a
+guess), `--groups` (the blocks in one group of the intrinsics prior, D166; with the
+two above it prints the per-image focal error), `--group-sigma tie,target` (the group
+prior's focal sigmas as fractions at 1 px of noise, inf for none; default 0.01,inf),
+`--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
 `--ba cpu|metal|cuda|webgpu` (the solver's), `--refine none|focal|focal+distortion`
 (the intrinsics the adjustments refine; none by default here), `--export dir`
 (COLMAP's text model per scene), `--write dir` (each scene as a capture file, its truth
@@ -74,6 +84,48 @@ line by more than five standard deviations, and every later adjustment holds tho
 images to their priors: the result is in the priors' frame, units and axes
 (`Reconstruction::aligned`). `jba_demo synth --priors sigma` checks it on the generated
 scenes; `jba_demo run --no-priors` ignores them.
+
+## Sessions: a map that grows while the capture is taken
+
+`demo::Session` (D153) grows a map image by image, for a capture that reconstructs as
+it is taken. `add(SessionImage)` takes an image's keypoints, its matches to earlier
+images of the session and an optional position prior. The matches are verified and
+added to the tracks; once the map has started (a pair reaching 16 degrees of median
+triangulation angle, or 8, 4 after `start_patience` images each without one), the
+image is placed by PnP, its new points triangulated and a window of the latest
+`window` images adjusted with the older ones that see their points held. An image
+that can't be placed is tried again as the map grows; after more than
+`restart_after` of them in a row the map is put aside as a piece and a new one
+started from images in none (an image whose pairs link to an earlier piece goes back to it, which becomes the current one again); a young piece that started from a narrow pair is started
+again once a wider one comes (`rebuild_within`). `snapshot()` is the map now (every
+point with its track, stable as the map grows), `piece(k)` and `largest_piece()` the
+pieces, `keypoint_points(i)` the landmarks of image `i`, `retry(pairs, new_piece)` tries the last image again with more pairs (added with
+`defer_split`, no new piece starts until then), and `finish(capture)` reconstructs the whole capture (any pairs, normally
+more of them, matched more thoroughly) from the live map with
+`Mapper::run_from(capture, StartFrom)`. `run_from` keeps the start's poses, but leaves
+out start images whose relative rotations disagree with their verified pairs by a
+median of over 5 degrees, and registers them again like any other image.
+
+A session can also start from a model (D154): `Session(mapper, model, intrinsics,
+width, height, SessionSeed, options)` takes images already placed (their keypoints
+and poses) and the model's points with the keypoints that observe them, one track per
+point. The map has started with them; they and the intrinsics are held while new
+images join, so a capture goes on into a finished reconstruction without moving it;
+`num_seeded()` says how many there are.
+
+`jba_demo run capture.jbc --resume` runs the mapper, then `run_from` its own result
+(and again from that), and prints what the resume kept: points, observations, error,
+the agreement with the run (D155).
+
+```sh
+build/demo/demo/jba_demo session live.jbc --finish all.jbc --window 8
+```
+
+feeds `live.jbc`'s images in order with their pairs to earlier images, as a capture in
+progress would, finishes with `all.jbc`'s pairs (the same images), and compares the
+largest piece and the finish with a batch run of `all.jbc` (and two batch runs with
+different seeds, for the spread to expect). `demo_session` checks it on the generated
+scenes.
 
 ## Against COLMAP
 
@@ -144,6 +196,7 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 | `intrinsics` | f64 | [B, P] | yes | One block per camera |
 | `camera.size` | i32 | [B, 2] | no | Width, height |
 | `camera.focal_unknown` | u8 | [B] | no | 1: the block's focal length is only a guess. Without the section, a focal length of exactly 1.2 times the larger side of `camera.size` (COLMAP's guess) counts as one |
+| `camera.group` | i32 | [B] | no | Group of each block for the hierarchical intrinsics prior (D165, D166), -1 for none: the refined blocks of a group are tied to their shared mean, the mean loosely to the group's given values. Absent: no groups |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Block of each image |
 | `image.names` | u8 | [bytes] | no | N names, separated by `\n` |
 | `image.prior_position` | f64 | [N, 3] | no | Position priors (D150): each image's measured camera centre in a metric frame whose third axis is up (east, north, up); NaN for an image without one |
@@ -163,9 +216,11 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 
 ## The live demo
 
-Structure from motion on real photos in the browser (D152). The page loads the sample
+Structure from motion on real photos in the browser (D156). The page loads the sample
 set or the visitor's own images, finds ALIKED keypoints with just-keypoints' module and
-matches every pair with LightGlue through just-matching's (both on WebGPU), then calls
+matches every pair with LightGlue through just-matching's (both on WebGPU; or XFeat's
+keypoints and LighterGlue, `features=xfeat`; or ALIKED's keypoints and FlexGlue from the
+visitor's own weights, `features=flexglue`, D160), then calls
 `demo_reconstruct` with the keypoints and matches: the mapper with COLMAP's thresholds,
 SIMPLE_RADIAL cameras whose focal length and distortion it refines, on the CPU or
 WebGPU. By default it runs once on each and shows the mapper's timings side by side;
@@ -202,6 +257,52 @@ The sample images are ETH3D's (Schöps et al., CVPR 2017), CC BY-NC-SA 4.0
 (non-commercial): the undistorted DSLR images of *delivery_area*, scaled to 1280 px and
 re-encoded as JPEG; `samples.json` gives each one's focal length from ETH3D's calibration,
 scaled the same way.
+
+## The live capture
+
+The visitor's camera, captured and reconstructed as it goes (D157): `web/capture.html`,
+in the same folder as the live demo. Per camera frame, on the page's thread: ALIKED
+keypoints (just-keypoints; XFeat's with LighterGlue, whose confident keypoints start at
+0.08 instead of 0.2), the matcher's features (FlexGlue's dense features, or LightGlue's or
+LighterGlue's of the keypoints), the matches to the last keyframe at the live depth
+(FlexGlue's layer-0 head), checked against a relative pose on the CPU
+(`demo_pair_inliers`), and Like Recon's keep rules (`web/gates.js`: overlap, support,
+redundancy, confident keypoints, blur against a decaying sharp level, the best frame of
+the band, re-localization against held keyframes). A keyframe is matched to the three
+before it at the online depth (FlexGlue at 3 layers, the strongest 1,024 matches) and
+added to a `Session` in a worker (`demo_session_new`, `demo_session_add`), whose map the
+page draws. With FlexGlue, a keyframe the map can't place is matched to four more chosen
+by appearance (the shortlist) and tried again (`demo_session_retry`). Finish matches the
+shortlist over every keyframe (LightGlue: each with the five before it) and runs
+`demo_session_finish` (`Session::finish`, `Mapper::run_from` from the live map), with
+progress and Stop; the points are coloured from the keyframes and can be downloaded as
+PLY. **Reconstruct again** matches the keyframes again with the matcher chosen then
+(FlexGlue: its shortlist and the three before each; LightGlue: the five before each) and
+runs the mapper from scratch (`demo_capture_reconstruct`), without the camera or the live
+map: a capture made with LightGlue on a phone can be reconstructed with FlexGlue. The session takes Like Recon's settings: a window of 8, a new piece after 10
+keyframes in a row not placed, 15 verified matches for an online pair, the map starting
+from the widest pair it can. Keyframes after a turn, which see too few of the map's points
+for PnP, are placed from their best pair to the map (`register_from_pairs`, D158; also
+`jba_demo --register-from-pairs`).
+
+FlexGlue's weights come from the visitor: `flexglue.pth` from FlexGlue's release, checked
+against its SHA-256, converted to float16 by just-matching's module (`jmt.convert`) in a
+worker that ends afterwards, and kept in the origin's private file system
+(`flexglue-fp16.jmtw`, 284 MB). Phones default to LighterGlue (XFeat keypoints), 1,024 keypoints and a
+640 px working image. URL parameters: `matcher=flexglue|lightglue|lighterglue`, `keypoints=1024|2048`,
+`side=<px>`, `debug=1`, and for testing without a camera `video=<url>` (a recorded video
+instead, `rate=` its playback rate).
+
+Tried in Chrome 156 on an M5 Pro with house-04's 41 keyframes made into a video
+(ffmpeg's motion interpolation, 12 frames a second, played at half speed): FlexGlue kept
+27 keyframes, 26 placed live, and the finish registered all 27 (4,040 points, 1.32 px);
+LightGlue kept 23 and registered 12. FlexGlue's live frames took 150–850 ms (the
+interpolated frames are not a camera's; try the page with a real one). LighterGlue, on
+house-05's 78 keyframes as a 3-frame-a-second video at half speed (no interpolation, the
+pane hidden): 19 keyframes, all 19 in the live map and registered by the finish (4,585
+points, 1.30 px); LightGlue on the same video kept 31 and registered 20. Reconstruct again
+keeps the capture's keypoints: XFeat's take LighterGlue or FlexGlue, ALIKED's LightGlue or
+FlexGlue.
 
 ## What it checks
 

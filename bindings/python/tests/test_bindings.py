@@ -151,6 +151,79 @@ def test_evaluate_reports_costs():
     assert 0 < r.reprojection_cost < 0.5 * np.sum((r.reprojection_error) ** 2) + 1e-9
 
 
+def test_intrinsics_prior():
+    # D161: fixed, fully free or regularized per group; the target is written back.
+    start, _, _ = small_problem(seed=7)
+    perturb(start, seed=8)
+    k = start.intrinsics.copy()
+    k[0, :2] *= 1.04
+    start.intrinsics = k
+    start.intrinsics_free = [1]  # focal only
+    o = jba.SolverOptions()
+    o.max_iterations = 100
+
+    free = start.copy()
+    jba.solve(free, o)
+    assert free.intrinsics_prior.size == 0
+
+    reg = start.copy()
+    jba.set_intrinsics_prior(reg, 0.002)  # focal within about 0.2 %
+    assert np.array_equal(reg.intrinsics_prior, start.intrinsics)
+    assert np.isinf(reg.intrinsics_prior_sigma[0, 2:]).all()
+    reg.intrinsics_prior = []  # empty target: the start, written back by solve
+    s = jba.solve(reg, o)
+    assert np.array_equal(reg.intrinsics_prior, start.intrinsics)
+    f0, f_free, f_reg = start.intrinsics[0, 0], free.intrinsics[0, 0], reg.intrinsics[0, 0]
+    assert abs(f_reg - f0) < abs(f_free - f0)
+    assert np.array_equal(reg.intrinsics[0, 2:], start.intrinsics[0, 2:])  # principal point stays fixed
+
+    r = jba.evaluate(reg, o)
+    assert r.intrinsics_prior_cost > 0
+    assert r.intrinsics_prior_param[0] in (0, 1) and r.intrinsics_prior_norm[0] > 0
+    assert abs(s.final_cost_by_type["reprojection"] - (r.reprojection_cost + r.intrinsics_prior_cost)) < 1e-9 * s.final_cost
+
+    bad = start.copy()
+    bad.intrinsics_prior_sigma = [1.0, 1.0, 0.0, 1.0]
+    assert bad.validate() != ""
+
+
+def test_intrinsics_groups():
+    # D165: per-image blocks tied to a shared mean; the mean and target written back.
+    start, _, _ = small_problem(seed=9)
+    perturb(start, seed=10)
+    n = start.num_images
+    k = np.repeat(start.intrinsics.reshape(1, -1), n, axis=0)
+    k[:, :2] *= 1.03  # PINHOLE: fx, fy
+    start.intrinsics = k
+    start.image_intrinsics = np.arange(n, dtype=np.int32)
+    start.intrinsics_free = [1] * n  # focal only
+    o = jba.SolverOptions()
+    o.max_iterations = 100
+
+    p = start.copy()
+    jba.set_intrinsics_groups(p, [0] * n, 0.002, group_focal_fraction=0.05)
+    assert p.num_intrinsics_groups == 1 and p.intrinsics_group.tolist() == [0] * n
+    assert p.intrinsics_group_sigma.shape == (1, 4) and np.isinf(p.intrinsics_group_sigma[0, 2:]).all()
+    assert p.intrinsics_group_prior.size == 0 and p.intrinsics_group_mean.size == 0  # the solve takes both
+    s = jba.solve(p, o)
+    mean = p.intrinsics_group_mean
+    assert p.intrinsics_group_prior[0, 0] == k[0, 0]  # the members' mean as given, written back
+    assert mean.shape == (1, 4) and np.isfinite(mean[0, :2]).all() and np.isnan(mean[0, 2:]).all()
+    spread = p.intrinsics[:, 0].std()
+    free = start.copy()
+    jba.solve(free, o)
+    assert spread < free.intrinsics[:, 0].std()
+
+    r = jba.evaluate(p, o)
+    assert r.intrinsics_group_cost > 0 and r.intrinsics_group_norm.shape == (n,)
+    assert r.intrinsics_group_param[0] in (0, 1) and r.intrinsics_group_target_param[0] in (0, 1)
+    assert abs(s.final_cost_by_type["reprojection"] - (r.reprojection_cost + r.intrinsics_group_cost)) < 1e-9 * s.final_cost
+
+    bad = p.copy()
+    bad.intrinsics_group = [1] * n  # no such group
+    assert bad.validate() != ""
+
+
 def test_conventions():
     # An ARKit camera at the origin with the identity transform looks down -z with
     # y up: in library axes that is a rotation by pi about x.

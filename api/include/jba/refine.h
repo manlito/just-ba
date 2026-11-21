@@ -44,7 +44,9 @@ struct RefineInput {
   std::vector<std::int32_t> matches;
   Tracks tracks;
   // Line segments for the Manhattan prior are scene.line_image, line_xy and
-  // line_sigma; their axes are assigned by refine.
+  // line_sigma; their axes are assigned by refine (scene.line_axis is ignored).
+  // scene.manhattan_frame is the frame when estimate_manhattan_frame is off, and is
+  // ignored otherwise.
 };
 
 struct RefineOptions {
@@ -67,6 +69,12 @@ struct RefineOptions {
   // Manhattan prior from scene's line segments (document 02, section 5). Opt-in: it
   // is strong, and wrong where the scene is not Manhattan.
   bool use_manhattan = false;
+  // With use_manhattan: estimate the building's axes from the segments (the vote of
+  // assign_lines over the starting poses). Off when the working frame is already
+  // Manhattan aligned (D164): the frame is scene.manhattan_frame, or aligned_frame()
+  // when that is empty, and the segments are only assigned to its axes. The support
+  // test, the solves and the later rounds are the same either way.
+  bool estimate_manhattan_frame = true;
   ManhattanOptions manhattan;
   double manhattan_min_angle_deg = 1;
 };

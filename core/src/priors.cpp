@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 #include "jba/geometry.h"
@@ -76,6 +77,146 @@ void add_relative_priors_from_poses(Problem& p, const std::vector<double>& poses
     quat_rotate(q, Ti + 4, Rt);
     p.rel_images.insert(p.rel_images.end(), {i, j});
     p.rel_pose.insert(p.rel_pose.end(), {q[0], q[1], q[2], q[3], Tj[4] - Rt[0], Tj[5] - Rt[1], Tj[6] - Rt[2]});
+  }
+}
+
+void set_intrinsics_prior(Problem& p, double focal_fraction, double principal_point_sigma, double distortion_sigma) {
+  for (double v : {focal_fraction, principal_point_sigma, distortion_sigma})
+    if (!(v > 0)) throw std::invalid_argument("set_intrinsics_prior: sigmas must be positive (+inf for none)");
+  const int np = num_params(p.model);
+  p.intrinsics_prior = p.intrinsics;
+  p.intrinsics_prior_sigma.resize(p.intrinsics.size());
+  for (std::size_t at = 0; at < p.intrinsics.size(); ++at) {
+    double& s = p.intrinsics_prior_sigma[at];
+    switch (intrinsics_group(p.model, static_cast<int>(at % static_cast<std::size_t>(np)))) {
+      case kFocal: s = focal_fraction * std::abs(p.intrinsics[at]); break;
+      case kPrincipalPoint: s = principal_point_sigma; break;
+      case kDistortion: s = distortion_sigma; break;
+    }
+    if (!(s > 0) || !std::isfinite(1 / s))
+      throw std::invalid_argument("set_intrinsics_prior: a sigma of 0 or too small (a focal length of 0?)");
+  }
+}
+
+bool IntrinsicsGroupTerms::any() const {
+  return std::any_of(member.begin(), member.end(), [](std::uint8_t m) { return m != 0; });
+}
+
+IntrinsicsGroupTerms intrinsics_group_terms(const Problem& p) {
+  IntrinsicsGroupTerms t;
+  if (p.intrinsics_group.empty()) return t;
+  const auto np = static_cast<std::size_t>(num_params(p.model));
+  const std::size_t n_blk = p.num_intrinsics_blocks(), G = p.num_intrinsics_groups();
+  t.groups = G;
+  t.member.assign(n_blk, 0);
+  t.tie_w.assign(G * np, 0.0);
+  t.anchor_w.assign(G * np, 0.0);
+  t.mean.assign(G * np, std::nan(""));
+  t.target.assign(G * np, std::nan(""));
+  // Members: grouped blocks used by an observation, free or not.
+  std::vector<char> used(n_blk, 0);
+  for (auto i : p.obs_image) used[static_cast<std::size_t>(p.intrinsics_of_image(static_cast<std::size_t>(i)))] = 1;
+  std::vector<std::size_t> count(G, 0);
+  std::vector<double> sum(G * np, 0.0);
+  std::vector<char> free_any(G * np, 0);
+  for (std::size_t c = 0; c < n_blk; ++c) {
+    const std::int32_t g = p.intrinsics_group[c];
+    if (g < 0 || !used[c]) continue;
+    const auto gs = static_cast<std::size_t>(g);
+    ++count[gs];
+    const std::uint8_t mask = p.intrinsics_free.empty() ? 0 : p.intrinsics_free[c];
+    for (std::size_t a = 0; a < np; ++a) {
+      sum[gs * np + a] += p.intrinsics[c * np + a];
+      if (mask & intrinsics_group(p.model, static_cast<int>(a))) free_any[gs * np + a] = 1;
+    }
+  }
+  std::vector<char> tied(G, 0);
+  for (std::size_t g = 0; g < G; ++g) {
+    if (count[g] == 0) continue;
+    for (std::size_t a = 0; a < np; ++a) {
+      const std::size_t at = g * np + a;
+      const double members_mean = sum[at] / static_cast<double>(count[g]);
+      const double sigma = p.intrinsics_group_sigma[at];
+      const double anchor = p.intrinsics_group_prior_sigma.empty() ? std::numeric_limits<double>::infinity()
+                                                                    : p.intrinsics_group_prior_sigma[at];
+      // A single member without a target has nothing to share: the mean would follow it.
+      if (!free_any[at] || !std::isfinite(sigma) || (count[g] < 2 && !std::isfinite(anchor))) continue;
+      tied[g] = 1;
+      t.tie_w[at] = 1 / sigma;
+      const double given_mean = p.intrinsics_group_mean.empty() ? std::nan("") : p.intrinsics_group_mean[at];
+      t.mean[at] = std::isnan(given_mean) ? members_mean : given_mean;
+      if (std::isfinite(anchor)) {
+        t.anchor_w[at] = 1 / anchor;
+        const double given = p.intrinsics_group_prior.empty() ? std::nan("") : p.intrinsics_group_prior[at];
+        t.target[at] = std::isnan(given) ? members_mean : given;
+      }
+    }
+  }
+  for (std::size_t c = 0; c < n_blk; ++c) {
+    const std::int32_t g = p.intrinsics_group[c];
+    if (g >= 0 && used[c] && tied[static_cast<std::size_t>(g)]) t.member[c] = 1;
+  }
+  return t;
+}
+
+void set_intrinsics_groups(Problem& p, const std::vector<std::int32_t>& group_of_block, double focal_fraction,
+                           double principal_point_sigma, double distortion_sigma, double group_focal_fraction,
+                           double group_principal_point_sigma, double group_distortion_sigma) {
+  for (double v : {focal_fraction, principal_point_sigma, distortion_sigma, group_focal_fraction,
+                   group_principal_point_sigma, group_distortion_sigma})
+    if (!(v > 0)) throw std::invalid_argument("set_intrinsics_groups: sigmas must be positive (+inf for none)");
+  const auto np = static_cast<std::size_t>(num_params(p.model));
+  const std::size_t n_blk = p.num_intrinsics_blocks();
+  if (group_of_block.size() != n_blk) throw std::invalid_argument("set_intrinsics_groups: one group per block");
+  std::int32_t last = -1;
+  for (auto g : group_of_block) {
+    if (g < -1) throw std::invalid_argument("set_intrinsics_groups: a group must be -1 or more");
+    last = std::max(last, g);
+  }
+  const auto G = static_cast<std::size_t>(last + 1);
+  p.intrinsics_group_prior.clear();
+  p.intrinsics_group_mean.clear();
+  if (G == 0) {  // no block in a group: no groups at all
+    p.intrinsics_group.clear();
+    p.intrinsics_group_sigma.clear();
+    p.intrinsics_group_prior_sigma.clear();
+    return;
+  }
+  // The scale of focal sigmas: each group's mean focal length over its blocks used by
+  // an observation, as the solver's members (an unseen placeholder does not count),
+  // or over all its blocks where none is used yet (observations added later).
+  std::vector<char> used(n_blk, 0);
+  for (auto i : p.obs_image) used[static_cast<std::size_t>(p.intrinsics_of_image(static_cast<std::size_t>(i)))] = 1;
+  std::vector<double> mean(G * np, 0.0), mean_all(G * np, 0.0);
+  std::vector<std::size_t> count(G, 0), count_all(G, 0);
+  for (std::size_t c = 0; c < n_blk; ++c) {
+    if (group_of_block[c] < 0) continue;
+    const auto g = static_cast<std::size_t>(group_of_block[c]);
+    ++count_all[g];
+    if (used[c]) ++count[g];
+    for (std::size_t a = 0; a < np; ++a) {
+      mean_all[g * np + a] += p.intrinsics[c * np + a];
+      if (used[c]) mean[g * np + a] += p.intrinsics[c * np + a];
+    }
+  }
+  p.intrinsics_group = group_of_block;
+  p.intrinsics_group_sigma.assign(G * np, std::numeric_limits<double>::infinity());
+  p.intrinsics_group_prior_sigma.assign(G * np, std::numeric_limits<double>::infinity());
+  for (std::size_t g = 0; g < G; ++g) {
+    if (count_all[g] == 0) continue;  // no block: no tie, nothing to fill
+    for (std::size_t a = 0; a < np; ++a) {
+      const std::size_t at = g * np + a;
+      mean[at] = count[g] > 0 ? mean[at] / static_cast<double>(count[g]) : mean_all[at] / static_cast<double>(count_all[g]);
+      double& s = p.intrinsics_group_sigma[at];
+      double& sg = p.intrinsics_group_prior_sigma[at];
+      switch (intrinsics_group(p.model, static_cast<int>(a))) {
+        case kFocal: s = focal_fraction * std::abs(mean[at]); sg = group_focal_fraction * std::abs(mean[at]); break;
+        case kPrincipalPoint: s = principal_point_sigma; sg = group_principal_point_sigma; break;
+        case kDistortion: s = distortion_sigma; sg = group_distortion_sigma; break;
+      }
+      if (!(s > 0) || !std::isfinite(1 / s) || !(sg > 0) || !std::isfinite(1 / sg))
+        throw std::invalid_argument("set_intrinsics_groups: a sigma of 0 or too small (a focal length of 0?)");
+    }
   }
 }
 

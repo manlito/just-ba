@@ -3,12 +3,16 @@
 // check is based on.
 
 #include <cmath>
+#include <functional>
 #include <cstdio>
+#include <limits>
+#include <stdexcept>
 #include <string>
 
 #include "check.h"
 #include "jba/initialize.h"
 #include "jba/manhattan.h"
+#include "jba/priors.h"
 #include "jba/solver.h"
 #include "jba/refine.h"
 #include "scene.h"
@@ -27,8 +31,10 @@ struct Outcome {
   jba::RefineResult result;
 };
 
-Outcome run(const char* name, const SceneOptions& so, jba::RefineOptions ro = {}, bool scale_free = false) {
-  const auto scene = jba_test::make_scene(so);
+Outcome run(const char* name, const SceneOptions& so, jba::RefineOptions ro = {}, bool scale_free = false,
+            const std::function<void(jba::RefineInput&)>& edit = {}) {
+  auto scene = jba_test::make_scene(so);
+  if (edit) edit(scene.input);
   Outcome out;
   const auto init = jba::initialize_poses(scene.input.scene, ro.solver.prior_defaults);
   std::vector<char> placed(init.group.size());
@@ -183,6 +189,56 @@ int main() {
     EXPECT(r0.refined[kBlind] && r0.refined[kSparse]);
   }
 
+  // Prior on free intrinsics (D161): every round, and the re-solve after outlier
+  // removal, anchors to the caller's intrinsics, not to the previous round's result.
+  // An empty target gives exactly the result of an explicit target at the given
+  // values, and the focal length (3 % off) lands between them and the free result:
+  // the many observations outweigh a 0.1 % prior, but it holds the given value.
+  {
+    SceneOptions so;
+    so.drift_heading_per_m = 0.02;
+    auto scene = jba_test::make_scene(so);
+    jba::Problem& sc = scene.input.scene;
+    sc.intrinsics[0] *= 1.03;
+    sc.intrinsics_free = {jba::kFocal};
+    const auto given = sc.intrinsics;
+    jba::RefineOptions ro;
+    ro.rounds = 3;
+    const auto free = jba::refine(scene.input, ro);
+    jba::set_intrinsics_prior(sc, 0.001, std::numeric_limits<double>::infinity(),
+                              std::numeric_limits<double>::infinity());
+    sc.intrinsics_prior.clear();  // empty: refine pins the given values
+    const auto reg = jba::refine(scene.input, ro);
+    const double f0 = given[0], sigma = 0.001 * f0;
+    std::printf("%-28s focal given %.2f, free %.2f, regularized %.2f\n", "room, intrinsics prior", f0,
+                free.problem.intrinsics[0], reg.problem.intrinsics[0]);
+    EXPECT(reg.problem.intrinsics_prior == given);
+    sc.intrinsics_prior = given;
+    const auto explicit_target = jba::refine(scene.input, ro);
+    EXPECT(explicit_target.problem.intrinsics == reg.problem.intrinsics &&
+           explicit_target.problem.poses == reg.problem.poses);
+    const double f_free = free.problem.intrinsics[0], f_reg = reg.problem.intrinsics[0];
+    EXPECT((f_reg - f0) * (f_free - f0) > 0 && std::abs(f_reg - f0) < std::abs(f_free - f0) &&
+           std::abs(f_reg - f0) > sigma);
+    EXPECT(reg.summaries.size() >= 3);
+
+    // The group prior (D165) likewise: the target pinned to the given mean, the mean
+    // carried from round to round. One block, so the group has a single member and
+    // needs its target to be built.
+    const double inf = std::numeric_limits<double>::infinity();
+    sc.intrinsics_prior.clear();
+    sc.intrinsics_prior_sigma.clear();
+    jba::set_intrinsics_groups(sc, {0}, 0.0005, inf, inf, 0.0005, inf, inf);
+    sc.intrinsics_group_prior.clear();  // empty: refine pins the given mean
+    const auto grouped = jba::refine(scene.input, ro);
+    std::printf("%-28s focal given %.2f, grouped %.2f, mean %.2f\n", "room, intrinsics groups", f0,
+                grouped.problem.intrinsics[0], grouped.problem.intrinsics_group_mean[0]);
+    EXPECT(grouped.problem.intrinsics_group_prior.size() == given.size() && grouped.problem.intrinsics_group_prior[0] == f0);
+    const double f_grp = grouped.problem.intrinsics[0], mu = grouped.problem.intrinsics_group_mean[0];
+    EXPECT((f_grp - f0) * (f_free - f0) > 0 && std::abs(f_grp - f0) < std::abs(f_free - f0));
+    EXPECT((mu - f0) * (f_grp - f0) > 0 && std::abs(mu - f0) < std::abs(f_grp - f0));  // the mean between
+  }
+
   // Global priors from a drift-free source with arbitrary frame and scale,
   // combined with metric relative priors: the similarity recovers the true scale.
   {
@@ -301,6 +357,27 @@ int main() {
     EXPECT(with.result.manhattan.accepted);
     EXPECT(with.after.median_rotation < 0.7 * plain.after.median_rotation);
     EXPECT(with.after.median_centre < 1.05 * plain.after.median_centre);
+    // A working frame already Manhattan aligned (D164): the frame is not estimated,
+    // the room's walls lie along world x and z, so the aligned frame is the true one.
+    auto given = manhattan({});
+    given.estimate_manhattan_frame = false;
+    const auto aligned = run("room, heading drift, Manhattan, aligned frame", so, given);
+    EXPECT(aligned.result.manhattan.accepted);
+    EXPECT(aligned.after.median_rotation < 0.7 * plain.after.median_rotation);
+    EXPECT(aligned.after.median_rotation < 1.1 * with.after.median_rotation);
+    // A frame given in the scene is used, and checked: with one degree of freedom its
+    // axis 2 must be up.
+    {
+      auto in = jba_test::make_scene(so).input;
+      in.scene.manhattan_frame = {1, 0, 0, 0};
+      bool threw = false;
+      try {
+        jba::refine(in, given);
+      } catch (const std::invalid_argument&) {
+        threw = true;
+      }
+      EXPECT(threw);
+    }
 
     // Two rooms joined by a doorway: the images tie the rooms together weakly.
     so.kind = SceneKind::House;
@@ -328,6 +405,42 @@ int main() {
     EXPECT(mixed_m.result.manhattan.accepted);
     EXPECT(mixed_m.after.median_rotation <= 1.05 * mixed_plain.after.median_rotation);
     EXPECT(mixed_m.after.median_centre <= 1.05 * mixed_plain.after.median_centre);
+
+    // Free focal length (D163): the segments take the intrinsics into account instead
+    // of refusing them. Focal length 3 % off and free, with and without the segments.
+    so.lines = jba_test::LineMode::Manhattan;
+    const double f_true = jba_test::make_scene(so).truth.intrinsics[0];
+    auto focal_off = [](jba::RefineInput& in) {
+      in.scene.intrinsics[0] *= 1.03;
+      in.scene.intrinsics[1] *= 1.03;
+      in.scene.intrinsics_free = {jba::kFocal};
+    };
+    const auto free_plain = run("room, free focal", so, {}, false, focal_off);
+    const auto free_m = run("room, free focal, Manhattan", so, manhattan({}), false, focal_off);
+    const double fe_plain = free_plain.result.problem.intrinsics[0] / f_true - 1;
+    const double fe_m = free_m.result.problem.intrinsics[0] / f_true - 1;
+    std::printf("  focal error: without segments %.4f %%, with %.4f %%\n", 100 * fe_plain, 100 * fe_m);
+    // Many points fix the focal length either way (0.011 % off); the segments still
+    // remove the heading drift as well as with fixed intrinsics.
+    EXPECT(free_m.result.manhattan.accepted);
+    EXPECT(std::abs(fe_m) < 0.001 && std::abs(fe_plain) < 0.001);
+    EXPECT(free_m.after.median_rotation < 0.7 * free_plain.after.median_rotation);
+    EXPECT(free_m.after.median_rotation < 1.1 * with.after.median_rotation);
+
+    // Weak focal evidence from the points (2 px keypoint noise, 1500 points).
+    SceneOptions weak = so;
+    weak.pixel_noise = 2.0;
+    weak.points = 1500;
+    const auto weak_plain = run("room, weak points, free focal", weak, {}, false, focal_off);
+    const auto weak_m = run("room, weak points, free focal, Manhattan", weak, manhattan({}), false, focal_off);
+    const double we_plain = weak_plain.result.problem.intrinsics[0] / f_true - 1;
+    const double we_m = weak_m.result.problem.intrinsics[0] / f_true - 1;
+    std::printf("  focal error: without segments %.4f %%, with %.4f %%\n", 100 * we_plain, 100 * we_m);
+    // The vanishing points carry the focal length: 0.57 % off without the segments,
+    // 0.10 % with them.
+    EXPECT(weak_m.result.manhattan.accepted);
+    EXPECT(std::abs(we_m) < 0.5 * std::abs(we_plain) && std::abs(we_m) < 0.002);
+    EXPECT(weak_m.after.median_rotation < weak_plain.after.median_rotation);
   }
 
   // Depth at keypoints (document 05): depth-assisted refinement against pose and

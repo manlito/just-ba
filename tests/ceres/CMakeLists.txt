@@ -43,6 +43,40 @@ jba_parity_case(sigma "--model SIMPLE_RADIAL --sigma 0.7" "--check-parameters")
 jba_parity_case(shared_focal "--model RADIAL --free-intrinsics 1" "--check-parameters")
 jba_parity_case(shared_all_intrinsics "--model PINHOLE --free-intrinsics 7" "--check-parameters")
 jba_parity_case(per_image_intrinsics "--model RADIAL --per-image-intrinsics --free-intrinsics 5" "")
+# Priors on free intrinsics (D161): toward the truth from a perturbed start, toward
+# the start itself, one group regularized and another fully free, and per image.
+jba_parity_case(intrinsics_prior "--model RADIAL --free-intrinsics 5 --intrinsics-prior 0.002,inf,0.001" "--check-parameters")
+jba_parity_case(intrinsics_prior_at_start
+                "--model OPENCV --free-intrinsics 7 --intrinsics-prior 0.001,1,0.0005 --intrinsics-prior-at-start"
+                "--check-parameters")
+jba_parity_case(intrinsics_prior_focal_only "--model SIMPLE_RADIAL --free-intrinsics 5 --intrinsics-prior 0.002,inf,inf"
+                "--check-parameters")
+jba_parity_case(intrinsics_prior_per_image
+                "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-prior 0.005,inf,0.002" "")
+# The hierarchical prior by group (D165): per-image blocks in one group, toward the
+# truth and toward the start; the mean free of a target; two groups on OPENCV with the
+# principal point tied too; a group of one (the per-block prior with the two variances
+# summed); and a group with fixed members (fixed images keep their blocks used).
+jba_parity_case(intrinsics_group
+                "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-groups 1" "--check-parameters")
+jba_parity_case(intrinsics_group_at_start
+                "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-groups 1 --intrinsics-group-at-start"
+                "--check-parameters")
+jba_parity_case(intrinsics_group_free_mean
+                "--model SIMPLE_RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-groups 1 --intrinsics-group-sigma 0.005,inf,0.001,inf,inf,inf"
+                "")
+# All eight OPENCV parameters free per image leave the flat valley of
+# opencv_free_distortion: costs agree to about 1e-11, centres to a few 1e-6
+# (2.8e-6 on Linux, 7e-7 on macOS), so it takes the same tolerances.
+jba_parity_case(intrinsics_group_two_groups
+                "--model OPENCV --per-image-intrinsics --free-intrinsics 7 --intrinsics-groups 2 --intrinsics-group-sigma 0.003,1,0.0005,0.02,4,inf"
+                "--check-parameters --max-centre-diff 2e-5 --max-rotation-diff 1e-5")
+jba_parity_case(intrinsics_group_single
+                "--model RADIAL --free-intrinsics 5 --intrinsics-groups 1 --intrinsics-group-sigma 0.002,inf,0.001,0.003,inf,0.001"
+                "--check-parameters")
+jba_parity_case(intrinsics_group_with_prior
+                "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-groups 1 --intrinsics-prior 0.01,inf,0.005"
+                "--check-parameters")
 # One shared block with focal and distortion free seen by 40,000 observations: more
 # than one gather unit (16,384), so the CPU splits its sums and the GPU checks of the
 # same problem (gpu_cases.cmake) take the split gathers and summed intrinsics terms.
@@ -116,6 +150,21 @@ jba_parity_case(lines_huber "--model SIMPLE_RADIAL --lines 40 --line-outliers 0.
 jba_parity_case(lines_gravity "--model PINHOLE --lines 40 --gravity-priors --relative-priors 2" "--check-parameters")
 jba_parity_case(lines_dof3_opencv "--model OPENCV --lines 40 --line-dof 3 --relative-priors 2" "--check-parameters")
 jba_parity_case(lines_global "--model PINHOLE --lines 40 --global-priors" "--check-parameters")
+# Free intrinsics with the segments (D163): the line term's intrinsics columns,
+# through the undistorted endpoints, against Ceres differentiating its own forward
+# model twice.
+jba_parity_case(lines_free_focal "--model PINHOLE --lines 40 --free-intrinsics 1" "--check-parameters")
+jba_parity_case(lines_per_image_free "--model RADIAL --per-image-intrinsics --free-intrinsics 5 --lines 40" "")
+jba_parity_case(lines_free_radial "--model SIMPLE_RADIAL --lines 40 --free-intrinsics 7 --line-outliers 0.1"
+                "--check-parameters")
+jba_parity_case(lines_dof3_free_opencv "--model OPENCV --lines 40 --line-dof 3 --relative-priors 2 --free-intrinsics 7"
+                "--check-parameters")
+# Fisheye with free focal length and principal point converges slowly along a flat
+# direction (17 iterations, 4 without the segments): costs and histories agree to
+# 5e-13, the end points to a few 1e-6, about what Ceres's own end point moves between
+# 1 and 4 threads (as for fisheye_free_distortion).
+jba_parity_case(lines_free_fisheye "--model OPENCV_FISHEYE --lines 40 --free-intrinsics 3"
+                "--check-parameters --max-centre-diff 2e-5 --max-rotation-diff 1e-5")
 # Two groups of images joined only by the Manhattan frame: one holds a rotation, the
 # other its translation alone (D86).
 jba_parity_case(lines_two_groups "--model PINHOLE --points 0 --relative-priors 2 --prior-groups 2 --lines 40"

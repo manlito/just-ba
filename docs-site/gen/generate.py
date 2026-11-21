@@ -33,7 +33,8 @@ sys.path.insert(0, str(ROOT / "residuals" / "symbolic"))
 API_GROUPS = [
     ("Problems and files", "A problem holds the camera, poses, points, observations and priors.",
      ["Problem", "make_problem", "CameraModel", "num_params", "FrameRelation", "DepthKind", "DepthForm",
-      "DEPTH_SCALE", "DEPTH_OFFSET", "add_relative_priors_from_poses", "read_problem", "write_problem", "read_bal",
+      "DEPTH_SCALE", "DEPTH_OFFSET", "add_relative_priors_from_poses", "set_intrinsics_prior", "set_intrinsics_groups", "read_problem",
+      "write_problem", "read_bal",
       "write_result", "export_colmap"]),
     ("Refining a capture", "Keypoints, matches and pose priors in, a refined reconstruction out.",
      ["refine", "RefineOptions", "RefineResult", "initialize_poses", "PoseInitialization", "build_tracks", "Tracks",
@@ -45,7 +46,7 @@ API_GROUPS = [
      ["Backend", "LinearSolver", "backend_available", "compiled_backends", "resolve_linear_solver"]),
     ("Diagnostics and uncertainty", "", ["evaluate", "ResidualReport", "covariance", "Covariance"]),
     ("Manhattan prior", "Line segments assigned to the axes of a Manhattan frame.",
-     ["assign_lines", "apply_assignment", "ManhattanOptions", "ManhattanAssignment"]),
+     ["assign_lines", "aligned_frame", "apply_assignment", "ManhattanOptions", "ManhattanAssignment"]),
     ("Poses and conventions", "Converting tracker poses to the library's.",
      ["poses_from_camera_to_world", "camera_to_world_from_poses", "quat_from_matrix", "matrix_from_quat",
       "camera_centres"]),

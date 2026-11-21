@@ -8,6 +8,7 @@
 #include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 
 #include "jba/geometry.h"
 #include "jba/manhattan.h"
@@ -168,6 +169,70 @@ void GemanMcClureLoss::Evaluate(double s, double rho[3]) const {
 
 namespace {
 
+// Normalized coordinates (u, v) to pixels, COLMAP's formulas, for any scalar type
+// (nested Jets included: the line cost differentiates it twice).
+// A constant of any scalar type, nested Jets included (their constructor from a
+// value is explicit at every level).
+template <typename T>
+struct Lit {
+  static T of(double c) { return T(c); }
+};
+template <typename T, int N>
+struct Lit<ceres::Jet<T, N>> {
+  static ceres::Jet<T, N> of(double c) { return ceres::Jet<T, N>(Lit<T>::of(c)); }
+};
+template <typename T>
+T lit(double c) {
+  return Lit<T>::of(c);
+}
+
+template <typename T>
+double scalar_part(const T& x) {
+  if constexpr (std::is_same_v<T, double>) return x;
+  else return scalar_part(x.a);
+}
+
+template <CameraModel M, typename T>
+void project_model(const T& u, const T& v, const T* k, T& x, T& y) {
+  if constexpr (M == CameraModel::SimplePinhole) {
+    x = k[0] * u + k[1];
+    y = k[0] * v + k[2];
+  } else if constexpr (M == CameraModel::Pinhole) {
+    x = k[0] * u + k[2];
+    y = k[1] * v + k[3];
+  } else if constexpr (M == CameraModel::SimpleRadial) {
+    const T d = lit<T>(1) + k[3] * (u * u + v * v);
+    x = k[0] * u * d + k[1];
+    y = k[0] * v * d + k[2];
+  } else if constexpr (M == CameraModel::Radial) {
+    const T r2 = u * u + v * v;
+    const T d = lit<T>(1) + k[3] * r2 + k[4] * r2 * r2;
+    x = k[0] * u * d + k[1];
+    y = k[0] * v * d + k[2];
+  } else if constexpr (M == CameraModel::OpenCV) {
+    // COLMAP's OpenCVCameraModel::Distortion.
+    const T u2 = u * u, v2 = v * v, uv = u * v, r2 = u2 + v2;
+    const T radial = k[4] * r2 + k[5] * r2 * r2;
+    const T du = u * radial + lit<T>(2) * k[6] * uv + k[7] * (r2 + lit<T>(2) * u2);
+    const T dv = v * radial + lit<T>(2) * k[7] * uv + k[6] * (r2 + lit<T>(2) * v2);
+    x = k[0] * (u + du) + k[2];
+    y = k[1] * (v + dv) + k[3];
+  } else {
+    // COLMAP's OpenCVFisheyeCameraModel::Distortion.
+    const T r = ceres::sqrt(u * u + v * v);
+    T uu = u, vv = v;
+    if (r > lit<T>(1e-12)) {
+      const T theta = ceres::atan(r);
+      const T t2 = theta * theta, t4 = t2 * t2, t6 = t4 * t2, t8 = t4 * t4;
+      const T thetad = theta * (lit<T>(1) + k[4] * t2 + k[5] * t4 + k[6] * t6 + k[7] * t8);
+      uu = u * thetad / r;
+      vv = v * thetad / r;
+    }
+    x = k[0] * uu + k[2];
+    y = k[1] * vv + k[3];
+  }
+}
+
 template <CameraModel M>
 struct Reprojection {
   Reprojection(double x, double y, double inv_sigma) : ox(x), oy(y), w(inv_sigma) {}
@@ -181,43 +246,7 @@ struct Reprojection {
     p[2] += pose[6];
     const T u = p[0] / p[2], v = p[1] / p[2];
     T x, y;
-    if constexpr (M == CameraModel::SimplePinhole) {
-      x = k[0] * u + k[1];
-      y = k[0] * v + k[2];
-    } else if constexpr (M == CameraModel::Pinhole) {
-      x = k[0] * u + k[2];
-      y = k[1] * v + k[3];
-    } else if constexpr (M == CameraModel::SimpleRadial) {
-      const T d = T(1) + k[3] * (u * u + v * v);
-      x = k[0] * u * d + k[1];
-      y = k[0] * v * d + k[2];
-    } else if constexpr (M == CameraModel::Radial) {
-      const T r2 = u * u + v * v;
-      const T d = T(1) + k[3] * r2 + k[4] * r2 * r2;
-      x = k[0] * u * d + k[1];
-      y = k[0] * v * d + k[2];
-    } else if constexpr (M == CameraModel::OpenCV) {
-      // COLMAP's OpenCVCameraModel::Distortion.
-      const T u2 = u * u, v2 = v * v, uv = u * v, r2 = u2 + v2;
-      const T radial = k[4] * r2 + k[5] * r2 * r2;
-      const T du = u * radial + T(2) * k[6] * uv + k[7] * (r2 + T(2) * u2);
-      const T dv = v * radial + T(2) * k[7] * uv + k[6] * (r2 + T(2) * v2);
-      x = k[0] * (u + du) + k[2];
-      y = k[1] * (v + dv) + k[3];
-    } else {
-      // COLMAP's OpenCVFisheyeCameraModel::Distortion.
-      const T r = ceres::sqrt(u * u + v * v);
-      T uu = u, vv = v;
-      if (r > T(1e-12)) {
-        const T theta = ceres::atan(r);
-        const T t2 = theta * theta, t4 = t2 * t2, t6 = t4 * t2, t8 = t4 * t4;
-        const T thetad = theta * (T(1) + k[4] * t2 + k[5] * t4 + k[6] * t6 + k[7] * t8);
-        uu = u * thetad / r;
-        vv = v * thetad / r;
-      }
-      x = k[0] * uu + k[2];
-      y = k[1] * vv + k[3];
-    }
+    project_model<M>(u, v, k, x, y);
     r[0] = (x - ox) * w;
     r[1] = (y - oy) * w;
     return true;
@@ -332,18 +361,90 @@ struct GravityPrior {
   }
 };
 
-struct Line {
-  double n[3], w;
+// Manhattan line (D163), written independently of the generated code: the pixel
+// distance of the endpoints from the best circle through the axis direction, with
+// the circle eliminated. The endpoints are undistorted in double, then one Newton
+// step in T carries du/dK; the model's 2 x 2 Jacobian A comes from nested Jets, so
+// AutoDiff differentiates it again for the intrinsics.
+template <CameraModel M>
+struct LinePx {
+  double xy[4], w;
   int axis;
 
   template <typename T>
-  bool operator()(const T* pose, const T* frame, T* out) const {
+  bool operator()(const T* pose, const T* frame, const T* k, T* out) const {
+    constexpr int np = M == CameraModel::SimplePinhole ? 3
+                       : M == CameraModel::Radial     ? 5
+                       : (M == CameraModel::OpenCV || M == CameraModel::OpenCVFisheye) ? 8
+                                                      : 4;
+    double kd[8];
+    for (int a = 0; a < np; ++a) kd[a] = scalar_part(k[a]);
     T e[3] = {T(0), T(0), T(0)};
     e[axis] = T(1);
-    T d[3], Rd[3];
-    ceres::UnitQuaternionRotatePoint(frame, e, d);
-    ceres::UnitQuaternionRotatePoint(pose, d, Rd);
-    out[0] = (n[0] * Rd[0] + n[1] * Rd[1] + n[2] * Rd[2]) * w;
+    T dm[3], d[3];
+    ceres::UnitQuaternionRotatePoint(frame, e, dm);
+    ceres::UnitQuaternionRotatePoint(pose, dm, d);
+    using U = ceres::Jet<T, 2>;
+    // Pixel and A = dpi/du at (u, v), K as given.
+    auto eval = [&](const T& u, const T& v, T& px, T& py, T* A) {
+      U kk[8];
+      for (int a = 0; a < np; ++a) kk[a] = U(k[a]);
+      U x, y;
+      project_model<M>(U(u, 0), U(v, 1), kk, x, y);
+      px = x.a;
+      py = y.a;
+      A[0] = x.v[0];
+      A[1] = x.v[1];
+      A[2] = y.v[0];
+      A[3] = y.v[1];
+    };
+    T b[2][3], s[2], t2[2];
+    for (int j = 0; j < 2; ++j) {
+      double uv[2];
+      if (!jba::undistort(M, kd, xy[2 * j], xy[2 * j + 1], uv)) return false;
+      // An endpoint at the vanishing point: zero, as just-ba writes it.
+      const double dd[3] = {scalar_part(d[0]), scalar_part(d[1]), scalar_part(d[2])};
+      const double bx[3] = {uv[0], uv[1], 1};
+      const double cx[3] = {dd[1] * bx[2] - dd[2] * bx[1], dd[2] * bx[0] - dd[0] * bx[2], dd[0] * bx[1] - dd[1] * bx[0]};
+      if (cx[0] * cx[0] + cx[1] * cx[1] + cx[2] * cx[2] < 1e-20 * (uv[0] * uv[0] + uv[1] * uv[1] + 1)) {
+        out[0] = T(0);
+        return true;
+      }
+      T px, py, A[4];
+      eval(T(uv[0]), T(uv[1]), px, py, A);
+      const T det = A[0] * A[3] - A[1] * A[2];
+      const T ex = px - xy[2 * j], ey = py - xy[2 * j + 1];
+      const T u = T(uv[0]) - (A[3] * ex - A[1] * ey) / det;
+      const T v = T(uv[1]) - (-A[2] * ex + A[0] * ey) / det;
+      eval(u, v, px, py, A);
+      const T norm = ceres::sqrt(u * u + v * v + T(1));
+      T* bj = b[j];
+      bj[0] = u / norm;
+      bj[1] = v / norm;
+      bj[2] = T(1) / norm;
+      // J = A P: tangent displacement of the bearing to pixels.
+      const T P[6] = {norm, T(0), -u * norm, T(0), norm, -v * norm};
+      T J[6];
+      for (int r = 0; r < 2; ++r)
+        for (int c = 0; c < 3; ++c) J[3 * r + c] = A[2 * r] * P[c] + A[2 * r + 1] * P[3 + c];
+      const T db = d[0] * bj[0] + d[1] * bj[1] + d[2] * bj[2];
+      T tau[3], nu[3];
+      for (int a = 0; a < 3; ++a) tau[a] = d[a] - db * bj[a];
+      t2[j] = tau[0] * tau[0] + tau[1] * tau[1] + tau[2] * tau[2];
+      const T tn = ceres::sqrt(t2[j]);
+      for (T& x : tau) x /= tn;
+      ceres::CrossProduct(bj, tau, nu);
+      T Jt[2], Jn[2];
+      for (int r = 0; r < 2; ++r) {
+        Jt[r] = J[3 * r] * tau[0] + J[3 * r + 1] * tau[1] + J[3 * r + 2] * tau[2];
+        Jn[r] = J[3 * r] * nu[0] + J[3 * r + 1] * nu[1] + J[3 * r + 2] * nu[2];
+      }
+      s[j] = ceres::abs(Jt[0] * Jn[1] - Jt[1] * Jn[0]) / ceres::sqrt(Jt[0] * Jt[0] + Jt[1] * Jt[1]);
+    }
+    T c[3];
+    ceres::CrossProduct(b[0], b[1], c);
+    const T dc = d[0] * c[0] + d[1] * c[1] + d[2] * c[2];
+    out[0] = s[0] * s[1] * dc / ceres::sqrt(s[0] * s[0] * t2[0] + s[1] * s[1] * t2[1]) * w;
     return true;
   }
 };
@@ -384,12 +485,91 @@ ceres::CostFunction* make_depth_prior_cost(double w_scale, double w_offset) {
   return new ceres::AutoDiffCostFunction<DepthPriorCost, 2, 2>(new DepthPriorCost{w_scale, w_offset});
 }
 
-ceres::CostFunction* make_line_cost(const double* normal, int axis, double inv_sigma) {
-  auto* f = new Line;
-  std::copy_n(normal, 3, f->n);
+namespace {
+
+// Prior on an intrinsics block (D161): residual (k - k0) * w per parameter, w 0 for
+// parameters without one. Linear, so its Jacobian is written out.
+class IntrinsicsPriorCost : public ceres::CostFunction {
+ public:
+  IntrinsicsPriorCost(std::vector<double> k0, std::vector<double> w) : k0_(std::move(k0)), w_(std::move(w)) {
+    set_num_residuals(static_cast<int>(k0_.size()));
+    mutable_parameter_block_sizes()->push_back(static_cast<int>(k0_.size()));
+  }
+  bool Evaluate(double const* const* x, double* r, double** J) const override {
+    const std::size_t n = k0_.size();
+    for (std::size_t a = 0; a < n; ++a) r[a] = (x[0][a] - k0_[a]) * w_[a];
+    if (J && J[0]) {
+      std::fill(J[0], J[0] + n * n, 0.0);
+      for (std::size_t a = 0; a < n; ++a) J[0][a * n + a] = w_[a];
+    }
+    return true;
+  }
+
+ private:
+  std::vector<double> k0_, w_;
+};
+
+}  // namespace
+
+ceres::CostFunction* make_intrinsics_prior_cost(const double* target, const double* weight, int n) {
+  return new IntrinsicsPriorCost(std::vector<double>(target, target + n), std::vector<double>(weight, weight + n));
+}
+
+namespace {
+
+// The group prior's tie (D165): parameters (intrinsics n, the group's mean n);
+// residual (k - mean) * w per parameter. Linear, so its Jacobians are written out.
+class GroupTieCost : public ceres::CostFunction {
+ public:
+  explicit GroupTieCost(std::vector<double> w) : w_(std::move(w)) {
+    set_num_residuals(static_cast<int>(w_.size()));
+    mutable_parameter_block_sizes()->push_back(static_cast<int>(w_.size()));
+    mutable_parameter_block_sizes()->push_back(static_cast<int>(w_.size()));
+  }
+  bool Evaluate(double const* const* x, double* r, double** J) const override {
+    const std::size_t n = w_.size();
+    for (std::size_t a = 0; a < n; ++a) r[a] = (x[0][a] - x[1][a]) * w_[a];
+    for (int b = 0; b < 2; ++b) {
+      if (!J || !J[b]) continue;
+      std::fill(J[b], J[b] + n * n, 0.0);
+      for (std::size_t a = 0; a < n; ++a) J[b][a * n + a] = b == 0 ? w_[a] : -w_[a];
+    }
+    return true;
+  }
+
+ private:
+  std::vector<double> w_;
+};
+
+}  // namespace
+
+namespace {
+
+template <CameraModel M>
+ceres::CostFunction* make_line(const double* xy, int axis, double inv_sigma) {
+  constexpr int np = M == CameraModel::SimplePinhole ? 3
+                     : M == CameraModel::Radial     ? 5
+                     : (M == CameraModel::OpenCV || M == CameraModel::OpenCVFisheye) ? 8
+                                                    : 4;
+  auto* f = new LinePx<M>;
+  std::copy_n(xy, 4, f->xy);
   f->w = inv_sigma;
   f->axis = axis;
-  return new ceres::AutoDiffCostFunction<Line, 1, 7, 4>(f);
+  return new ceres::AutoDiffCostFunction<LinePx<M>, 1, 7, 4, np>(f);
+}
+
+}  // namespace
+
+ceres::CostFunction* make_line_cost(CameraModel m, const double* xy, int axis, double inv_sigma) {
+  switch (m) {
+    case CameraModel::SimplePinhole: return make_line<CameraModel::SimplePinhole>(xy, axis, inv_sigma);
+    case CameraModel::Pinhole: return make_line<CameraModel::Pinhole>(xy, axis, inv_sigma);
+    case CameraModel::SimpleRadial: return make_line<CameraModel::SimpleRadial>(xy, axis, inv_sigma);
+    case CameraModel::Radial: return make_line<CameraModel::Radial>(xy, axis, inv_sigma);
+    case CameraModel::OpenCV: return make_line<CameraModel::OpenCV>(xy, axis, inv_sigma);
+    case CameraModel::OpenCVFisheye: return make_line<CameraModel::OpenCVFisheye>(xy, axis, inv_sigma);
+  }
+  throw std::invalid_argument("make_line_cost: unknown camera model");
 }
 
 ceres::CostFunction* make_gravity_prior_cost(const double* g_world, const double* g_camera, double inv_sigma) {
@@ -459,9 +639,13 @@ Result solve(jba::Problem& p, const Options& o) {
   std::vector<std::unique_ptr<ceres::Manifold>> owned;
   std::unique_ptr<ceres::LossFunction> loss(make_loss(o.losses[jba::kLossReprojection]));
 
+  // Intrinsics blocks some observation uses: only those are variables, as in
+  // just-ba (segments alone leave a block fixed).
+  std::vector<char> block_observed(p.num_intrinsics_blocks(), 0);
   for (std::size_t k = 0; k < p.num_observations(); ++k) {
     const std::size_t i = static_cast<std::size_t>(p.obs_image[k]);
     const std::size_t c = static_cast<std::size_t>(p.intrinsics_of_image(i));
+    block_observed[c] = 1;
     const double sigma = p.obs_sigma.empty() ? 1.0 : p.obs_sigma[k];
     problem.AddResidualBlock(make_reprojection_cost(p.model, p.obs_xy[2 * k], p.obs_xy[2 * k + 1], 1.0 / sigma),
                              loss.get(), &p.poses[7 * i], &p.points[3 * static_cast<std::size_t>(p.obs_point[k])],
@@ -548,11 +732,14 @@ Result solve(jba::Problem& p, const Options& o) {
   if (p.has_manhattan()) {
     for (std::size_t k = 0; k < p.num_lines(); ++k) {
       if (p.line_axis[k] < 0) continue;
-      double n[3];
-      if (!jba::line_normal(p, k, n)) continue;
+      const auto i = static_cast<std::size_t>(p.line_image[k]);
+      double* K = &p.intrinsics[static_cast<std::size_t>(np) * static_cast<std::size_t>(p.intrinsics_of_image(i))];
+      const double* xy = &p.line_xy[4 * k];
+      double uv[4];
+      if (!jba::line_uv(p.model, K, xy, uv)) continue;
       const double sigma = jba::line_residual_sigma(p, k, o.prior_defaults);
-      problem.AddResidualBlock(make_line_cost(n, p.line_axis[k], 1 / sigma), line_loss.get(),
-                               &p.poses[7 * static_cast<std::size_t>(p.line_image[k])], p.manhattan_frame.data());
+      problem.AddResidualBlock(make_line_cost(p.model, &p.line_xy[4 * k], p.line_axis[k], 1 / sigma), line_loss.get(),
+                               &p.poses[7 * i], p.manhattan_frame.data(), K);
     }
     if (p.manhattan_dof == 3) frame_manifold = std::make_unique<LeftRotationVectorQuaternion>();
     else frame_manifold = std::make_unique<HeadingQuaternion>(up);
@@ -611,7 +798,7 @@ Result solve(jba::Problem& p, const Options& o) {
   for (std::size_t c = 0; c < p.num_intrinsics_blocks(); ++c) {
     double* K = &p.intrinsics[static_cast<std::size_t>(np) * c];
     if (!problem.HasParameterBlock(K)) continue;
-    const std::uint8_t mask = p.intrinsics_free.empty() ? 0 : p.intrinsics_free[c];
+    const std::uint8_t mask = p.intrinsics_free.empty() || !block_observed[c] ? 0 : p.intrinsics_free[c];
     std::vector<int> constant;
     for (int a = 0; a < np; ++a) {
       if (!(mask & jba::intrinsics_group(p.model, a))) constant.push_back(a);
@@ -622,7 +809,65 @@ Result solve(jba::Problem& p, const Options& o) {
       owned.push_back(std::make_unique<ceres::SubsetManifold>(np, constant));
       problem.SetManifold(K, owned.back().get());
     }
+    // The prior on free intrinsics (D161), with just-ba's rules: none on a constant
+    // block, zero weight on fixed parameters, the target taken now (before the solve
+    // moves K).
+    if (!p.intrinsics_prior_sigma.empty() && static_cast<int>(constant.size()) < np) {
+      const std::size_t at = static_cast<std::size_t>(np) * c;
+      std::vector<double> target(K, K + np), w(static_cast<std::size_t>(np), 0.0);
+      for (int a = 0; a < np && !p.intrinsics_prior.empty(); ++a)
+        if (!std::isnan(p.intrinsics_prior[at + static_cast<std::size_t>(a)]))
+          target[static_cast<std::size_t>(a)] = p.intrinsics_prior[at + static_cast<std::size_t>(a)];
+      bool any = false;
+      for (int a = 0; a < np; ++a) {
+        const double sigma = p.intrinsics_prior_sigma[at + static_cast<std::size_t>(a)];
+        if ((mask & jba::intrinsics_group(p.model, a)) && std::isfinite(sigma)) w[static_cast<std::size_t>(a)] = 1 / sigma;
+        any = any || w[static_cast<std::size_t>(a)] != 0;
+      }
+      if (any) problem.AddResidualBlock(make_intrinsics_prior_cost(target.data(), w.data(), np), nullptr, K);
+    }
     ordering->AddElementToGroup(K, 1);
+  }
+  // The group prior (D165), with just-ba's rules (intrinsics_group_terms): a mean
+  // block per group with a tied parameter, its other parameters constant, each member
+  // tied to it and the mean to its target.
+  const jba::IntrinsicsGroupTerms groups = jba::intrinsics_group_terms(p);
+  const auto unp = static_cast<std::size_t>(np);
+  std::vector<double> group_mean(groups.groups * unp, 0.0);
+  std::vector<char> group_built(groups.groups, 0);
+  if (groups.any()) {
+    for (std::size_t g = 0; g < groups.groups; ++g) {
+      double* mu = &group_mean[g * unp];
+      std::vector<int> constant;
+      for (std::size_t a = 0; a < unp; ++a) {
+        if (groups.tie_w[g * unp + a] == 0) constant.push_back(static_cast<int>(a));
+        else mu[a] = groups.mean[g * unp + a];
+      }
+      if (static_cast<int>(constant.size()) == np) continue;
+      group_built[g] = 1;
+      problem.AddParameterBlock(mu, np);
+      if (!constant.empty()) {
+        owned.push_back(std::make_unique<ceres::SubsetManifold>(np, constant));
+        problem.SetManifold(mu, owned.back().get());
+      }
+      std::vector<double> target(unp, 0.0), w(unp, 0.0);
+      bool any = false;
+      for (std::size_t a = 0; a < unp; ++a) {
+        w[a] = groups.anchor_w[g * unp + a];
+        if (w[a] != 0) target[a] = groups.target[g * unp + a];
+        any = any || w[a] != 0;
+      }
+      if (any) problem.AddResidualBlock(make_intrinsics_prior_cost(target.data(), w.data(), np), nullptr, mu);
+      ordering->AddElementToGroup(mu, 1);
+    }
+    for (std::size_t c = 0; c < groups.member.size(); ++c) {
+      if (!groups.member[c]) continue;
+      const auto g = static_cast<std::size_t>(p.intrinsics_group[c]);
+      problem.AddResidualBlock(
+          new GroupTieCost(std::vector<double>(groups.tie_w.begin() + static_cast<std::ptrdiff_t>(g * unp),
+                                               groups.tie_w.begin() + static_cast<std::ptrdiff_t>((g + 1) * unp))),
+          nullptr, &p.intrinsics[c * unp], &group_mean[g * unp]);
+    }
   }
 
   ceres::Solver::Options opts;
@@ -725,6 +970,14 @@ Result solve(jba::Problem& p, const Options& o) {
       if (problem.HasParameterBlock(X) && !problem.IsParameterBlockConstant(X))
         cov.GetCovarianceBlock(X, X, &r.point_covariance[9 * q]);
     }
+  }
+  // The group means (D165), written back as just-ba does: the tied parameters.
+  if (groups.any()) {
+    std::vector<double> mean = p.intrinsics_group_mean.empty() ? std::vector<double>(group_mean.size(), std::nan(""))
+                                                               : p.intrinsics_group_mean;
+    for (std::size_t at = 0; at < group_mean.size(); ++at)
+      if (group_built[at / unp] && groups.tie_w[at] != 0) mean[at] = group_mean[at];
+    p.intrinsics_group_mean = std::move(mean);
   }
   if (!o.solve) return r;
   r.initial_cost = summary.initial_cost;

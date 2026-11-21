@@ -226,6 +226,30 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   }
   if (base.num_images() != n_img) throw std::invalid_argument("refine: scene.poses must have one pose per image");
   if (auto err = validate(base); !err.empty()) throw std::invalid_argument("refine: invalid scene: " + err);
+  // The intrinsics prior anchors to the caller's values in every round (D161), not to
+  // the previous round's result.
+  if (!base.intrinsics_prior_sigma.empty()) {
+    if (base.intrinsics_prior.empty()) base.intrinsics_prior = base.intrinsics;
+    for (std::size_t a = 0; a < base.intrinsics_prior.size(); ++a)
+      if (std::isnan(base.intrinsics_prior[a])) base.intrinsics_prior[a] = base.intrinsics[a];
+  }
+  // The group prior's targets (D165) are not pinned here: the first solve that has a
+  // group's members takes the target from their mean as given (the caller's values, a
+  // block being unchanged until it is used) and writes it back, and the rounds carry
+  // it, with the mean, so blocks unseen here do not vote.
+
+  // The Manhattan term is set up by refine alone (below), so the scene's line axes
+  // and frame are cleared before any solve. Without estimating, the scene's frame
+  // (or the aligned one) is where the segments are assigned (D164).
+  std::vector<double> given_frame;
+  if (o.use_manhattan && !o.estimate_manhattan_frame) {
+    given_frame = base.manhattan_frame.empty() ? aligned_frame(base) : base.manhattan_frame;
+    base.manhattan_frame = given_frame;
+    base.manhattan_dof = o.manhattan.dof;
+    if (auto err = validate(base); !err.empty()) throw std::invalid_argument("refine: invalid Manhattan frame: " + err);
+  }
+  base.line_axis.clear();
+  base.manhattan_frame.clear();
 
   RefineResult out;
   const PoseInitialization init = initialize_poses(base, o.solver.prior_defaults);
@@ -246,8 +270,6 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
 
   // Manhattan prior: assign, test support, and remove heading drift before
   // triangulating. Segments of images left out are never assigned.
-  base.line_axis.clear();
-  base.manhattan_frame.clear();
   auto assign = [&](const double* frame, double angle) {
     ManhattanOptions mo = o.manhattan;
     mo.max_angle_deg = angle;
@@ -262,7 +284,7 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   };
   double line_angle = o.manhattan.max_angle_deg;
   if (o.use_manhattan && base.num_lines() > 0) {
-    out.manhattan = assign(nullptr, line_angle);
+    out.manhattan = assign(given_frame.empty() ? nullptr : given_frame.data(), line_angle);
     if (out.manhattan.accepted && o.prior_solve && have_priors) out.summaries.push_back(solve(base, o.solver));
   }
 
@@ -347,6 +369,8 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     if (out.rejected_observations > 0) out.summaries.push_back(solve(problem, o.solver));
     base.poses = problem.poses;
     base.intrinsics = problem.intrinsics;
+    base.intrinsics_group_mean = problem.intrinsics_group_mean;
+    base.intrinsics_group_prior = problem.intrinsics_group_prior;
     base.set_transform = problem.set_transform;
     base.manhattan_frame = problem.manhattan_frame;
     base.depth_correction = problem.depth_correction;

@@ -41,6 +41,62 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
     r.reprojection_cost += 0.5 * rho[0];
   }
 
+  // Priors on free intrinsics, with the solver's rules (D161): blocks used by an
+  // observation, free parameters with a finite sigma.
+  if (!p.intrinsics_prior_sigma.empty()) {
+    const std::size_t n_blk = p.num_intrinsics_blocks();
+    const std::vector<double>& target = p.intrinsics_prior.empty() ? p.intrinsics : p.intrinsics_prior;
+    std::vector<char> used(n_blk, 0);
+    for (std::size_t k = 0; k < n_obs; ++k) used[static_cast<std::size_t>(p.intrinsics_of_image(static_cast<std::size_t>(p.obs_image[k])))] = 1;
+    r.intrinsics_prior_norm.assign(n_blk, 0.0);
+    r.intrinsics_prior_param.assign(n_blk, -1);
+    for (std::size_t c = 0; c < n_blk; ++c) {
+      const std::uint8_t mask = p.intrinsics_free.empty() ? 0 : p.intrinsics_free[c];
+      if (!used[c] || mask == 0) continue;
+      for (int a = 0; a < np; ++a) {
+        const std::size_t at = static_cast<std::size_t>(np) * c + static_cast<std::size_t>(a);
+        const double sigma = p.intrinsics_prior_sigma[at];
+        if (!(mask & intrinsics_group(p.model, a)) || !std::isfinite(sigma)) continue;
+        const double v = std::isnan(target[at]) ? 0.0 : (p.intrinsics[at] - target[at]) / sigma;
+        r.intrinsics_prior_cost += 0.5 * v * v;
+        if (r.intrinsics_prior_param[c] < 0 || std::abs(v) > r.intrinsics_prior_norm[c]) {
+          r.intrinsics_prior_norm[c] = std::abs(v);
+          r.intrinsics_prior_param[c] = a;
+        }
+      }
+    }
+  }
+
+  // The group prior (D165), with the solver's rules (intrinsics_group_terms).
+  if (!p.intrinsics_group.empty()) {
+    const IntrinsicsGroupTerms t = intrinsics_group_terms(p);
+    const auto n = static_cast<std::size_t>(np);
+    r.intrinsics_group_norm.assign(t.member.size(), 0.0);
+    r.intrinsics_group_param.assign(t.member.size(), -1);
+    r.intrinsics_group_target_norm.assign(t.groups, 0.0);
+    r.intrinsics_group_target_param.assign(t.groups, -1);
+    auto add = [&](double v, int a, double& norm, int& param) {
+      r.intrinsics_group_cost += 0.5 * v * v;
+      if (param < 0 || std::abs(v) > norm) {
+        norm = std::abs(v);
+        param = a;
+      }
+    };
+    for (std::size_t c = 0; c < t.member.size(); ++c) {
+      if (!t.member[c]) continue;
+      const auto g = static_cast<std::size_t>(p.intrinsics_group[c]);
+      for (std::size_t a = 0; a < n; ++a)
+        if (t.tie_w[g * n + a] != 0)
+          add((p.intrinsics[c * n + a] - t.mean[g * n + a]) * t.tie_w[g * n + a], static_cast<int>(a),
+              r.intrinsics_group_norm[c], r.intrinsics_group_param[c]);
+    }
+    for (std::size_t g = 0; g < t.groups; ++g)
+      for (std::size_t a = 0; a < n; ++a)
+        if (t.anchor_w[g * n + a] != 0)
+          add((t.mean[g * n + a] - t.target[g * n + a]) * t.anchor_w[g * n + a], static_cast<int>(a),
+              r.intrinsics_group_target_norm[g], r.intrinsics_group_target_param[g]);
+  }
+
   std::vector<double> W_rel, W_glob;
   prior_whitening(p, o.prior_defaults, W_rel, W_glob);
   auto whitened_norm2 = [](const double* W, const double* res) {
@@ -160,17 +216,24 @@ ResidualReport evaluate(const Problem& p, const SolverOptions& o, double thresho
   r.line_weight.assign(n_lines, 0.0);
   if (p.has_manhattan()) {
     for (std::size_t k = 0; k < n_lines; ++k) {
-      double n[3];
-      if (p.line_axis[k] < 0 || !line_normal(p, k, n)) continue;
+      if (p.line_axis[k] < 0) continue;
+      const auto i = static_cast<std::size_t>(p.line_image[k]);
+      const double* K = &p.intrinsics[static_cast<std::size_t>(np) * static_cast<std::size_t>(p.intrinsics_of_image(i))];
+      const double* xy = &p.line_xy[4 * k];
+      const double length = std::hypot(xy[2] - xy[0], xy[3] - xy[1]);
+      double uv[4];
+      if (!line_uv(p.model, K, xy, uv)) continue;  // not in the term (system.cpp); validate() refuses length 0
       double axis[3] = {0, 0, 0}, res;
       axis[p.line_axis[k]] = 1;
-      cpu::manhattan_line<double>(&p.poses[7 * static_cast<std::size_t>(p.line_image[k])], n, p.manhattan_frame.data(),
-                                  axis, &res, static_cast<double*>(nullptr), static_cast<double*>(nullptr));
+      double* none = nullptr;
+      cpu::manhattan_line<double>(p.model, &p.poses[7 * i], p.manhattan_frame.data(), axis, uv, uv + 2, K, &res, none,
+                                  none, none);
       const double w = 1 / line_residual_sigma(p, k, o.prior_defaults);
       double rho[3];
       evaluate_loss(o.line_loss, res * res * w * w, rho);
       r.line_cost += 0.5 * rho[0];
-      r.line_angle[k] = std::asin(std::min(1.0, std::abs(res)));
+      // The residual is L sin(alpha) / sqrt(2) in pixels (D163).
+      r.line_angle[k] = std::asin(std::min(1.0, std::sqrt(2.0) * std::abs(res) / length));
       r.line_weight[k] = rho[1];
     }
   }

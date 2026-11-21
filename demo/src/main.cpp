@@ -20,10 +20,22 @@
 //     Reconstructs a capture file (from demo/tools/colmap_capture.py) and, when it holds a
 //     reference reconstruction, compares with it (document 05, level 3).
 //
+//   jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n] [--restart-after n]
+//                    [--finish other.jbc]
+//                    [--thresholds colmap|demo] [--min-pair-inliers n] [--min-pair-coverage share]
+//                    [common options]
+//     Feeds the capture's images in order to a mapper session (D153), each with its pairs
+//     to earlier images, as a capture in progress would; then finishes it from the live
+//     map with every pair, or with those of --finish (the same images, other pairs).
+//     Prints the pieces, and the largest piece and the finish against a batch run of
+//     the finish's pairs (and against the file's reference, when it has one). The
+//     capture must have one intrinsics block.
+//
 //   common options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]
-//                   [--refine none|focal|focal+distortion] [--export dir] [-v]
+//                   [--refine none|focal|focal+distortion] [--register-from-pairs] [--export dir] [-v]
 //     --refine: the intrinsics the adjustments refine. Default: focal+distortion with
 //     --thresholds colmap, as COLMAP's mapper; none otherwise.
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -48,13 +60,19 @@ namespace {
 int usage() {
   std::fprintf(stderr,
                "usage: jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f]\n"
-               "                      [--false-pairs n] [--focal-error f] [--priors sigma] [--write dir] [options]\n"
+               "                      [--false-pairs n] [--focal-error f] [--priors sigma] [--write dir]\n"
+               "                      [--focal-jitter f] [--focal-bias f] [--groups] [options]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
                "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [--no-priors]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share]\n"
                "                    [options]\n"
+               "       jba_demo session capture.jbc [--window n] [--start-angle deg] [--patience n] [--restart-after n]\n"
+               "                    [--finish other.jbc]\n"
+               "                    [--thresholds colmap|demo]\n"
+               "                    [--min-pair-inliers n] [--min-pair-coverage share] [options]\n"
                "options: [--poses auto|cpu|metal|cuda|webgpu] [--ba cpu|metal|cuda|webgpu] [--threads n]\n"
-               "         [--refine none|focal|focal+distortion] [--export dir] [-v]\n");
+               "         [--refine none|focal|focal+distortion] [--group-sigma tie,target] [--register-from-pairs]\n"
+               "         [--export dir] [-v]\n");
   return 2;
 }
 
@@ -89,10 +107,22 @@ bool common_option(const std::vector<std::string>& args, std::size_t& i, Common&
   const bool has_value = i + 1 < args.size();
   if (a == "-v") c.verbose = true;
   else if (a == "--threads" && has_value) c.mapper.threads = std::atoi(args[++i].c_str());
+  else if (a == "--register-from-pairs") c.mapper.register_from_pairs = true;
   else if (a == "--export" && has_value) c.export_dir = args[++i];
   else if (a == "--poses" && has_value) *bad = !pose_backend_from_name(args[++i], &c.mapper.pose_backend);
   else if (a == "--refine" && has_value) *bad = !refine_from_name(args[++i], &c.refine);
-  else if (a == "--ba" && has_value) {
+  else if (a == "--group-sigma" && has_value) {
+    // The group prior's focal sigmas (D166): tie to the mean, mean to its target; inf
+    // for none.
+    const std::string v = args[++i];
+    const auto comma = v.find(',');
+    *bad = comma == std::string::npos;
+    if (!*bad) {
+      c.mapper.group_focal_fraction = std::strtod(v.substr(0, comma).c_str(), nullptr);
+      c.mapper.group_target_focal_fraction = std::strtod(v.substr(comma + 1).c_str(), nullptr);
+      *bad = !(c.mapper.group_focal_fraction > 0.0) || !(c.mapper.group_target_focal_fraction > 0.0);
+    }
+  } else if (a == "--ba" && has_value) {
     const auto b = jba::backend_from_name(args[++i]);
     *bad = !b;
     if (b) c.mapper.ba_backend = *b;
@@ -215,7 +245,8 @@ void prior_frame_errors(const demo::Scene& scene, const demo::Reconstruction& r,
 
 int synth(const std::vector<std::string>& args) {
   std::string scene_arg = "all", write_dir;
-  double focal_error = 0.0, prior_sigma = 0.0;
+  double focal_error = 0.0, prior_sigma = 0.0, focal_bias = 0.0;
+  bool groups = false;
   demo::SceneOptions so;
   Common c;
   for (std::size_t i = 0; i < args.size(); ++i) {
@@ -230,6 +261,11 @@ int synth(const std::vector<std::string>& args) {
     else if (a == "--wrong" && has_value) so.wrong_fraction = std::atof(args[++i].c_str());
     else if (a == "--false-pairs" && has_value) so.false_pairs = std::atoi(args[++i].c_str());
     else if (a == "--focal-error" && has_value) focal_error = std::atof(args[++i].c_str());
+    // A block per image whose focal lengths differ (autofocus), a calibration that is
+    // known but off, and the blocks in one group of the intrinsics prior (D166).
+    else if (a == "--focal-jitter" && has_value) so.focal_jitter = std::atof(args[++i].c_str());
+    else if (a == "--focal-bias" && has_value) focal_bias = std::atof(args[++i].c_str());
+    else if (a == "--groups") groups = true;
     else if (a == "--priors" && has_value) prior_sigma = std::atof(args[++i].c_str());
     else if (a == "--write" && has_value) write_dir = args[++i];
     else return usage();
@@ -237,7 +273,8 @@ int synth(const std::vector<std::string>& args) {
   demo::MapperOptions& mo = c.mapper;
   mo.seed = 7 + static_cast<std::uint32_t>(so.seed);
   demo::thresholds_for_noise(so.noise_px, mo);
-  if (c.refine < 0 && focal_error != 0.0) c.refine = jba::kFocal | jba::kDistortion;
+  if (c.refine < 0 && (focal_error != 0.0 || focal_bias != 0.0 || so.focal_jitter > 0.0))
+    c.refine = jba::kFocal | jba::kDistortion;
   mo.search_focal = focal_error != 0.0;
   if (c.refine >= 0) mo.refine_intrinsics = static_cast<std::uint8_t>(c.refine);
   if (!available(mo)) return 2;
@@ -257,6 +294,20 @@ int synth(const std::vector<std::string>& args) {
     for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
       for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_error;
     if (focal_error != 0.0) start.focal_unknown.assign(start.intrinsics.size() / np, 1);
+    if (focal_bias != 0.0)
+      for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
+        for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_bias;
+    // The calibration given: one focal length for every block, the jitter unknown.
+    if (so.focal_jitter > 0.0) {
+      double sum = 0.0;
+      const std::size_t blocks = start.intrinsics.size() / np;
+      for (int k = 0; k < n_focal; ++k) {
+        sum = 0.0;
+        for (std::size_t b = 0; b < blocks; ++b) sum += start.intrinsics[np * b + static_cast<std::size_t>(k)];
+        for (std::size_t b = 0; b < blocks; ++b) start.intrinsics[np * b + static_cast<std::size_t>(k)] = sum / static_cast<double>(blocks);
+      }
+    }
+    if (groups) start.intrinsics_group.assign(start.intrinsics.size() / np, 0);
     const PriorFrame frame;
     if (prior_sigma > 0.0) {
       demo::Rng rng(so.seed + 99);
@@ -295,6 +346,25 @@ int synth(const std::vector<std::string>& args) {
                   " to the priors: %.4g horizontal, %.4g vertical (sigma %.4g)\n",
                   r.prior_images, mt.images, r.aligned ? "aligned" : "NOT aligned", prior_centre_pct, prior_rot_deg,
                   r.prior_error_horizontal, r.prior_error_vertical, frame.s * prior_sigma);
+    if ((so.focal_jitter > 0.0 || focal_bias != 0.0) && r.ok()) {
+      // Per registered image: its block's focal lengths against the truth's.
+      double sq = 0.0, sq_given = 0.0;
+      std::size_t n = 0;
+      for (std::size_t k = 0; k < r.problem.num_images(); ++k) {
+        const std::size_t b = static_cast<std::size_t>(r.problem.intrinsics_of_image(k));
+        for (int f = 0; f < n_focal; ++f) {
+          const double truth = scene.capture.intrinsics[np * b + static_cast<std::size_t>(f)];
+          sq += std::pow(r.problem.intrinsics[np * b + static_cast<std::size_t>(f)] / truth - 1.0, 2);
+          sq_given += std::pow(start.intrinsics[np * b + static_cast<std::size_t>(f)] / truth - 1.0, 2);
+          ++n;
+        }
+      }
+      n /= static_cast<std::size_t>(n_focal);
+      std::printf("       focal: per image rms %.4f %% (given %.4f %%) over %zu images%s\n",
+                  100.0 * std::sqrt(sq / static_cast<double>(n * static_cast<std::size_t>(n_focal))),
+                  100.0 * std::sqrt(sq_given / static_cast<double>(n * static_cast<std::size_t>(n_focal))), n,
+                  groups ? ", grouped" : "");
+    }
     if (focal_error != 0.0)
       std::printf("       focal: true %.1f px, given %.1f, searched x%.3f, refined %.1f\n",
                   demo::median_focal(scene.capture.model, scene.capture.intrinsics),
@@ -303,6 +373,7 @@ int synth(const std::vector<std::string>& args) {
     demo::CaptureFile file = demo::to_capture_file(scene);
     file.capture.intrinsics = start.intrinsics;
     file.capture.focal_unknown = start.focal_unknown;
+    file.capture.intrinsics_group = start.intrinsics_group;
     file.capture.prior_position = start.prior_position;
     file.capture.prior_sigma = start.prior_sigma;
     if (focal_error != 0.0) file.reference.intrinsics = scene.capture.intrinsics;  // the truth's
@@ -325,7 +396,7 @@ int run(const std::vector<std::string>& args) {
   if (args.empty()) return usage();
   const std::string path = args[0];
   std::string intrinsics = "reference", thresholds = "colmap";
-  bool check = false, two_view = false, no_priors = false;
+  bool check = false, two_view = false, no_priors = false, resume = false;
   std::string json_path;
   double tri_angle = -1.0, min_pair_coverage = -1.0;
   int min_pair_inliers = -1;
@@ -342,6 +413,7 @@ int run(const std::vector<std::string>& args) {
     else if (a == "--json" && has_value) json_path = args[++i];
     else if (a == "--two-view-tracks") two_view = true;
     else if (a == "--no-priors") no_priors = true;
+    else if (a == "--resume") resume = true;
     else if (a == "--tri-angle" && has_value) tri_angle = std::atof(args[++i].c_str());
     else if (a == "--min-pair-inliers" && has_value) min_pair_inliers = std::atoi(args[++i].c_str());
     else if (a == "--min-pair-coverage" && has_value) min_pair_coverage = std::atof(args[++i].c_str());
@@ -420,6 +492,53 @@ int run(const std::vector<std::string>& args) {
     std::printf("\n");
   }
 
+  // --resume: the mapper again from its own result (run_from, D153's resume), which
+  // on unchanged input should give the same model back.
+  if (resume && r.ok()) {
+    demo::StartFrom start;
+    start.registered = r.registered;
+    start.poses = r.poses;
+    start.intrinsics = r.problem.intrinsics;
+    start.aligned = r.aligned;
+    start.focal_factor = r.focal_factor;
+    const demo::Reconstruction again = mapper.run_from(file.capture, start);
+    std::size_t a = 0, b = 0;
+    for (char g : r.registered) a += g != 0;
+    for (char g : again.registered) b += g != 0;
+    std::printf("  resumed from it: %zu images (%zu before), %zu points (%zu), %zu observations (%zu), %.3f px (%.3f);"
+                " %d start images left out\n",
+                b, a, again.problem.num_points(), r.problem.num_points(), again.problem.num_observations(),
+                r.problem.num_observations(), again.mean_error_px, r.mean_error_px, again.start_left_out);
+    const demo::PoseAgreement pa = demo::compare_poses(again.registered, again.poses, r.registered, r.poses);
+    std::printf("  resumed vs the run: rotation median %.4f°, max %.4f°; centres median %.4f %%, max %.4f %%\n",
+                pa.rot_median_deg, pa.rot_max_deg, pa.centre_median_pct, pa.centre_max_pct);
+    // Resumed again from the resumed model: points that hold steady are not duplicates
+    // made anew each time.
+    demo::StartFrom twice = start;
+    twice.registered = again.registered;
+    twice.poses = again.poses;
+    twice.intrinsics = again.problem.intrinsics;
+    const demo::Reconstruction third = mapper.run_from(file.capture, twice);
+    std::printf("  resumed again: %zu points, %zu observations, %.3f px\n", third.problem.num_points(),
+                third.problem.num_observations(), third.mean_error_px);
+    // Points by where their track came from: built from the matches, or split off later.
+    auto by_kind = [&](const demo::Reconstruction& x, const char* label) {
+      std::size_t n[2] = {0, 0}, obs[2] = {0, 0}, two = 0;
+      std::vector<std::size_t> per(x.problem.num_points(), 0);
+      for (std::int32_t p : x.problem.obs_point) ++per[static_cast<std::size_t>(p)];
+      for (std::size_t p = 0; p < per.size(); ++p) {
+        const int k = static_cast<std::size_t>(x.point_track[p]) >= x.track_stats.components ? 1 : 0;
+        ++n[k];
+        obs[k] += per[p];
+        two += per[p] == 2;
+      }
+      std::printf("  %s: %zu points of built tracks (%.2f obs each), %zu split off (%.2f), %zu seen twice\n", label,
+                  n[0], n[0] ? double(obs[0]) / n[0] : 0.0, n[1], n[1] ? double(obs[1]) / n[1] : 0.0, two);
+    };
+    by_kind(r, "the run");
+    by_kind(again, "resumed");
+  }
+
   const std::size_t n_img = file.capture.num_images();
   if (ref.empty()) {
     std::size_t registered = 0;
@@ -480,6 +599,170 @@ int run(const std::vector<std::string>& args) {
   return pass ? 0 : 1;
 }
 
+int session(const std::vector<std::string>& args) {
+  if (args.empty()) return usage();
+  const std::string path = args[0];
+  std::string thresholds = "colmap", finish_path;
+  demo::SessionOptions so;
+  double min_pair_coverage = -1.0;
+  int min_pair_inliers = -1;
+  Common c;
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    const std::string& a = args[i];
+    const bool has_value = i + 1 < args.size();
+    bool bad = false;
+    if (common_option(args, i, c, &bad)) {
+      if (bad) return usage();
+    } else if (a == "--window" && has_value) so.window = std::atoi(args[++i].c_str());
+    else if (a == "--start-angle" && has_value) so.min_start_angle_deg = std::atof(args[++i].c_str());
+    else if (a == "--patience" && has_value) so.start_patience = std::atoi(args[++i].c_str());
+    else if (a == "--restart-after" && has_value) so.restart_after = std::atoi(args[++i].c_str());
+    else if (a == "--finish" && has_value) finish_path = args[++i];
+    else if (a == "--thresholds" && has_value) thresholds = args[++i];
+    else if (a == "--min-pair-inliers" && has_value) min_pair_inliers = std::atoi(args[++i].c_str());
+    else if (a == "--min-pair-coverage" && has_value) min_pair_coverage = std::atof(args[++i].c_str());
+    else return usage();
+  }
+  if (thresholds != "colmap" && thresholds != "demo") return usage();
+  demo::MapperOptions& mo = c.mapper;
+  if (thresholds == "colmap") demo::colmap_thresholds(mo);
+  if (c.refine >= 0) mo.refine_intrinsics = static_cast<std::uint8_t>(c.refine);
+  if (min_pair_inliers >= 0) mo.min_pair_inliers = static_cast<std::uint32_t>(min_pair_inliers);
+  if (min_pair_coverage >= 0.0) mo.min_pair_coverage = min_pair_coverage;
+  if (!available(mo)) return 2;
+
+  const demo::CaptureFile file = demo::read_capture(path);
+  const demo::Capture& cap = file.capture;
+  const std::size_t n_img = cap.num_images();
+  if (cap.intrinsics.size() != static_cast<std::size_t>(jba::num_params(cap.model))) {
+    std::fprintf(stderr, "a session takes a capture with one intrinsics block\n");
+    return 2;
+  }
+  // Each pair goes with its later image, the earlier one as `a`.
+  std::vector<std::vector<demo::Pair>> by_image(n_img);
+  for (demo::Pair p : cap.pairs) {
+    if (p.a > p.b) {
+      std::swap(p.a, p.b);
+      std::swap(p.ka, p.kb);
+    }
+    by_image[static_cast<std::size_t>(p.b)].push_back(std::move(p));
+  }
+  demo::Mapper mapper(mo);
+  const std::int32_t w = file.image_size.size() >= 2 ? file.image_size[0] : 0;
+  const std::int32_t h = file.image_size.size() >= 2 ? file.image_size[1] : 0;
+  demo::Session sess(mapper, cap.model, cap.intrinsics, !cap.focal_unknown.empty() && cap.focal_unknown[0], w, h, so);
+  double total = 0.0, worst = 0.0;
+  int placed_now = 0, started_at = -1;
+  for (std::size_t i = 0; i < n_img; ++i) {
+    demo::SessionImage im;
+    im.keypoints = cap.keypoints[i];
+    im.pairs = by_image[i];
+    if (cap.has_prior(i)) {
+      std::copy(&cap.prior_position[3 * i], &cap.prior_position[3 * i] + 3, im.prior_position);
+      if (!cap.prior_sigma.empty()) std::copy(&cap.prior_sigma[2 * i], &cap.prior_sigma[2 * i] + 2, im.prior_sigma);
+    }
+    const demo::SessionStep st = sess.add(im);
+    total += st.seconds;
+    worst = std::max(worst, st.seconds);
+    if (st.started) started_at = static_cast<int>(i);
+    placed_now += std::find(st.placed.begin(), st.placed.end(), st.image) != st.placed.end();
+    if (c.verbose || !st.ok())
+      std::printf("  image %3d: %zu pairs (%d kept), %s, PnP %d inliers, sees %d points, placed %zu, window %zu + %zu "
+                  "held, %.3f px, %.1f ms%s%s\n",
+                  st.image, im.pairs.size(), st.pairs_kept, st.started ? "map started" : "", st.pnp_inliers,
+                  st.points_seen, st.placed.size(), st.window.size(), st.held.size(), st.mean_error_px,
+                  1000.0 * st.seconds, st.ok() ? "" : ": ", st.error.c_str());
+  }
+  // The pieces, and the largest of them as "the live map" (the one finish starts from).
+  std::vector<char> live_registered;
+  std::vector<double> live_poses;
+  std::string sizes;
+  for (std::size_t k = 0; k < sess.num_pieces(); ++k) {
+    const demo::Snapshot p = sess.piece(k);
+    std::size_t n = 0;
+    for (char g : *p.registered) n += g != 0;
+    sizes += (k ? ", " : "") + std::to_string(n);
+    if (n > static_cast<std::size_t>(std::count(live_registered.begin(), live_registered.end(), 1))) {
+      live_registered = *p.registered;
+      live_poses = *p.poses;
+    }
+  }
+  live_registered.resize(n_img, 0);
+  live_poses.resize(7 * n_img, 0.0);
+  std::printf("%s: %zu images, window %d; %zu piece%s (%s images), the last from image %d; %d placed as they came; "
+              "%.1f ms an image on average, %.1f at most\n",
+              path.c_str(), n_img, so.window, sess.num_pieces(), sess.num_pieces() == 1 ? "" : "s", sizes.c_str(),
+              started_at, placed_now, 1000.0 * total / std::max<std::size_t>(1, n_img), 1000.0 * worst);
+
+  // --finish: another capture file of the same images (more pairs, matched more
+  // thoroughly), for the finish and the batch run to compare with.
+  demo::CaptureFile other;
+  if (!finish_path.empty()) {
+    other = demo::read_capture(finish_path);
+    if (other.capture.num_images() != n_img) {
+      std::fprintf(stderr, "%s has %zu images, not %zu\n", finish_path.c_str(), other.capture.num_images(), n_img);
+      return 2;
+    }
+    other.capture.intrinsics = cap.intrinsics;  // the same camera, as one block
+    other.capture.image_intrinsics.clear();
+    other.capture.focal_unknown = cap.focal_unknown;
+    other.capture.image_size = cap.image_size;
+    std::printf("  finished with %s: %zu pairs\n", finish_path.c_str(), other.capture.pairs.size());
+  }
+  const demo::Capture& final_capture = finish_path.empty() ? cap : other.capture;
+  const demo::Reconstruction batch = mapper.run(final_capture);
+  const demo::Reconstruction fin = sess.finish(final_capture);
+  auto count = [](const std::vector<char>& v) {
+    std::size_t n = 0;
+    for (char g : v) n += g != 0;
+    return n;
+  };
+  std::printf("  focal: given %.1f px; live %.1f, batch %.1f, finish %.1f\n", demo::median_focal(cap.model, cap.intrinsics),
+              demo::median_focal(cap.model, sess.intrinsics()),
+              batch.ok() ? demo::median_focal(batch.problem.model, batch.problem.intrinsics) : 0.0,
+              fin.ok() ? demo::median_focal(fin.problem.model, fin.problem.intrinsics) : 0.0);
+  std::printf("  batch run: %zu placed, %zu points, %.3f px, %.2f s%s%s\n", count(batch.registered),
+              batch.problem.num_points(), batch.mean_error_px, batch.time.total, batch.ok() ? "" : "; ",
+              batch.error.c_str());
+  std::printf("  finish:    %zu placed, %zu points, %.3f px, %.2f s, %d start images left out%s%s\n",
+              count(fin.registered), fin.problem.num_points(), fin.mean_error_px, fin.time.total, fin.start_left_out,
+              fin.ok() ? "" : "; ", fin.error.c_str());
+  if (!c.export_dir.empty()) {
+    export_model((std::filesystem::path(c.export_dir) / "batch").string(), batch, file.names, file.image_size);
+    export_model((std::filesystem::path(c.export_dir) / "finish").string(), fin, file.names, file.image_size);
+  }
+  auto agree = [](const char* label, const demo::PoseAgreement& a) {
+    std::printf("  %-22s %3zu images: rotation median %.3f°, max %.3f°; centre median %.3f %%, max %.3f %% of the extent\n",
+                label, a.common, a.rot_median_deg, a.rot_max_deg, a.centre_median_pct, a.centre_max_pct);
+  };
+  // How far apart two batch runs of the same file land, their RANSAC seeds differing:
+  // what agreement to expect of anything compared with a batch run.
+  demo::MapperOptions mo2 = mo;
+  mo2.seed = mo.seed + 1;
+  const demo::Reconstruction batch2 = demo::Mapper(mo2).run(final_capture);
+  if (batch.ok() && batch2.ok())
+    agree("batch, seed + 1", demo::compare_poses(batch2.registered, batch2.poses, batch.registered, batch.poses));
+  if (batch.ok() && !finish_path.empty()) {
+    const demo::Reconstruction live_batch = mapper.run(cap);
+    if (live_batch.ok())
+      agree("batch, live pairs", demo::compare_poses(live_batch.registered, live_batch.poses, batch.registered, batch.poses));
+  }
+  if (batch.ok()) {
+    agree("largest piece vs batch", demo::compare_poses(live_registered, live_poses, batch.registered, batch.poses));
+    if (fin.ok()) agree("finish vs batch", demo::compare_poses(fin.registered, fin.poses, batch.registered, batch.poses));
+  }
+  if (!file.reference.empty()) {
+    agree("largest piece vs ref.",
+          demo::compare_poses(live_registered, live_poses, file.reference.registered, file.reference.poses));
+    if (fin.ok())
+      agree("finish vs ref.", demo::compare_poses(fin.registered, fin.poses, file.reference.registered, file.reference.poses));
+    if (batch.ok())
+      agree("batch vs ref.",
+            demo::compare_poses(batch.registered, batch.poses, file.reference.registered, file.reference.poses));
+  }
+  return fin.ok() ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -489,6 +772,7 @@ int main(int argc, char** argv) {
   try {
     if (command == "synth") return synth(args);
     if (command == "run") return run(args);
+    if (command == "session") return session(args);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "jba_demo: %s\n", e.what());
     return 2;

@@ -9,6 +9,8 @@
 #include "check.h"
 #include "jba/geometry.h"
 #include "jba/manhattan.h"
+#include "jba/report.h"
+#include "jba/solver.h"
 #include "scene.h"
 
 namespace {
@@ -201,6 +203,75 @@ int main() {
     EXPECT(c.wrong <= 0.002 * (c.correct + c.wrong + c.missed) && c.correct > 0.9 * (c.correct + c.wrong + c.missed));
     jba::apply_assignment(p, a, 1);
     EXPECT(p.has_manhattan() && jba::validate(p).empty());
+  }
+  // The aligned frame (D164): with world y down it is the room's, with z up the identity.
+  {
+    const auto sc = jba_test::make_scene(room(jba_test::LineMode::Manhattan));
+    jba::Problem p = sc.input.scene;
+    auto same_rotation = [](const double* a, const double* b) {
+      const double d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+      return std::abs(std::abs(d) - 1) < 1e-12;
+    };
+    EXPECT(same_rotation(jba::aligned_frame(p).data(), sc.truth_frame));
+    p.gravity_world = {0, 0, -1};
+    const double identity[4] = {1, 0, 0, 0};
+    EXPECT(same_rotation(jba::aligned_frame(p).data(), identity));
+    // Gravity off the axes: axis 2 is still exactly up, so the frame validates with
+    // one degree of freedom.
+    const double gn = std::sqrt(0.1 * 0.1 + 0.99 * 0.99 + 0.05 * 0.05);
+    p.gravity_world = {0.1 / gn, 0.99 / gn, 0.05 / gn};
+    p.manhattan_frame = jba::aligned_frame(p);
+    p.manhattan_dof = 1;
+    EXPECT(jba::validate(p).empty());
+  }
+  // Sigma in pixels (D163): the endpoint sigma, floored at line_min_sigma (the sine
+  // of an image angle) times the length over sqrt(2).
+  {
+    const auto sc = jba_test::make_scene(room(jba_test::LineMode::Manhattan));
+    jba::Problem p = sc.input.scene;
+    const jba::PriorDefaults d;
+    auto set = [&](double x1) {
+      p.line_xy[0] = 100, p.line_xy[1] = 100, p.line_xy[2] = 100 + x1, p.line_xy[3] = 100;
+      return jba::line_residual_sigma(p, 0, d);
+    };
+    EXPECT_NEAR(set(100), d.line_endpoint_sigma, 1e-15);
+    EXPECT_NEAR(set(1000), d.line_min_sigma * 1000 / std::sqrt(2.0), 1e-12);
+    p.line_sigma.assign(p.num_lines(), 0.5);
+    EXPECT_NEAR(set(100), 0.5, 1e-15);
+  }
+
+  // A segment with an endpoint exactly at its axis's vanishing point stays finite (the
+  // residual's limit there is zero). Segments of no length are refused by validate().
+  {
+    const auto sc = jba_test::make_scene(room(jba_test::LineMode::Manhattan));
+    jba::Problem p = sc.input.scene;
+    p.poses = sc.truth.poses;
+    const auto a = jba::assign_lines(p, mo, sc.truth_frame);
+    jba::apply_assignment(p, a, 1);
+    std::size_t at_vp = p.num_lines();
+    const std::size_t np = static_cast<std::size_t>(jba::num_params(p.model));
+    for (std::size_t k = 0; k < p.num_lines(); ++k) {
+      if (p.line_axis[k] < 0) continue;
+      double e[3] = {0, 0, 0}, dm[3], dc[3], x, y;
+      e[p.line_axis[k]] = 1;
+      const auto i = static_cast<std::size_t>(p.line_image[k]);
+      jba::quat_rotate(p.manhattan_frame.data(), e, dm);
+      jba::quat_rotate(&p.poses[7 * i], dm, dc);
+      const double* K = &p.intrinsics[np * static_cast<std::size_t>(p.intrinsics_of_image(i))];
+      if (!jba::project(p.model, K, dc, &x, &y) || !(x > 0 && x < 640 && y > 0 && y < 480)) continue;
+      at_vp = k;
+      p.line_xy[4 * k] = x;
+      p.line_xy[4 * k + 1] = y;
+      break;
+    }
+    EXPECT(at_vp < p.num_lines());
+    const auto rep = jba::evaluate(p, jba::SolverOptions{});
+    EXPECT(std::isfinite(rep.line_cost));
+    EXPECT(std::isfinite(rep.line_angle[at_vp]));
+    jba::Problem q = p;
+    q.intrinsics_free = {jba::kFocal};
+    const auto s = jba::solve(q);
+    EXPECT(std::isfinite(s.final_cost) && s.final_cost <= s.initial_cost);
   }
   return TEST_MAIN_RESULT();
 }

@@ -50,6 +50,44 @@ struct Problem {
   std::vector<double> intrinsics;
   // Per block: IntrinsicsGroup mask of freed groups. Empty means all fixed.
   std::vector<std::uint8_t> intrinsics_free;
+  // Optional prior on free intrinsics (D161), num_params(model) values per block in
+  // COLMAP order. Each group is fixed (its bit clear in intrinsics_free), fully free
+  // (bit set, no finite sigma) or regularized (bit set, finite sigma): residual
+  // (k - target) / sigma, without a robust loss. intrinsics_prior_sigma is in each
+  // parameter's own units (pixels for focal lengths and the principal point); +inf,
+  // or a parameter that is not free, means no prior on it; empty means no prior at
+  // all. intrinsics_prior is the target; empty, or NaN for a parameter, means the
+  // intrinsics given to solve(). solve() writes the target it used back here for the
+  // blocks it regularized (others keep what they had, NaN for an empty target), so
+  // later solves anchor to the same values. A target needs a sigma; 1 / sigma must be
+  // finite. set_intrinsics_prior (priors.h) fills both by group.
+  std::vector<double> intrinsics_prior;
+  std::vector<double> intrinsics_prior_sigma;
+  // Optional hierarchical prior by group of blocks (D165), beside or instead of the
+  // per-block prior above. Blocks of one group (several blocks of one camera, say,
+  // their focal lengths a little apart by autofocus) are tied to a shared mean that
+  // the solve estimates, residual (k_b - mean_g) / intrinsics_group_sigma; the mean
+  // is tied to its target, (mean_g - intrinsics_group_prior) /
+  // intrinsics_group_prior_sigma, loosely, so a poor target is corrected by the
+  // group's data together. Neither has a robust loss. intrinsics_group: per block its
+  // group, -1 for none; empty: no groups. The [G, P] arrays are per group, G =
+  // intrinsics_group_sigma.size() / P, sigmas in each parameter's units and +inf for
+  // none: no tie on that parameter, or a mean free of any target. Only blocks used by
+  // an observation take part, free or not: a fixed block pulls the mean as a constant.
+  // A parameter of a group is tied when it is free in a member, its sigma is finite and
+  // the group has two members or a finite target sigma on it. intrinsics_group_prior
+  // is the target; empty, or NaN, the members' mean as given to solve() (written back
+  // for the parameters that got one, as for the block prior). intrinsics_group_mean is
+  // the mean, in and out: empty or NaN, the members' mean as given; solve() writes the
+  // estimate back for the parameters that were tied, so a later solve or evaluate()
+  // starts from it: clear it (or call set_intrinsics_groups again) after changing the
+  // intrinsics by other means. set_intrinsics_groups (priors.h) fills them by
+  // parameter group.
+  std::vector<std::int32_t> intrinsics_group;
+  std::vector<double> intrinsics_group_sigma;
+  std::vector<double> intrinsics_group_prior;
+  std::vector<double> intrinsics_group_prior_sigma;
+  std::vector<double> intrinsics_group_mean;
 
   // Per image.
   std::vector<double> poses;                    // 7 per image
@@ -152,6 +190,10 @@ struct Problem {
   }
   std::int32_t intrinsics_of_image(std::size_t image) const {
     return image_intrinsics.empty() ? 0 : image_intrinsics[image];
+  }
+  // Groups of the hierarchical intrinsics prior (D165).
+  std::size_t num_intrinsics_groups() const {
+    return intrinsics_group_sigma.size() / static_cast<std::size_t>(num_params(model));
   }
   std::size_t num_relative_priors() const { return rel_images.size() / 2; }
   std::size_t num_global_priors() const { return glob_image.size(); }

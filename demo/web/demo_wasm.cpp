@@ -1,4 +1,4 @@
-// The live demo's WebAssembly entry points (D152). The page finds keypoints (ALIKED,
+// The live demo's WebAssembly entry points (D156). The page finds keypoints (ALIKED,
 // just-keypoints) and matches every pair (LightGlue, just-matching) on its images, then
 // hands them here: the mapper reconstructs them with poselib-gpu and this library, on
 // the CPU or WebGPU, and reports as it goes. demo_reconstruct and demo_backends suspend
@@ -8,6 +8,12 @@
 // module's memory: demo_points() (float, 3 per point, every step's points one after the
 // other), demo_tracks() (int32, each of those points' track) and demo_colour_obs()
 // (int32, per point of the last step: an image and a keypoint that see it).
+//
+// The live capture (D157) grows a map frame by frame with demo::Session (D153), in a
+// worker: demo_session_new, demo_session_add, demo_session_retry, demo_session_snapshot
+// and demo_session_finish, the same binary arrays after a snapshot or the finish. On
+// the page's own thread, demo_pair_inliers checks a live frame's matches against a
+// relative pose on the CPU, as Like Recon's capture loop does.
 #include <emscripten/emscripten.h>
 
 #include <algorithm>
@@ -23,6 +29,7 @@
 #include <vector>
 
 #include "geometry.h"
+#include "jpo/jpo.h"
 #include "mapper.h"
 
 namespace {
@@ -96,6 +103,18 @@ EM_ASYNC_JS(int, demo_report, (const char* json), {
   });
   return go ? 1 : 0;
 });
+
+// Per point of `r`, one observation (image, keypoint) to colour it by.
+void colour_of(const demo::Reconstruction& r) {
+  const std::size_t np = r.problem.points.size() / 3;
+  colour_obs.assign(2 * np, -1);
+  for (std::size_t o = 0; o < r.problem.obs_point.size(); ++o) {
+    const auto p = static_cast<std::size_t>(r.problem.obs_point[o]);
+    if (colour_obs[2 * p] >= 0) continue;
+    colour_obs[2 * p] = r.image_of[static_cast<std::size_t>(r.problem.obs_image[o])];
+    colour_obs[2 * p + 1] = r.obs_keypoint[o];
+  }
+}
 
 }  // namespace
 
@@ -213,15 +232,8 @@ EMSCRIPTEN_KEEPALIVE const char* demo_reconstruct(int n, const std::int32_t* siz
         },
         on_progress);
 
-    // Per point of the result, one observation to colour it by.
+    colour_of(r);
     const std::size_t np = r.problem.points.size() / 3;
-    colour_obs.assign(2 * np, -1);
-    for (std::size_t o = 0; o < r.problem.obs_point.size(); ++o) {
-      const auto p = static_cast<std::size_t>(r.problem.obs_point[o]);
-      if (colour_obs[2 * p] >= 0) continue;
-      colour_obs[2 * p] = r.image_of[static_cast<std::size_t>(r.problem.obs_image[o])];
-      colour_obs[2 * p + 1] = r.obs_keypoint[o];
-    }
 
     std::ostringstream j;
     j << "{\"ok\": " << (r.ok() ? "true" : "false") << ", \"cancelled\": " << (r.cancelled ? "true" : "false")
@@ -299,5 +311,375 @@ EMSCRIPTEN_KEEPALIVE const char* demo_reconstruct(int n, const std::int32_t* siz
   }
   return result.c_str();
 }
+
+}  // extern "C"
+
+namespace {
+
+// ---- the live capture's session (D157) ------------------------------------------------
+
+std::unique_ptr<demo::Mapper> session_mapper;  // the session's own: it must outlive it
+std::unique_ptr<demo::Session> session;
+jpo_ctx* live_ctx = nullptr;  // demo_pair_inliers' context, CPU
+
+// Pairs from the page: per pair the earlier image, n_pairs + 1 offsets into matches
+// (2 per match: a keypoint of the earlier image, one of `image`).
+std::vector<demo::Pair> pairs_from(int n_pairs, const std::int32_t* earlier, const std::int32_t* begin,
+                                   const std::int32_t* matches, std::int32_t image) {
+  std::vector<demo::Pair> out;
+  for (int p = 0; p < n_pairs; ++p) {
+    demo::Pair pr;
+    pr.a = earlier[p];
+    pr.b = image;
+    for (std::int32_t m = begin[p]; m < begin[p + 1]; ++m) {
+      pr.ka.push_back(matches[2 * m]);
+      pr.kb.push_back(matches[2 * m + 1]);
+    }
+    out.push_back(std::move(pr));
+  }
+  return out;
+}
+
+void write_ints(std::ostringstream& j, const std::vector<std::int32_t>& v) {
+  j << "[";
+  for (std::size_t k = 0; k < v.size(); ++k) j << (k ? "," : "") << v[k];
+  j << "]";
+}
+
+std::string step_json(const demo::SessionStep& st) {
+  std::ostringstream j;
+  j << "{\"ok\": " << (st.ok() ? "true" : "false") << ", \"error\": \"" << escape(st.error) << "\", \"image\": " << st.image
+    << ", \"started\": " << (st.started ? "true" : "false") << ", \"piece\": " << st.piece
+    << ", \"rebuilt\": " << (st.rebuilt ? "true" : "false") << ", \"rejoined\": " << (st.rejoined ? "true" : "false")
+    << ", \"placed\": ";
+  write_ints(j, st.placed);
+  j << ", \"window\": ";
+  write_ints(j, st.window);
+  j << ", \"pairs_kept\": " << st.pairs_kept << ", \"pnp_inliers\": " << st.pnp_inliers
+    << ", \"points_seen\": " << st.points_seen << ", \"mean_error_px\": ";
+  num(j, st.mean_error_px);
+  j << ", \"seconds\": ";
+  num(j, st.seconds);
+  j << ", \"pieces\": " << session->num_pieces() << ", \"largest\": " << session->largest_piece() << "}";
+  return j.str();
+}
+
+// Pairs with both images given (a, b), then n_pairs + 1 offsets into matches.
+void add_pairs(demo::Capture& c, int n_pairs, const std::int32_t* pair_images, const std::int32_t* pair_begin,
+               const std::int32_t* matches) {
+  for (int p = 0; p < n_pairs; ++p) {
+    demo::Pair pr;
+    pr.a = pair_images[2 * p];
+    pr.b = pair_images[2 * p + 1];
+    for (std::int32_t m = pair_begin[p]; m < pair_begin[p + 1]; ++m) {
+      pr.ka.push_back(matches[2 * m]);
+      pr.kb.push_back(matches[2 * m + 1]);
+    }
+    c.pairs.push_back(std::move(pr));
+  }
+}
+
+// Progress to the page (Module.onProgress), at most four times a second and at every new stage.
+demo::ProgressCallback progress_reporter(std::chrono::steady_clock::time_point t0) {
+  auto last = std::make_shared<std::chrono::steady_clock::time_point>(t0 - std::chrono::seconds(1));
+  auto last_stage = std::make_shared<std::string>();
+  return [=](const demo::Progress& p) {
+    const auto now = std::chrono::steady_clock::now();
+    if (p.stage == *last_stage && now - *last < std::chrono::milliseconds(250)) return true;
+    *last = now;
+    *last_stage = p.stage;
+    std::ostringstream j;
+    j << "{\"stage\": \"" << p.stage << "\", \"registered\": " << p.registered << ", \"images\": " << p.images
+      << ", \"iteration\": " << p.iteration << ", \"seconds\": ";
+    num(j, std::chrono::duration<double>(now - t0).count());
+    j << "}";
+    return demo_report(j.str().c_str()) != 0;
+  };
+}
+
+// The registered images of a model and their poses, JSON.
+void write_cameras(std::ostringstream& j, const std::vector<char>& registered, const std::vector<double>& poses) {
+  j << "[";
+  bool first = true;
+  for (std::size_t i = 0; i < registered.size() && 7 * i + 7 <= poses.size(); ++i) {
+    if (!registered[i]) continue;
+    j << (first ? "" : ",") << "{\"image\": " << i << ", \"pose\": ";
+    write_camera(j, &poses[7 * i]);
+    j << "}";
+    first = false;
+  }
+  j << "]";
+}
+
+// A reconstruction of capture c as JSON, its points to demo_points(), their tracks to
+// demo_tracks(), per point an observation to demo_colour_obs().
+std::string result_json(const demo::Reconstruction& r, const demo::Capture& c) {
+  for (double v : r.problem.points) step_points.push_back(static_cast<float>(v));
+  step_tracks = r.point_track;
+  colour_of(r);
+  int registered = 0;
+  for (char g : r.registered) registered += g ? 1 : 0;
+  std::ostringstream j;
+  j << "{\"ok\": " << (r.ok() ? "true" : "false") << ", \"cancelled\": " << (r.cancelled ? "true" : "false")
+    << ", \"error\": \"" << escape(r.error) << "\", \"images\": " << c.num_images() << ", \"pairs\": " << c.pairs.size()
+    << ", \"registered\": " << registered << ", \"points\": " << r.problem.points.size() / 3
+    << ", \"observations\": " << r.problem.obs_point.size() << ", \"models\": " << r.models << ", \"mean_error_px\": ";
+  num(j, r.mean_error_px);
+  j << ", \"intrinsics\": [";
+  for (std::size_t k = 0; k < r.problem.intrinsics.size(); ++k) {
+    if (k) j << ",";
+    num(j, r.problem.intrinsics[k]);
+  }
+  j << "], \"cameras\": ";
+  write_cameras(j, r.registered, r.poses);
+  j << ", \"seconds\": ";
+  num(j, r.time.total);
+  j << "}";
+  return j.str();
+}
+
+}  // namespace
+
+extern "C" {
+
+// A session for a capture of width x height frames, one SIMPLE_RADIAL camera starting
+// at focal f (a guess when focal_unknown: searched for once the map starts, D144), with
+// COLMAP's thresholds as Like Recon's online map has them: min_pair_inliers for its
+// pairs, `window` frames adjusted together, a new piece after `restart_after` frames in
+// a row not placed, the map starting from the widest pair it can (min angle 0).
+EMSCRIPTEN_KEEPALIVE const char* demo_session_new(int width, int height, double f, int focal_unknown, int window,
+                                                 int restart_after, int min_pair_inliers, const char* poses,
+                                                 const char* ba) {
+  try {
+    session.reset();
+    demo::MapperOptions mo;
+    demo::colmap_thresholds(mo);
+    const std::string pb = poses;
+    mo.pose_backend = pb == "webgpu" ? JPO_BACKEND_WEBGPU : JPO_BACKEND_CPU;
+    const auto bb = jba::backend_from_name(ba);
+    if (!bb) throw std::invalid_argument(std::string("unknown backend ") + ba);
+    mo.ba_backend = *bb;
+    mo.threads = 1;
+    if (min_pair_inliers > 0) mo.min_pair_inliers = static_cast<std::uint32_t>(min_pair_inliers);
+    // A turn on a walk leaves the next keyframes seeing too few of the map's points for
+    // PnP: they are placed from their best pair to the map instead (D158), live and at
+    // the finish.
+    mo.register_from_pairs = true;
+    // The focal length is searched for once, when the map starts, and held while
+    // capturing: refined in windows of a few keyframes it wandered (a phone walk: 541
+    // live, 645 refined over the whole capture) and the map's scale with it. The finish
+    // refines it (demo_session_finish).
+    mo.refine_intrinsics = 0;
+    if (!session_mapper || session_mapper->options().pose_backend != mo.pose_backend)
+      session_mapper = std::make_unique<demo::Mapper>(mo);
+    session_mapper->set_options(mo);
+    demo::SessionOptions so;
+    so.window = std::max(0, window);
+    if (restart_after > 0) so.restart_after = restart_after;
+    so.min_start_angle_deg = 0.0;
+    session = std::make_unique<demo::Session>(*session_mapper, jba::CameraModel::SimpleRadial,
+                                              std::vector<double>{f, 0.5 * width, 0.5 * height, 0.0},
+                                              focal_unknown != 0, width, height, so);
+    result = "{\"ok\": true}";
+  } catch (const std::exception& e) {
+    result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
+  }
+  return result.c_str();
+}
+
+// The next kept frame: n_kp keypoints xy (2 floats each, just-keypoints' convention, the
+// centre of the first pixel at 0, 0) and its matches to earlier frames of the session.
+// defer_split: not placed, the page will retry with more pairs before a new piece starts.
+EMSCRIPTEN_KEEPALIVE const char* demo_session_add(int n_kp, const float* xy, int n_pairs, const std::int32_t* earlier,
+                                                 const std::int32_t* pair_begin, const std::int32_t* matches,
+                                                 int defer_split) {
+  try {
+    if (!session) throw std::runtime_error("no session");
+    demo::SessionImage im;
+    im.keypoints.reserve(2 * static_cast<std::size_t>(n_kp));
+    for (int k = 0; k < 2 * n_kp; ++k) im.keypoints.push_back(static_cast<double>(xy[k]) + 0.5);  // the capture's convention
+    im.pairs = pairs_from(n_pairs, earlier, pair_begin, matches, static_cast<std::int32_t>(session->num_images()));
+    im.defer_split = defer_split != 0;
+    result = step_json(session->add(im));
+  } catch (const std::exception& e) {
+    result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
+  }
+  return result.c_str();
+}
+
+// The last frame again with more pairs (chosen by appearance), or a new piece from it at
+// once with new_piece (a Shoot now that can't be placed).
+EMSCRIPTEN_KEEPALIVE const char* demo_session_retry(int n_pairs, const std::int32_t* earlier,
+                                                   const std::int32_t* pair_begin, const std::int32_t* matches,
+                                                   int new_piece) {
+  try {
+    if (!session || !session->num_images()) throw std::runtime_error("no frame to retry");
+    const auto last = static_cast<std::int32_t>(session->num_images() - 1);
+    result = step_json(session->retry(pairs_from(n_pairs, earlier, pair_begin, matches, last), new_piece != 0));
+  } catch (const std::exception& e) {
+    result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
+  }
+  return result.c_str();
+}
+
+// The map now: JSON (its cameras, intrinsics, pieces) and its points in demo_points()
+// (3 floats each) and their tracks in demo_tracks().
+EMSCRIPTEN_KEEPALIVE const char* demo_session_snapshot() {
+  step_points.clear();
+  step_tracks.clear();
+  try {
+    if (!session) throw std::runtime_error("no session");
+    const demo::Snapshot s = session->snapshot();
+    for (double v : s.points) step_points.push_back(static_cast<float>(v));
+    step_tracks = s.point_track;
+    std::ostringstream j;
+    j << "{\"ok\": true, \"started\": " << (session->started() ? "true" : "false") << ", \"images\": " << session->num_images()
+      << ", \"pieces\": " << session->num_pieces() << ", \"largest\": " << session->largest_piece()
+      << ", \"points\": " << s.points.size() / 3 << ", \"mean_error_px\": ";
+    num(j, s.mean_error_px);
+    j << ", \"intrinsics\": [";
+    const auto& in = session->intrinsics();
+    for (std::size_t k = 0; k < in.size(); ++k) {
+      if (k) j << ",";
+      num(j, in[k]);
+    }
+    j << "], \"cameras\": ";
+    write_cameras(j, *s.registered, *s.poses);
+    j << "}";
+    result = j.str();
+  } catch (const std::exception& e) {
+    result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
+  }
+  return result.c_str();
+}
+
+// The whole capture from the live map (Session::finish, Mapper::run_from), or from scratch
+// with from_scratch (Mapper::run): the session's pairs and more (each pair here with both of its frames, a and b, then the matches), with
+// progress through Module.onProgress, which can stop it. The result as JSON, its points in
+// demo_points(), their tracks in demo_tracks(), and per point an observation in
+// demo_colour_obs().
+EMSCRIPTEN_KEEPALIVE const char* demo_session_finish(int n_pairs, const std::int32_t* pair_images,
+                                                    const std::int32_t* pair_begin, const std::int32_t* matches,
+                                                    int from_scratch) {
+  step_points.clear();
+  step_tracks.clear();
+  colour_obs.clear();
+  try {
+    if (!session) throw std::runtime_error("no session");
+    // The finish refines focal length and distortion, as COLMAP's mapper (held live).
+    demo::MapperOptions fo = session_mapper->options();
+    fo.refine_intrinsics = jba::kFocal | jba::kDistortion;
+    session_mapper->set_options(fo);
+    demo::Capture c = session->capture();
+    add_pairs(c, n_pairs, pair_images, pair_begin, matches);
+    const auto t0 = std::chrono::steady_clock::now();
+    // from_scratch: Mapper::run on the session's capture and these pairs, not from the
+    // live map (the page asks for it when the live map's finish placed too few keyframes).
+    result = result_json(from_scratch ? session_mapper->run(c, {}, progress_reporter(t0))
+                                      : session->finish(c, progress_reporter(t0)),
+                         c);
+  } catch (const std::exception& e) {
+    result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
+  }
+  return result.c_str();
+}
+
+// The capture reconstructed again from scratch (D157), with keypoints and matches from the
+// page (the keyframes matched again, by the matcher the visitor chose): Mapper::run on one
+// SIMPLE_RADIAL camera of width x height starting at focal f, searched for, with the live
+// capture's options. n keyframes, kp_begin n + 1 offsets into kp_xy (just-keypoints'
+// convention); pairs as demo_session_finish's. The answer as demo_session_finish's.
+EMSCRIPTEN_KEEPALIVE const char* demo_capture_reconstruct(int n, int width, int height, double f,
+                                                         const std::int32_t* kp_begin, const float* kp_xy, int n_pairs,
+                                                         const std::int32_t* pair_images, const std::int32_t* pair_begin,
+                                                         const std::int32_t* matches, const char* poses) {
+  step_points.clear();
+  step_tracks.clear();
+  colour_obs.clear();
+  try {
+    demo::MapperOptions mo;
+    demo::colmap_thresholds(mo);
+    mo.pose_backend = std::string(poses) == "webgpu" ? JPO_BACKEND_WEBGPU : JPO_BACKEND_CPU;
+    mo.threads = 1;
+    mo.min_pair_inliers = 15;
+    mo.register_from_pairs = true;
+    if (!session_mapper || session_mapper->options().pose_backend != mo.pose_backend) {
+      session.reset();  // it holds the mapper
+      session_mapper = std::make_unique<demo::Mapper>(mo);
+    }
+    session_mapper->set_options(mo);
+    demo::Capture c;
+    c.model = jba::CameraModel::SimpleRadial;
+    c.intrinsics = {f, 0.5 * width, 0.5 * height, 0.0};
+    c.focal_unknown = {1};
+    c.image_size = {width, height};
+    for (int i = 0; i < n; ++i) {
+      std::vector<double> kp;
+      for (std::int32_t k = 2 * kp_begin[i]; k < 2 * kp_begin[i + 1]; ++k) kp.push_back(static_cast<double>(kp_xy[k]) + 0.5);
+      c.keypoints.push_back(std::move(kp));
+    }
+    add_pairs(c, n_pairs, pair_images, pair_begin, matches);
+    const auto t0 = std::chrono::steady_clock::now();
+    result = result_json(session_mapper->run(c, {}, progress_reporter(t0)), c);
+  } catch (const std::exception& e) {
+    result = std::string("{\"ok\": false, \"error\": \"") + escape(e.what()) + "\"}";
+  }
+  return result.c_str();
+}
+
+EMSCRIPTEN_KEEPALIVE void demo_session_free() {
+  session.reset();
+  step_points.clear();
+  step_tracks.clear();
+  colour_obs.clear();
+}
+
+// A live frame's matches to a kept frame checked against a relative pose, on the CPU
+// (Like Recon's capture loop: a camera guessed at 1.2 times the longer side, inliers
+// within max_px). xy_a, xy_b: 2 floats per match, just-keypoints' convention; the size
+// is both frames'. Writes one byte per match to mask (1: inlier) and returns the
+// inliers, or -1 (the reason in the JSON of demo_last_error()).
+EMSCRIPTEN_KEEPALIVE int demo_pair_inliers(int n, const float* xy_a, const float* xy_b, int width, int height,
+                                          double max_px, std::uint8_t* mask) {
+  if (n < 5) {
+    for (int k = 0; k < n; ++k) mask[k] = 0;
+    return 0;
+  }
+  if (!live_ctx) {
+    jpo_config cfg;
+    jpo_config_init(&cfg);
+    cfg.backend = JPO_BACKEND_CPU;
+    cfg.threads = 1;
+    live_ctx = jpo_create(&cfg);
+    if (!live_ctx) {
+      result = std::string("{\"error\": \"") + escape(jpo_last_error()) + "\"}";
+      return -1;
+    }
+  }
+  std::vector<double> a(xy_a, xy_a + 2 * n), b(xy_b, xy_b + 2 * n);
+  const std::uint32_t offsets[2] = {0, static_cast<std::uint32_t>(n)};
+  jpo_camera cam{};
+  cam.model = JPO_SIMPLE_PINHOLE;
+  cam.params[0] = 1.2 * std::max(width, height);
+  cam.params[1] = 0.5 * (width - 1);
+  cam.params[2] = 0.5 * (height - 1);
+  const std::uint32_t which = 0;
+  jpo_pairs pairs{1, 1, offsets, a.data(), b.data(), &cam, &which, &which};
+  jpo_ransac_options ransac;
+  jpo_ransac_options_init(&ransac);
+  ransac.max_error_px = max_px;
+  jpo_pose_result r{};
+  if (jpo_relative_pose(live_ctx, &pairs, &ransac, &r, mask) != 0) {
+    result = std::string("{\"error\": \"") + escape(jpo_last_error()) + "\"}";
+    return -1;
+  }
+  if (r.status != JPO_OK && r.status != JPO_DEGENERATE) {
+    for (int k = 0; k < n; ++k) mask[k] = 0;
+    return 0;
+  }
+  return static_cast<int>(r.n_inliers);
+}
+
+EMSCRIPTEN_KEEPALIVE const char* demo_last_error() { return result.c_str(); }
 
 }  // extern "C"

@@ -28,7 +28,7 @@ autodoc_typehints = "signature"
 # The docstring examples run with `sphinx-build -b doctest` (document 08).
 doctest_global_setup = "import numpy as np\nimport just_ba\njba = just_ba"
 
-# The live demo (D134, D152): its built folder (the page, its script, the module, the
+# The live demo (D134, D156): its built folder (the page, its script, the module, the
 # keypoints and matcher modules and the sample images), from a WebAssembly build of the
 # demo app, copied to demo/ when JBA_DEMO_WEB names it. The demo is a page of its own with
 # the site's top bar; without it the page "Live demo" says the demo is not in this build.
@@ -37,7 +37,8 @@ DEMO_WEB = os.environ.get("JBA_DEMO_WEB", "")
 if DEMO_WEB:
     DEMO_WEB = os.path.join(os.path.dirname(HERE), DEMO_WEB)
 DEMO_FILES = ("index.html", "demo.js", "jba_demo.js", "jba_demo.wasm", "jkp/jkp.js", "jmt/jmt.js",
-              "samples/samples.json")
+              "samples/samples.json", "capture.html", "capture.js", "capture_worker.js", "weights_worker.js", "flexglue_weights.js",
+              "gates.js", "view.js")
 if DEMO_WEB:
     missing = [f for f in DEMO_FILES if not os.path.isfile(os.path.join(DEMO_WEB, f))]
     if missing:

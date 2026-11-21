@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
     const double initial_diff = std::abs(s.initial_cost - c.initial_cost) / std::max(1e-300, std::abs(c.initial_cost));
     const double ratio = c.iterations > 0 ? static_cast<double>(s.iterations) / c.iterations : 0.0;
 
-    double centre_diff = 0, rotation_diff = 0, transform_diff = 0, frame_diff = 0;
+    double centre_diff = 0, rotation_diff = 0, transform_diff = 0, frame_diff = 0, intrinsics_diff = 0;
     if (check_parameters) {
       const double scale = scene_scale(initial);
       std::vector<double> dc, dr;
@@ -173,6 +173,15 @@ int main(int argc, char** argv) {
         transform_diff = std::max(transform_diff, std::abs(ours.set_transform[a] - ref.set_transform[a]));
       for (std::size_t a = 0; a < ours.depth_correction.size() && a < ref.depth_correction.size(); ++a)
         transform_diff = std::max(transform_diff, std::abs(ours.depth_correction[a] - ref.depth_correction[a]));
+      // Intrinsics, relative to each value (absolute below 1: distortion).
+      for (std::size_t a = 0; a < ours.intrinsics.size() && a < ref.intrinsics.size(); ++a)
+        intrinsics_diff = std::max(intrinsics_diff, std::abs(ours.intrinsics[a] - ref.intrinsics[a]) /
+                                                        std::max(1.0, std::abs(ref.intrinsics[a])));
+      // The group prior's means (D165), where both have one.
+      for (std::size_t a = 0; a < ours.intrinsics_group_mean.size() && a < ref.intrinsics_group_mean.size(); ++a)
+        if (!std::isnan(ref.intrinsics_group_mean[a]))
+          intrinsics_diff = std::max(intrinsics_diff, std::abs(ours.intrinsics_group_mean[a] - ref.intrinsics_group_mean[a]) /
+                                                          std::max(1.0, std::abs(ref.intrinsics_group_mean[a])));
       if (ours.manhattan_frame.size() == 4 && ref.manhattan_frame.size() == 4) {
         const double* q1 = ours.manhattan_frame.data();
         const double* q2 = ref.manhattan_frame.data();
@@ -200,6 +209,7 @@ int main(int argc, char** argv) {
     if (check_parameters && !(rotation_diff <= max_rotation_diff)) failures.push_back("rotations differ");
     if (check_parameters && !(transform_diff <= max_centre_diff)) failures.push_back("prior set transforms differ");
     if (check_parameters && !(frame_diff <= max_rotation_diff)) failures.push_back("Manhattan frames differ");
+    if (check_parameters && !(intrinsics_diff <= max_centre_diff)) failures.push_back("intrinsics differ");
     if (s.termination == jba::Termination::Failure) failures.push_back("just-ba failed: " + s.message);
     if (!c.usable) failures.push_back("Ceres failed");
 
@@ -223,7 +233,8 @@ int main(int argc, char** argv) {
                 cost_diff, ratio, first_divergence < 0 ? static_cast<int>(common) - 1 : first_divergence - 1);
     if (check_parameters)
       std::printf(", \"median_centre_diff\": %.3g, \"median_rotation_diff_rad\": %.3g, \"transform_diff\": %.3g, "
-                  "\"frame_diff_rad\": %.3g", centre_diff, rotation_diff, transform_diff, frame_diff);
+                  "\"frame_diff_rad\": %.3g, \"intrinsics_diff\": %.3g", centre_diff, rotation_diff, transform_diff, frame_diff,
+                  intrinsics_diff);
     std::printf(",\n  \"pass\": %s\n}\n", failures.empty() ? "true" : "false");
     if (verbose) {
       std::fprintf(stderr, "iter | jba: cost, linear its, radius, rel. decrease, accepted | ceres: same\n");

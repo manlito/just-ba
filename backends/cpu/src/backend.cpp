@@ -256,7 +256,7 @@ struct CpuBackend::Impl : System {
               for (int c = 0; c < n; ++c) m[row] += J[row * fs.cols + base + c] * x[so + c];
           }
         }
-      }, 16);
+      }, fs.grain);
     }
   }
 
@@ -976,8 +976,11 @@ struct CpuBackend::Impl : System {
       std::string what = "unknown " + std::to_string(failed);
       for (const FBlock& fb : fblocks) {
         if (static_cast<int>(failed) < fb.offset || static_cast<int>(failed) >= fb.offset + fb.size) continue;
-        static constexpr const char* kKinds[] = {"pose of image", "intrinsics block", "prior set", "prior set scale",
-                                                 "Manhattan frame", "depth correction of image"};
+        static constexpr const char* kKinds[] = {"pose of image",   "intrinsics block",          "prior set",
+                                                 "prior set scale", "Manhattan frame",           "depth correction of image",
+                                                 "mean of intrinsics group"};
+        static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == static_cast<std::size_t>(BlockKind::IntrinsicsGroup) + 1,
+                      "a name per block kind");
         what = std::string(kKinds[static_cast<int>(fb.kind)]) + " " + std::to_string(fb.index) + ", coordinate " +
                std::to_string(static_cast<int>(failed) - fb.offset);
       }

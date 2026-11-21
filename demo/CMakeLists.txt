@@ -62,18 +62,21 @@ if(EMSCRIPTEN)
   target_link_options(
     jba_demo_wasm PRIVATE
     -sJSPI
-    "-sJSPI_EXPORTS=demo_reconstruct,demo_backends"
-    "-sEXPORTED_FUNCTIONS=_demo_reconstruct,_demo_backends,_demo_points,_demo_tracks,_demo_colour_obs,_malloc,_free"
-    "-sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8,HEAP32,HEAPF32,HEAPF64"
+    "-sJSPI_EXPORTS=demo_reconstruct,demo_backends,demo_session_new,demo_session_add,demo_session_retry,demo_session_finish,demo_capture_reconstruct"
+    "-sEXPORTED_FUNCTIONS=_demo_reconstruct,_demo_backends,_demo_points,_demo_tracks,_demo_colour_obs,_malloc,_free,\
+_demo_session_new,_demo_session_add,_demo_session_retry,_demo_session_snapshot,_demo_session_finish,_demo_session_free,\
+_demo_pair_inliers,_demo_last_error,_demo_capture_reconstruct"
+    "-sEXPORTED_RUNTIME_METHODS=ccall,HEAPU8,HEAP32,HEAPF32,HEAPF64,UTF8ToString"
     -sMODULARIZE
     -sEXPORT_ES6
     -sEXPORT_NAME=createDemo
-    -sENVIRONMENT=web
+    # The live capture's session runs in a worker (D157).
+    -sENVIRONMENT=web,worker
     -sALLOW_MEMORY_GROWTH
     -sMAXIMUM_MEMORY=4GB
     -sSTACK_SIZE=2MB)
   # The page, its script and sample images, and the keypoints and matcher modules
-  # (demo/tools/fetch_match_web.sh) it loads from jkp/ and jmt/ (D152).
+  # (demo/tools/fetch_match_web.sh) it loads from jkp/ and jmt/ (D156).
   set(JBA_DEMO_MATCH_WEB_DIR "${PROJECT_SOURCE_DIR}/third_party/match-web" CACHE PATH
       "just-keypoints' and just-matching's browser modules, for the live demo")
   if(NOT EXISTS "${JBA_DEMO_MATCH_WEB_DIR}/jkp/jkp.js" OR NOT EXISTS "${JBA_DEMO_MATCH_WEB_DIR}/jmt/jmt.js")
@@ -84,7 +87,11 @@ if(EMSCRIPTEN)
   add_custom_command(
     TARGET jba_demo_wasm POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/web/index.html
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/demo.js ${_web}
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/demo.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.html
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/capture.js ${CMAKE_CURRENT_SOURCE_DIR}/web/capture_worker.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/weights_worker.js ${CMAKE_CURRENT_SOURCE_DIR}/web/flexglue_weights.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/gates.js
+            ${CMAKE_CURRENT_SOURCE_DIR}/web/view.js ${_web}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/web/samples ${_web}/samples)
   if(EXISTS "${JBA_DEMO_MATCH_WEB_DIR}")
     add_custom_command(TARGET jba_demo_wasm POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -100,6 +107,15 @@ else()
     # without metadata: searched for, then refined (D144).
     add_test(NAME demo_synth_focal COMMAND jba_demo synth --focal-error 1.2)
     add_test(NAME demo_synth_priors COMMAND jba_demo synth --priors 0.002)
+    # D158: images placed from their pair when none sees enough of the map; the scenes still pass.
+    add_test(NAME demo_synth_pairs COMMAND jba_demo synth --register-from-pairs)
+    # D166: a block per image with autofocus jitter, a calibration 5 % off, the blocks in
+    # one group of the intrinsics prior: the scenes still pass. demo_groups checks that
+    # the focal lengths land nearer the truth than refined one by one, and the rest.
+    add_test(NAME demo_synth_groups COMMAND jba_demo synth --focal-jitter 0.004 --focal-bias 0.05 --groups)
+    add_executable(test_demo_groups tests/test_groups.cpp)
+    target_link_libraries(test_demo_groups PRIVATE jba_demo_mapper jba_warnings)
+    add_test(NAME demo_groups COMMAND test_demo_groups)
     # The progress callback (D146): continuing changes nothing, returning false cancels.
     add_executable(test_demo_cancel tests/test_cancel.cpp)
     target_link_libraries(test_demo_cancel PRIVATE jba_demo_mapper jba_warnings)
@@ -107,6 +123,10 @@ else()
     add_executable(test_demo_diagnostics tests/test_diagnostics.cpp)
     target_link_libraries(test_demo_diagnostics PRIVATE jba_demo_mapper jba_warnings)
     add_test(NAME demo_diagnostics COMMAND test_demo_diagnostics)
+    # Sessions (D153): the map grown image by image, then finished from the live map.
+    add_executable(test_demo_session tests/test_session.cpp)
+    target_link_libraries(test_demo_session PRIVATE jba_demo_mapper jba_warnings)
+    add_test(NAME demo_session COMMAND test_demo_session)
     # The COLMAP path without COLMAP: scene -> database and text model -> capture file ->
     # reconstruction against the truth (demo/tools/test_colmap_roundtrip.py).
     find_package(Python3 COMPONENTS Interpreter)

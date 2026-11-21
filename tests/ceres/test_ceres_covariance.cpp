@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -95,6 +96,33 @@ int main() {
     p.intrinsics_free = {jba::kFocal | jba::kDistortion};
     perturb(p, 6);
     compare("free shared intrinsics", p, {});
+  }
+  {
+    // A prior on the free intrinsics (D161): toward values away from the start, and
+    // with one parameter free but without a prior.
+    auto p = jba_test::random_problem(CameraModel::Radial, 10, 200, 14);
+    p.intrinsics_free = {jba::kFocal | jba::kDistortion};
+    jba::set_intrinsics_prior(p, 0.002, std::numeric_limits<double>::infinity(), 0.001);
+    p.intrinsics_prior_sigma[4] = std::numeric_limits<double>::infinity();  // k2 fully free
+    p.intrinsics[0] *= 1.01;
+    perturb(p, 15);
+    compare("free intrinsics with a prior", p, {});
+  }
+  {
+    // The group prior (D165): five blocks of two images each in one group, focal and
+    // k1 tied to the mean, the mean's focal tied to a target away from the start.
+    auto p = jba_test::random_problem(CameraModel::SimpleRadial, 10, 200, 16);
+    const std::vector<double> block = p.intrinsics;
+    p.intrinsics.clear();
+    for (int c = 0; c < 5; ++c) p.intrinsics.insert(p.intrinsics.end(), block.begin(), block.end());
+    p.image_intrinsics.resize(p.num_images());
+    for (std::size_t i = 0; i < p.num_images(); ++i) p.image_intrinsics[i] = static_cast<std::int32_t>(i / 2);
+    p.intrinsics_free.assign(5, jba::kFocal | jba::kDistortion);
+    const double inf = std::numeric_limits<double>::infinity();
+    jba::set_intrinsics_groups(p, {0, 0, 0, 0, 0}, 0.003, inf, 0.001, 0.02, inf, inf);
+    p.intrinsics_group_prior = {1.01 * block[0], std::nan(""), std::nan(""), std::nan("")};  // away from the start
+    perturb(p, 17);
+    compare("free intrinsics in a group", p, {});
   }
   {
     auto p = jba_test::random_problem(CameraModel::Pinhole, 10, 200, 7);

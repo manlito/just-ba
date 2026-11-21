@@ -19,28 +19,33 @@ working proof of concept. This document covers what that requires.
   (neither was `justba`). The name is not reserved until something is published
   under it.
 - Publishing: PyPI trusted publishing from the release workflow, so no long-lived
-  token is stored. The workflow is started by hand and uses no GitHub environment
-  (D111); the pending publishers on PyPI are registered for `release.yml`. PyPI takes
+  token is stored. The workflow runs on every push to main and publishes (D152); it
+  uses no GitHub environment (D111); the pending publishers on PyPI are registered for `release.yml`. PyPI takes
   one pending publisher per workflow at a time, so the first release goes up one
   package at a time (D129).
 - Versioning: semantic versions; the Python API is the public contract. Pre-1.0 while
-  the API settles. The version is `project(VERSION)` in CMakeLists.txt (D114).
-- Wheels and the sdist: `.github/workflows/release.yml`, started by hand (D111, D116).
+  the API settles. The release workflow chooses the version: the last release's
+  patch bumped, or `project(VERSION)` in CMakeLists.txt when that is higher, so a
+  minor or major release is an edit there (D114, D152). Each release is tagged
+  `vX.Y.Z`.
+- Wheels and the sdist: `.github/workflows/release.yml`, on every push to main, or by
+  hand to build without publishing (D116, D152).
 
 ### Release checklist
 
-1. Quick CI run passes (`gh workflow run ci`).
-2. The GPU check by hand: `python bench/gpu_check.py` on the Mac (Metal) and on the
-   laptop under Linux and Windows (CUDA); see document 05.
-3. `gh workflow run release` (builds and tests every wheel, publishes nothing).
-4. Each package's wheel installed from that run's artifacts and checked on its
-   machine: `python bench/gpu_check.py --wheel <file>` (the Mac with `just-ba`, the
-   laptop with `just-ba-cu12` and `just-ba-cu13`, both systems).
-5. `gh workflow run release -f publish=true`. The first release only: `just-ba` is
-   uploaded and the cu12 step fails. Add the pending publisher for `just-ba-cu12`,
-   re-run the failed publish job (`gh run rerun <run> --failed`; uploaded files are
-   skipped), then do the same for `just-ba-cu13` (D129).
-6. The documentation site deployed for the release (`gh workflow run docs -f deploy=true`).
+Every merge to main is a release (D152), so the checks come before the merge:
+
+1. A GPU change: the GPU check by hand, `python bench/gpu_check.py` on the Mac (Metal)
+   and on the laptop under Linux and Windows (CUDA); see document 05. To check the
+   wheels themselves, `gh workflow run release --ref <branch>` builds them without
+   publishing, and `python bench/gpu_check.py --wheel <file>` takes one.
+2. A minor or major release: raise `project(VERSION)` in CMakeLists.txt in the same
+   pull request. Otherwise the patch is bumped.
+3. Merge. The release workflow builds and tests every wheel, publishes them, and
+   tags `vX.Y.Z`; the docs workflow deploys the site.
+4. A new package only (D129): its first upload fails until its pending publisher is
+   added on PyPI; add it and re-run the failed publish job (`gh run rerun <run>
+   --failed`; uploaded files are skipped).
 
 ### Wheels
 
@@ -125,7 +130,7 @@ on every push to main as well, never on pull requests. The table below is the pl
 | Metal backend tests | By hand on the owner's Mac (D110) | Before releases and after GPU changes | Free |
 | CUDA backend tests and speed benchmark | Not a CI job. Run by hand on the owner's laptop, or on the development VM when it is up | Before releases and after GPU changes | None beyond development |
 | CPU speed regression gate | Hosted Linux | Every pull request | Free |
-| Wheels and PyPI publishing | Hosted, all platforms | Started by hand (`release.yml`, D111) | Free |
+| Wheels and PyPI publishing | Hosted, all platforms | Every push to main (`release.yml`, D152) | Free |
 | Documentation build and publish | Hosted Linux | Pull request preview; publish on release | Free |
 
 Points to note:

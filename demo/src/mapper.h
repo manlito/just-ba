@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,11 @@ struct Capture {
   // Per block: its images' width and height in pixels (the capture file's camera.size);
   // empty: unknown, and MapperOptions::min_pair_coverage does not apply (D151).
   std::vector<std::int32_t> image_size;
+  // Per block: its group for the hierarchical intrinsics prior (D165, D166), -1 for none;
+  // empty: no groups. Blocks of one camera whose focal lengths differ a little (one
+  // block per focal value, autofocus) are refined each, tied to their group's mean,
+  // the mean tied loosely to the capture's values (MapperOptions::group_*).
+  std::vector<std::int32_t> intrinsics_group;
   std::size_t num_images() const { return keypoints.size(); }
   std::int32_t block(std::size_t image) const { return image_intrinsics.empty() ? 0 : image_intrinsics[image]; }
   bool has_prior(std::size_t image) const {
@@ -100,11 +106,42 @@ struct MapperOptions {
   // images use it; the refined values then serve triangulation and PnP too.
   std::uint8_t refine_intrinsics = 0;
   int refine_min_images = 1;
+  // With Capture::intrinsics_group (D166): in every adjustment that refines intrinsics,
+  // each block of a group is tied to the group's mean, focal lengths within
+  // group_focal_fraction of it (focus changes them by about 1 %), the principal point
+  // within group_principal_point_sigma pixels, distortion within
+  // group_distortion_sigma, all at 1 px of keypoint noise: they are divided by the
+  // noise the last adjustment measured, so the ties weigh the same against the data
+  // at any noise. The mean is free by default; group_target_* tie it to the group's
+  // values as given (after a focal search; a run from a start: the start's), which on
+  // the generated scenes only cost accuracy. A group with a guessed focal length has no
+  // target on it. +inf: no tie, or no target. Only the groups refine_intrinsics frees
+  // are tied, and a block of a group is refined once its group, not the block alone,
+  // has refine_min_images registered images. Blocks of a group no registered image
+  // uses yet take the group's mean after each adjustment.
+  double group_focal_fraction = 0.01;
+  double group_principal_point_sigma = 1.0;
+  double group_distortion_sigma = 0.001;
+  double group_target_focal_fraction = INFINITY;
+  double group_target_principal_point_sigma = INFINITY;
+  double group_target_distortion_sigma = INFINITY;
   // Before anything else, the focal lengths of the blocks marked focal_unknown are
   // searched for: the pairs are verified under focal lengths from a quarter to four
   // times the guess (61 steps of 4.7 %), all in one poselib-gpu call, and the factor
   // with the lowest total MSAC score is applied. The adjustments then refine it.
   bool search_focal = false;
+  // When no image sees min_pnp_inliers of the map's points, the image with the most
+  // inliers to a registered one, in a kept pair with at least min_register_pair_inliers
+  // of them, and on which no PnP was tried (one rejected stays rejected), is registered
+  // from that pair instead: its rotation the pair's, its centre
+  // along the pair's translation at the map's median spacing of neighbouring cameras;
+  // its points are triangulated and the map adjusted as after a PnP (D158). After a
+  // turn, a capture's next frames match their neighbours by the hundreds yet see almost
+  // none of the map's points (those of the turn, seen only from nearly one place, are
+  // not triangulated), so PnP cannot place them and the model ends there. false: COLMAP's
+  // behaviour, a new model.
+  bool register_from_pairs = false;
+  std::uint32_t min_register_pair_inliers = 100;
 
   // Position priors (Capture::prior_position, D150). With them, a model starts from a
   // pair of images that both have one where such a pair is fit to start from; once
@@ -265,10 +302,29 @@ struct Reconstruction {
   std::uint32_t first_inliers = 0;
   double first_angle_deg = 0.0;
   int pnp_calls = 0, pnp_problems = 0, pnp_rejected = 0, adjustments = 0;
+  int pair_registrations = 0;  // images registered from a pair (D158)
+  int start_left_out = 0;             // run_from: start images that disagreed with their pairs
   int models = 0;                     // models grown; the one returned has the most images
   std::string pose_backend;           // what poselib-gpu ran on
   Timings time;
 };
+
+// Where a run starts instead of a first pair (D153): a model already grown, normally a
+// Session's live map. Per image of the capture its registered flag and pose, and the
+// intrinsics, blocks as the capture's.
+struct StartFrom {
+  std::vector<char> registered;
+  std::vector<double> poses;       // 7 per image
+  std::vector<double> intrinsics;
+  bool aligned = false;            // in the frame of the position priors (D150)
+  double focal_factor = 1.0;       // reported as the run's
+};
+
+// How well a result's cameras agree with its verified pairs (D153): per kept pair whose
+// two images are registered, the angle between the relative rotation of their poses and
+// the pair's own (poselib-gpu's, from its matches), in degrees; the `q` quantile of
+// those (0.5 the median), or NaN without such pairs.
+double pair_rotation_error_deg(const Capture& capture, const Reconstruction& r, double q);
 
 // One poselib-gpu context, kept across reconstructions (on a GPU its start-up is
 // paid once).
@@ -283,14 +339,167 @@ class Mapper {
   // Neither changes the result.
   Reconstruction run(const Capture& capture, const StepCallback& on_step = {},
                      const ProgressCallback& on_progress = {});
+  // The same run with its first model taken from `start` (D153): no focal search (the
+  // start's intrinsics are used), every pair verified, the tracks built; the start's
+  // registered images keep their poses (but those whose relative rotations disagree
+  // with their verified pairs by a median of over 5 degrees, which are left out and
+  // registered again like any other), their points are triangulated and everything is
+  // adjusted (stage "resume", final_iterations), then images are registered and the
+  // model finished as in `run`, and further models grown from images in none. With
+  // fewer than two start images left, the run is `run`'s.
+  Reconstruction run_from(const Capture& capture, const StartFrom& start, const StepCallback& on_step = {},
+                          const ProgressCallback& on_progress = {});
   const MapperOptions& options() const { return options_; }
   // Options for the next runs. The context keeps the pose backend, seed and threads it
   // was created with; everything else, the solver's backend included, can change.
   void set_options(const MapperOptions& options) { options_ = options; }
 
  private:
+  friend class Session;
+  Reconstruction run_impl(const Capture& capture, const StartFrom* start, const StepCallback& on_step,
+                          const ProgressCallback& on_progress);
   MapperOptions options_;
   jpo_ctx* ctx_ = nullptr;
+};
+
+// ---- Sessions (D153): the map grown one image at a time, while a capture is taken.
+
+struct SessionOptions {
+  // Images adjusted together after each registration: those just registered and the
+  // most recent before them, up to this many; the other registered images that see
+  // their points are held. 0: every registered image, every time.
+  int window = 8;
+  int window_iterations = 0;  // 0: MapperOptions::local_iterations
+  // The map starts from a pair whose median triangulation angle reaches 16 degrees
+  // (COLMAP's first floor); after start_patience images without one, 8; after twice as
+  // many, 4; then 2 (COLMAP's floors), never below min_start_angle_deg. A pair with a
+  // small angle makes a map that bends; waiting costs only the delay, as the images
+  // that came meanwhile are placed when it starts.
+  int start_patience = 4;
+  double min_start_angle_deg = 4.0;
+  // A piece started from a pair under 16 degrees is started again, from a pair of its
+  // images (or of images in no piece) that reaches a higher floor, if one comes while
+  // it has at most this many images. 0: never.
+  int rebuild_within = 16;
+  // When more than this many images in a row could not be placed, the map is put aside
+  // as a piece and a new one started from a pair of images in no piece, if one is fit
+  // to start from (a capture that lost its way). 0: never. An image the current piece
+  // can't place but whose pairs link to an earlier piece goes to that piece, which
+  // becomes the current one again (the capture came back).
+  int restart_after = 2;
+};
+
+// An image for Session::add. Its pairs name an earlier image of the session in `a` and
+// this one in `b` (add sets it): ka are the earlier image's keypoints, kb this one's.
+struct SessionImage {
+  std::vector<double> keypoints;  // 2 per keypoint, pixels
+  std::vector<Pair> pairs;
+  // Optional priors (D150): where the image was taken, measured (a phone's tracker, a
+  // GPS), and the standard deviations, horizontal and vertical; NaN for none, or for
+  // MapperOptions' defaults. Only the camera centre is used for now.
+  double prior_position[3] = {std::nan(""), std::nan(""), std::nan("")};
+  double prior_sigma[2] = {std::nan(""), std::nan("")};
+  // Not placed, the caller will try more pairs (Session::retry) before a new piece may
+  // start: the restart rule waits for retry.
+  bool defer_split = false;
+};
+
+// A model a session starts from (D154): images already placed, with their keypoints,
+// poses, and the model's points with the keypoints that observe them (a finished
+// reconstruction, so a capture can go on into it). Its images are held where they are
+// and its intrinsics are kept while new images join; its points take part in placing
+// them. Per observation: its image (from 0), its keypoint in that image, its point.
+struct SessionSeed {
+  std::vector<std::vector<double>> keypoints;  // per image: 2 per keypoint, pixels
+  std::vector<double> poses;                   // 7 per image
+  std::vector<double> points;                  // 3 per point
+  std::vector<std::int32_t> obs_image, obs_keypoint, obs_point;
+  bool aligned = false;                        // in the frame of the position priors (D150)
+};
+
+// What Session::add did.
+struct SessionStep {
+  std::int32_t image = -1;           // the image added, from 0
+  bool started = false;              // the map (or a new piece of it) started with this image
+  int piece = -1;                    // the piece being grown, from 0; -1 before the map starts
+  bool rebuilt = false;              // the piece was started again from a wider pair (started too)
+  bool rejoined = false;             // an earlier piece took the image and is the current one now
+  std::vector<std::int32_t> placed;  // registered in this step: this image, and earlier ones it lets in
+  std::vector<std::int32_t> window;  // adjusted in this step, poses free
+  std::vector<std::int32_t> held;    // in that adjustment, poses held
+  int pairs_kept = 0;                // of this image's pairs, verified and kept for the tracks
+  int pnp_inliers = -1;              // of this image's last PnP; -1: none tried
+  int points_seen = 0;               // distinct points of the map this image sees
+  double mean_error_px = 0.0;        // after the last adjustment
+  double seconds = 0.0;
+  std::string error;                 // empty on success
+  bool ok() const { return error.empty(); }
+};
+
+// A map that grows image by image (D153). Each image comes with its matches to earlier
+// images: they are verified, added to the tracks, and once the map has started (the
+// first pair fit to start from, after a focal search when the focal length is a guess)
+// the image is placed by PnP, its new points triangulated and a window of the latest
+// images adjusted with the older ones held. Rejected images are tried again as the map
+// grows. finish() then runs the mapper over the whole capture from the live map.
+class Session {
+ public:
+  // The capture's camera: one intrinsics block of `model` (its focal length only a
+  // guess, or not), its images' size. The mapper is used for its options and context,
+  // and must outlive the session.
+  Session(Mapper& mapper, jba::CameraModel model, const std::vector<double>& intrinsics, bool focal_unknown,
+          std::int32_t width, std::int32_t height, const SessionOptions& options = {});
+  // A session started from a model (D154): `seed`'s images are the session's first,
+  // placed and held, the map started from them; `intrinsics` are the model's (its block
+  // of `model`, not searched, held while the session grows). Throws
+  // std::invalid_argument when the seed's arrays disagree or name what doesn't exist.
+  Session(Mapper& mapper, jba::CameraModel model, const std::vector<double>& intrinsics, std::int32_t width,
+          std::int32_t height, const SessionSeed& seed, const SessionOptions& options = {});
+  ~Session();
+  Session(const Session&) = delete;
+  Session& operator=(const Session&) = delete;
+  Session(Session&&) noexcept;
+  Session& operator=(Session&&) noexcept;
+
+  SessionStep add(const SessionImage& image);
+  // The last image added again, with more pairs (to earlier images, a: the earlier
+  // one), when it wasn't placed: they are verified and tracked, the image placed if it
+  // now can be (into an earlier piece too), and then the restart rule applies, or a
+  // new piece starts at once when `new_piece` (a caller's Shoot now).
+  SessionStep retry(const std::vector<Pair>& more, bool new_piece = false);
+
+  std::size_t num_images() const;
+  // Images the session started with (D154): the first num_seeded() of it; 0 without.
+  std::size_t num_seeded() const;
+  bool started() const;
+  // Pieces grown so far, the current one included; earlier pieces are kept as they
+  // were left (piece(k), k below num_pieces() - 1, the current one is snapshot()).
+  std::size_t num_pieces() const;
+  Snapshot piece(std::size_t k) const;
+  // The piece with the most images placed (the current one on a tie), its
+  // intrinsics, and per keypoint of image `i` the track whose point it observes in
+  // piece `k` (-1 for none).
+  std::size_t largest_piece() const;
+  const std::vector<double>& piece_intrinsics(std::size_t k) const;
+  std::vector<std::int32_t> keypoint_points(std::size_t i, std::size_t k) const;
+  // The map now, stage "session": every point with its track (track indices stay the
+  // same as the map grows). The pointers are valid until the next add.
+  Snapshot snapshot() const;
+  // The map's intrinsics (refined as it grows).
+  const std::vector<double>& intrinsics() const;
+  // Per keypoint of image `i`: the track whose point it observes, -1 for none.
+  std::vector<std::int32_t> keypoint_points(std::size_t i) const;
+  // Everything added: the keypoints, the pairs as given, the priors.
+  const Capture& capture() const;
+  // The later run (D153): `capture`, the session's images with any pairs (normally the
+  // session's matched again more thoroughly and pairs it did not have), reconstructed
+  // with Mapper::run_from from the live map, or from the piece with the most images
+  // when an earlier one has more. Before the map started, Mapper::run.
+  Reconstruction finish(const Capture& capture, const ProgressCallback& on_progress = {});
+
+ private:
+  struct State;
+  std::unique_ptr<State> s_;
 };
 
 }  // namespace demo
