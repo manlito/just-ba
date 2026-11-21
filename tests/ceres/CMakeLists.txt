@@ -65,9 +65,12 @@ jba_parity_case(intrinsics_group_at_start
 jba_parity_case(intrinsics_group_free_mean
                 "--model SIMPLE_RADIAL --per-image-intrinsics --free-intrinsics 5 --intrinsics-groups 1 --intrinsics-group-sigma 0.005,inf,0.001,inf,inf,inf"
                 "")
+# All eight OPENCV parameters free per image leave the flat valley of
+# opencv_free_distortion: costs agree to about 1e-11, centres to a few 1e-6
+# (2.8e-6 on Linux, 7e-7 on macOS), so it takes the same tolerances.
 jba_parity_case(intrinsics_group_two_groups
                 "--model OPENCV --per-image-intrinsics --free-intrinsics 7 --intrinsics-groups 2 --intrinsics-group-sigma 0.003,1,0.0005,0.02,4,inf"
-                "--check-parameters")
+                "--check-parameters --max-centre-diff 2e-5 --max-rotation-diff 1e-5")
 jba_parity_case(intrinsics_group_single
                 "--model RADIAL --free-intrinsics 5 --intrinsics-groups 1 --intrinsics-group-sigma 0.002,inf,0.001,0.003,inf,0.001"
                 "--check-parameters")
