@@ -1532,6 +1532,10 @@ Reconstruction Mapper::run_impl(const Capture& c, const StartFrom* from, const S
     s.point_track = last.track_of;
     s.mean_error_px = last.mean_error_px;
     s.aligned = m.aligned;
+    s.obs_point = &last.problem.obs_point;
+    s.obs_image = &last.problem.obs_image;
+    s.obs_xy = &last.problem.obs_xy;
+    s.image_of = &last.image_of;
     return progress(stage, &s);
   };
   auto grow = [&](int first, std::vector<Step>* steps) -> bool {

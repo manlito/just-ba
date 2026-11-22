@@ -2,6 +2,7 @@
 // bit-identical to a run without one, and a callback that returns false stops the run,
 // which comes back cancelled, without calling it again. On the generated orbit, as
 // given and with its focal length off by 2.2 times (the focal search's stage).
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -66,13 +67,31 @@ void run_case(const std::string& label, const demo::Capture& capture, const demo
   // Always continue: the same result; every stage seen, in order, live where promised.
   Steps s1;
   std::vector<std::string> stages;
-  int calls = 0, live_ok = 1, iterations = 0;
+  int calls = 0, live_ok = 1, obs_ok = 1, iterations = 0;
   const demo::Reconstruction r1 = demo::Mapper(mo).run(capture, recorder(s1), [&](const demo::Progress& p) {
     ++calls;
     if (stages.empty() || stages.back() != p.stage) stages.push_back(p.stage);
     const bool step = p.stage == "first pair" || p.stage == "register" || p.stage == "final";
     if (step != (p.live != nullptr)) live_ok = 0;
     if (p.live && (p.live->stage != p.stage || p.live->poses == nullptr || p.live->registered == nullptr)) live_ok = 0;
+    if (p.live) {
+      // The observations (D170): consistent with the points, on registered images.
+      const demo::Snapshot& s = *p.live;
+      if (!s.obs_point || !s.obs_image || !s.obs_xy || !s.image_of) {
+        obs_ok = 0;
+      } else {
+        const std::size_t n_obs = s.obs_point->size(), n_pts = s.points.size() / 3;
+        if (s.obs_image->size() != n_obs || s.obs_xy->size() != 2 * n_obs || (n_pts > 0 && n_obs < 2 * n_pts)) obs_ok = 0;
+        for (std::size_t k = 0; obs_ok && k < n_obs; ++k) {
+          const int j = (*s.obs_point)[k], d = (*s.obs_image)[k];
+          if (j < 0 || static_cast<std::size_t>(j) >= n_pts || (k > 0 && j < (*s.obs_point)[k - 1])) obs_ok = 0;
+          else if (d < 0 || static_cast<std::size_t>(d) >= s.image_of->size()) obs_ok = 0;
+          else if (!(*s.registered)[static_cast<std::size_t>((*s.image_of)[static_cast<std::size_t>(d)])]) obs_ok = 0;
+        }
+        for (std::int32_t i : s.added)
+          if (std::find(s.image_of->begin(), s.image_of->end(), i) == s.image_of->end()) obs_ok = 0;
+      }
+    }
     if (p.stage == "adjust") ++iterations;
     if ((p.stage == "adjust") != (p.iteration >= 0)) live_ok = 0;
     if (p.images != static_cast<int>(capture.num_images())) live_ok = 0;
@@ -80,6 +99,7 @@ void run_case(const std::string& label, const demo::Capture& capture, const demo
   });
   compare(r0, s0, r1, s1, label + " (always continue)");
   check(live_ok == 1, label + ": live snapshots on the steps only, iterations on \"adjust\" only");
+  check(obs_ok == 1, label + ": live snapshots carry their points' observations");
   check(iterations > r1.adjustments, label + ": solver iterations reported");
   const std::set<std::string> seen(stages.begin(), stages.end());
   for (const char* st : {"verify", "tracks", "first pair", "register", "final", "adjust"})

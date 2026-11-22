@@ -223,6 +223,14 @@ struct Snapshot {
   std::vector<std::int32_t> point_track;   // per point: its track, the same across steps
   double mean_error_px = 0.0;
   bool aligned = false;                    // in the frame of the position priors (D150)
+  // Live snapshots only (on_progress; null in on_step's), borrowed, valid during the
+  // call (D170): the points' observations, per observation its point (an index into
+  // `points` / 3, non-decreasing), its image of the adjustment (`image_of` gives the
+  // capture's image) and its keypoint's position in pixels.
+  const std::vector<std::int32_t>* obs_point = nullptr;
+  const std::vector<std::int32_t>* obs_image = nullptr;
+  const std::vector<double>* obs_xy = nullptr;
+  const std::vector<std::int32_t>* image_of = nullptr;
 };
 using StepCallback = std::function<void(const Snapshot&)>;
 
