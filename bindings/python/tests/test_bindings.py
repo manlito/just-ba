@@ -261,6 +261,76 @@ def test_build_tracks():
         assert len(ids) == 1
 
 
+def test_build_tracks_greedy():
+    sc = scene.room(n_images=12, n_points=1500, noise=0.0)
+    m = sc["matches"]
+    # Wrong matches: half of image 0's matches to image 1 go to another keypoint.
+    rng = np.random.default_rng(3)
+    wrong = np.flatnonzero((m[:, 0] == 0) & (m[:, 2] == 1))[::2]
+    m = m.copy()
+    m[wrong, 3] = rng.permutation(m[wrong, 3])
+    scores = np.ones(len(m))
+    scores[wrong] = 0.1
+    o = jba.TrackOptions()
+    o.conflict_policy = jba.ConflictPolicy.GREEDY
+    tracks, st = jba.build_tracks(sc["keypoints"], m, o, scores=scores)
+    assert st.conflicted == 0 and st.refused_matches > 0 and st.largest_component <= 12
+    assert "largest_component" in repr(st)
+    begin, img, kp = tracks.begin, tracks.image, tracks.keypoint
+    wrong_obs = 0
+    for t in range(len(tracks)):
+        ids = [int(sc["point_of"][img[o]][kp[o]]) for o in range(begin[t], begin[t + 1])]
+        wrong_obs += len(ids) - max(ids.count(i) for i in set(ids))
+    assert wrong_obs <= 0.01 * len(img)
+    with pytest.raises(ValueError, match="scores"):
+        jba.build_tracks(sc["keypoints"], m, o, scores=scores[:-1])
+
+
+def test_refine_greedy_scores_and_sigma():
+    sc = scene.room(n_images=16, n_points=3000)
+    truth, tracked = sc["poses"], sc["tracked"]
+    n = truth.shape[0]
+    pairs = np.array([(i, (i + d) % n) for i in range(n) for d in (1, 2, 3)], dtype=np.int32)
+    s = jba.make_problem("PINHOLE", scene.K, poses=tracked)
+    jba.add_relative_priors_from_poses(s, tracked, pairs)
+    o = jba.RefineOptions()
+    o.tracks.conflict_policy = jba.ConflictPolicy.GREEDY
+    m = sc["matches"]
+    r = jba.refine(s, sc["keypoints"], matches=m, match_scores=np.ones(len(m)), keypoint_sigma=0.5, options=o)
+    assert r.track_stats.conflicted == 0 and r.problem.num_points > 500
+    assert scene.aligned_errors(r.problem.poses, truth)[0] < 0.01
+    np.testing.assert_array_equal(r.problem.obs_sigma, np.full(r.problem.num_observations, 0.5))
+    # keypoint_sigma one array per image, the same as flat.
+    per_image = [np.full(len(k), 0.5) for k in sc["keypoints"]]
+    r2 = jba.refine(s, sc["keypoints"], matches=m, match_scores=np.ones(len(m)), keypoint_sigma=per_image, options=o)
+    np.testing.assert_array_equal(r2.problem.poses, r.problem.poses)
+    with pytest.raises(ValueError, match="match_scores"):
+        jba.refine(s, sc["keypoints"], matches=m, match_scores=np.ones(3))
+    with pytest.raises(ValueError, match="keypoint_sigma"):
+        jba.refine(s, sc["keypoints"], matches=m, keypoint_sigma=np.ones(3))
+
+
+def test_nvidia_search_ignores_regular_package(tmp_path, monkeypatch):
+    # A regular nvidia package (with __init__.py) in one site directory must not hide
+    # the libraries pip put under nvidia/ in another (the user site).
+    from just_ba import _nvidia
+    import site
+
+    system, user = tmp_path / "system", tmp_path / "user"
+    (system / "nvidia").mkdir(parents=True)
+    (system / "nvidia" / "__init__.py").write_text("")
+    lib = user / "nvidia" / "cu12" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "libcudss.so.0").write_bytes(b"")
+    (lib / "libcublas.so.13").write_bytes(b"")
+    (lib / "libcublas.so.12").write_bytes(b"")
+    monkeypatch.setattr(site, "getsitepackages", lambda: [str(system)])
+    monkeypatch.setattr(site, "getusersitepackages", lambda: str(user))
+    files = _nvidia._candidates()
+    assert any(p.name == "libcudss.so.0" for p in files)
+    assert _nvidia._find(files, "libcublas.so*", "12")[0].name == "libcublas.so.12"
+
+
 def test_refine_end_to_end(tmp_path):
     sc = scene.room()
     truth, tracked = sc["poses"], sc["tracked"]
@@ -430,6 +500,15 @@ def test_export(tmp_path):
     images_bin = (tmp_path / "bin" / "images.bin").read_bytes()
     assert int.from_bytes(images_bin[:8], "little") == 3 and b"a.jpg\0" in images_bin
     assert int.from_bytes((tmp_path / "bin" / "points3D.bin").read_bytes()[:8], "little") == 8
+    # images is a per-image mask: indices are refused, not cast (256 would become 0).
+    (tmp_path / "mask").mkdir()
+    jba.export_colmap(p, str(tmp_path / "mask"), images=np.array([True, False, True]))
+    lines = [l for l in (tmp_path / "mask" / "images.txt").read_text().splitlines() if not l.startswith("#")]
+    assert len(lines) == 4
+    with pytest.raises(TypeError, match="mask"):
+        jba.export_colmap(p, str(tmp_path / "mask"), images=np.array([0, 2], dtype=np.int32))
+    with pytest.raises(ValueError, match="shape"):
+        jba.export_colmap(p, str(tmp_path / "mask"), images=np.array([True, False]))
     jba.write_result(str(tmp_path / "r.jba"), p, covariance=jba.covariance(p), report=jba.evaluate(p))
     d = read_jba(str(tmp_path / "r.jba"))
     assert d["result.pose_covariance"].shape == (3, 6, 6)

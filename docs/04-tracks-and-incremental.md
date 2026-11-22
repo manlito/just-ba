@@ -76,7 +76,8 @@ well in all views). Not in the first version.
 |---|---|---|
 | `min_views` | 2 with poses, 3 without | Shortest track kept |
 | `max_views` | 100 | Longer tracks are truncated or split |
-| `conflict_policy` | `repair` with poses, `drop` without | What to do with conflicted components |
+| `conflict_policy` | `repair` with poses, `drop` without | What to do with conflicted components; `greedy` builds conflict-free tracks best match first (D169) |
+| `max_repair_observations` | 500 | `repair` splits larger conflicted components greedily before stage 2 (D169) |
 | `max_angle_error_deg` | derived from prior noise | Stage 2 inlier threshold |
 | `min_tri_angle_deg` | 1.5 | Minimum triangulation angle |
 
@@ -94,6 +95,12 @@ version.
 - Stage 2 runs again after each solve, inside `refine`, from the improved poses with
   the threshold halved (2 degrees first, then 1, never below 0.25; D69, D71).
 - Triangulation is least squares on rays rather than DLT (D72).
+- Dense learned matches over many pairs chain wrong matches into components of
+  hundreds of thousands of keypoints, where stage 2 grows with the square of the
+  size (D169). `greedy` joins two tracks only when they share no image, applying
+  matches best score first (an optional score per match); `repair` uses the same
+  merge to split components above `max_repair_observations` before stage 2, which
+  runs on components in parallel. `TrackStats` reports the largest component.
 
 ## Part B: triangulation
 

@@ -42,6 +42,9 @@ struct RefineInput {
   // Either matches (4 values each: image_a, keypoint_a, image_b, keypoint_b) or
   // tracks; tracks take precedence when not empty.
   std::vector<std::int32_t> matches;
+  // Optional, one per match, higher is better (a matcher's confidence): the order of
+  // ConflictPolicy::Greedy and of Repair's split of oversized components.
+  std::vector<double> match_score;
   Tracks tracks;
   // Line segments for the Manhattan prior are scene.line_image, line_xy and
   // line_sigma; their axes are assigned by refine (scene.line_axis is ignored).
