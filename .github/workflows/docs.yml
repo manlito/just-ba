@@ -1,5 +1,6 @@
 # The documentation site (document 08, D119), with the live demo (D148). Runs on
-# every push to main, which builds the site and deploys it, and by hand:
+# every push to main and again after every successful release (release.yml), which
+# build the site and deploy it, and by hand:
 #
 #   gh workflow run docs                    # build, run the docstring examples
 #   gh workflow run docs -f deploy=true     # the same, then publish to Cloudflare Pages
@@ -13,6 +14,10 @@
 # with pinned hashes (demo/tools/fetch_match_web.sh, D156). The live capture's keep rules
 # (demo/web/gates.js, D157) are tested with Node first.
 #
+# The site shows the version last released (packaging/version.py latest), not the
+# checkout's project(VERSION): a push that releases deploys first with the version
+# before it, then again with its own once the release is up.
+#
 # Free hosted runner (D39). Deploying needs the repository secrets
 # CLOUDFLARE_API_TOKEN (permission "Cloudflare Pages: Edit") and
 # CLOUDFLARE_ACCOUNT_ID, and a Pages project made for direct upload, named by the
@@ -23,6 +28,10 @@ on:
   push:
     branches: [main]
     paths-ignore: ["docs/**"]
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       deploy:
@@ -49,14 +58,23 @@ jobs:
   docs:
     name: build (and deploy) the site
     runs-on: ubuntu-24.04
+    # After a release only when it succeeded (a failed one changed no version).
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     env:
-      # A push takes the defaults: the demo from poselib-gpu's main, and a deploy.
-      DEMO: ${{ github.event_name == 'push' || inputs.demo }}
-      DEPLOY: ${{ github.event_name == 'push' || inputs.deploy }}
+      # A push or a release takes the defaults: the demo from poselib-gpu's main, and a deploy.
+      DEMO: ${{ github.event_name != 'workflow_dispatch' || inputs.demo }}
+      DEPLOY: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy }}
       EMSDK_VERSION: "7.0.0"
       DAWN_RELEASE: v20261113.214538
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the tags, for the version
+      - name: Stamp the version last released
+        run: |
+          v=$(python3 packaging/version.py latest just-ba just-ba-cu12 just-ba-cu13)
+          python3 packaging/version.py set "$v"
+          echo "::notice::site version $v"
       - name: Test the live capture's keep rules and the live demo's video stepping
         run: node --test demo/web/gates.test.mjs demo/web/select.test.mjs demo/web/video_steps.test.mjs
       - uses: actions/checkout@v4
