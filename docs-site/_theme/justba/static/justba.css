@@ -101,6 +101,8 @@ a.jb-brand:hover { text-decoration: none; color: var(--text); }
 }
 .jb-search input:focus { outline: none; border-color: var(--accent); background: var(--page); }
 a.jb-toplink, a.jb-toplink:visited { font-size: 14px; color: var(--muted); }
+a.jb-gh, a.jb-gh:visited { display: inline-flex; align-items: center; color: var(--muted); }
+.jb-top a.jb-gh:hover { text-decoration: none; color: var(--text); }
 
 /* Three columns: navigation, content, the page's own contents */
 .jb-wrap {

@@ -8,7 +8,9 @@
 # or PyPI, with its patch bumped, or project(VERSION) in CMakeLists.txt when that is
 # higher (a minor or major release is an edit there). It is written into the
 # checkout before each build, and the tag vX.Y.Z is pushed once every package is up.
-# Pushes that change only the planning notes in docs/ release nothing.
+# Pushes that change only documentation release nothing: the planning notes in
+# docs/, the site in docs-site/ and its workflow, the live demo in demo/ (never in a
+# wheel) and Markdown files.
 #
 # Free hosted runners only (D39). Three packages (D114): just-ba (CPU, and Metal on
 # macOS) for Linux x86_64, macOS arm64 and Windows x86_64, with the sdist;
@@ -21,7 +23,12 @@ name: release
 on:
   push:
     branches: [main]
-    paths-ignore: ["docs/**"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "docs-site/**"
+      - "demo/**"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
     inputs:
       publish:

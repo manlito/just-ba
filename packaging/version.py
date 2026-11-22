@@ -1,6 +1,7 @@
 """The version a release publishes (D152), and writing it into CMakeLists.txt.
 
     python packaging/version.py next just-ba just-ba-cu12 just-ba-cu13
+    python packaging/version.py latest just-ba just-ba-cu12 just-ba-cu13
     python packaging/version.py set 0.1.3
 
 ``next`` prints the version the release workflow publishes: the highest of the git
@@ -10,9 +11,13 @@ how a minor or major release is made (edit it in the change that warrants it).
 Nothing released yet: ``project(VERSION)`` itself. Reading PyPI as well as the
 tags means a release whose tag was not pushed is still never published twice.
 
+``latest`` prints the version last released, the highest of the same tags and PyPI
+versions; or ``project(VERSION)`` when nothing is released yet. The documentation
+site shows it (docs.yml), so the site names the version a reader installs.
+
 ``set`` writes a version into ``project(VERSION)``, the one source the package,
-``_build_info`` and the C++ library read (D114). Run by the release workflow
-only, before building; never commit the result.
+``_build_info`` and the C++ library read (D114). Run by the release and docs
+workflows only, before building; never commit the result.
 
 Standard library only (it runs on every runner before anything is installed).
 """
@@ -73,6 +78,11 @@ def next_version(packages: list[str]) -> Version:
     return max(base, bumped)
 
 
+def latest_version(packages: list[str]) -> Version:
+    released = tag_versions() + [v for p in packages for v in pypi_versions(p)]
+    return max(released) if released else cmake_version()
+
+
 def set_version(text: str) -> None:
     if not parse(text):
         sys.exit(f"version.py: not a version X.Y.Z: {text}")
@@ -88,6 +98,8 @@ def set_version(text: str) -> None:
 def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "next":
         print("%d.%d.%d" % next_version(sys.argv[2:]))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "latest":
+        print("%d.%d.%d" % latest_version(sys.argv[2:]))
     elif len(sys.argv) == 3 and sys.argv[1] == "set":
         set_version(sys.argv[2])
     else:
