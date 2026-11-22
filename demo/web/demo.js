@@ -9,7 +9,15 @@
 // with XFeat and LighterGlue, features=flexglue with ALIKED and FlexGlue; n=k keeps the
 // first k sample images; backends=cpu|webgpu|both; focal=guess drops the samples' focal lengths, as for photos of
 // the visitor's own (1.2 times the larger side, then searched for).
+//
+// Videos (D167): the frames to use are chosen here, by the live capture's keep rules (select.js) on frames the page
+// seeks to (video_source.js); each video is a camera of its own. video=<url>[,<url>] starts with those videos instead
+// of the sample set, rate=<frames looked at per second of video> (6), select=evenly keeps frames at even intervals
+// instead (no matching while choosing). debug=1 puts the page's state in window.demo.
 import * as FW from './flexglue_weights.js';
+import * as G from './gates.js';
+import { FrameSelector, minKeypointsFor } from './select.js';
+import { RATE, Stepper, focalFromMm35, grab, openVideo, readVideoMeta, seekTo, selectFrames } from './video_source.js';
 
 const params = new URLSearchParams(location.search);
 const $ = id => document.getElementById(id);
@@ -32,7 +40,9 @@ const FEATURES = {
 };
 
 const state = {
-  images: [],         // { name, file, bitmap, data, focal (pixels of the scaled image, NaN: unknown), kp, feat, tKp, tDesc, thumb }
+  images: [],         // { name, file, bitmap, data, focal (pixels of the scaled image, NaN: unknown), kp, feat, tKp, tDesc, thumb,
+                      //   camera (0: a photo; k: a frame of the k-th video added) }
+  cameras: 0,         // videos added since the images were cleared
   extractor: null, extractorKey: '',
   matcher: null, matcherFeatures: '', weights: {}, precision: 'fp32',   // weights by feature set (not FlexGlue's)
   flexglue: { ready: false, bytes: null },   // FlexGlue's weights: kept in this browser, or bytes for this visit only
@@ -96,16 +106,16 @@ function rgba(bitmap) {
   return g.getImageData(0, 0, bitmap.width, bitmap.height);
 }
 
-// entries: [{ name, blob, focal (pixels of the original file, or NaN) }]
+// entries: [{ name, blob, focal (pixels of the original file, or NaN), camera (a video's frame; else absent) }]
 async function addImages(entries) {
-  for (const { name, blob, focal } of entries) {
+  for (const { name, blob, focal, camera = 0 } of entries) {
     if (state.images.length >= MAX_IMAGES) {
       setStatus(`At most ${MAX_IMAGES} images.`, true);
       break;
     }
     try {
       const { bitmap, scale } = await bitmapOf(blob);
-      state.images.push({ name, blob, focalOriginal: focal, focal: focal * scale, bitmap, data: rgba(bitmap) });
+      state.images.push({ name, blob, focalOriginal: focal, focal: focal * scale, bitmap, data: rgba(bitmap), camera });
     } catch (e) {
       setStatus(`Cannot read ${name}: ${e.message}`, true);
     }
@@ -116,7 +126,7 @@ async function addImages(entries) {
 
 // Images, keypoints and matches follow the size setting: read the files again.
 async function rescale() {
-  const entries = state.images.map(im => ({ name: im.name, blob: im.blob, focal: im.focalOriginal }));
+  const entries = state.images.map(im => ({ name: im.name, blob: im.blob, focal: im.focalOriginal, camera: im.camera }));
   for (const im of state.images) im.feat?.destroy(), im.bitmap.close();
   state.images = [];
   await addImages(entries);
@@ -139,8 +149,163 @@ function invalidate() {
 function clearImages() {
   for (const im of state.images) im.feat?.destroy(), im.bitmap.close();
   state.images = [];
+  state.cameras = 0;
   invalidate();
   renderThumbs();
+}
+
+// ---- videos: the frames to use, chosen by the live capture's keep rules (D167)
+
+const SELECTOR = { aliked: 'lightglue', xfeat: 'lighterglue', flexglue: 'flexglue' };
+const GATE_WORDS = { kept: 'kept', waiting: 'tracking', too_few_keypoints: 'too little texture', blurry: 'blurry', lost: 'lost: looking again' };
+const isVideo = f => f.type.startsWith('video/') || /\.(mp4|mov|m4v)$/i.test(f.name);
+
+// One video's frames, at most `budget` of them, as images of camera `camera`. Returns what it did.
+async function addVideo({ name, blob }, budget, camera, label) {
+  const meta = await readVideoMeta(blob).catch(() => null);
+  setStatus(`${label}${name}: opening…`);
+  const opened = await openVideo(blob, $('preview'), { cancelled: () => state.cancel });
+  $('preview').hidden = false;
+  const f = setting('features'), side = Number(setting('side')), rate = Number(params.get('rate')) || RATE;
+  const scale = Math.min(1, side / Math.max(opened.width, opened.height));
+  const w = Math.round(opened.width * scale), h = Math.round(opened.height * scale);
+  // The camera's own 35 mm equivalent (an iPhone writes it): a focal length that is known, and refined.
+  const focal = meta?.mm35 ? focalFromMm35(meta.mm35, Math.max(w, h)) : NaN;
+  // Like Recon's keypoint floor, and no more than half of what the detector is asked for.
+  const settings = { ...G.defaultSettings(), minKeypoints: Math.min(minKeypointsFor(w, h), Number(setting('keypoints')) / 2) };
+  const selector = new FrameSelector({
+    extractor: state.extractor, matcher: state.matcher, matcherKind: SELECTOR[f], kpModel: f === 'xfeat' ? 'xfeat' : 'aliked',
+    module: M, settings, anticipate: false, blurHalfLife: 6 * rate,
+  });
+  // No limit on the frames kept along the way: they are thinned to the budget as they come (below), so the whole
+  // video is covered whatever its length.
+  const stepper = new Stepper({ duration: opened.duration, fps: meta?.fps ?? 30, rate, maxFrames: Infinity,
+                                mode: params.get('select') === 'evenly' ? 'evenly' : 'overlap' });
+  const canvas = document.createElement('canvas'), still = new OffscreenCanvas(w, h);
+  // The frames in the running: { kf, t, blob }. More than twice the budget: every other one goes. A frame that
+  // goes gives up its picture and descriptors at once, and its features once the selector no longer measures
+  // against it (`leaving`).
+  let live = [], leaving = [], keptCount = 0;
+  const release = () => {
+    const measured = new Set(selector.measured());
+    leaving = leaving.filter(kf => {
+      if (measured.has(kf)) return true;
+      kf.feat?.destroy();
+      kf.feat = kf.xy = null;
+      return false;
+    });
+  };
+  const thin = keep => {
+    for (const [i, k] of live.entries()) {
+      if (keep(i)) continue;
+      k.kf.desc = null;
+      leaving.push(k.kf);
+    }
+    live = live.filter((_, i) => keep(i));
+    release();
+  };
+  const t0 = performance.now();
+  let stats;
+  try {
+    stats = await selectFrames({
+      stepper, selector, cancelled: () => state.cancel,
+      frameAt: async t => {
+        const time = await seekTo(opened.video, Math.min(t, opened.duration - 1e-3));
+        return { image: grab(opened.video, canvas, side), t: time };
+      },
+      onStep: async (c, r, t) => {
+        if (r.kept) {
+          still.getContext('2d').putImageData(r.keptImage, 0, 0);
+          live.push({ kf: r.kept, t: r.kept.tag.t, blob: await still.convertToBlob({ type: 'image/jpeg', quality: 0.92 }) });
+          keptCount++;
+          if (live.length > 2 * budget) thin(i => i % 2 === 0);
+          else release();
+        }
+        setStatus(`${label}${name}: ${t.toFixed(1)} of ${opened.duration.toFixed(1)} s, ${keptCount} frames kept (${GATE_WORDS[r.gate] ?? r.gate})`);
+        setProgress(t, opened.duration);
+      },
+    });
+    // In the video's order (the best frame of a band, or one looked at again, can come before the last kept),
+    // then evenly down to the budget.
+    live.sort((x, y) => x.t - y.t);
+    const n = Math.min(budget, live.length);
+    const chosen = new Set(Array.from({ length: n }, (_, i) => (n === 1 ? 0 : Math.round(i * (live.length - 1) / (n - 1)))));
+    selector.dispose();
+    thin(i => chosen.has(i));
+  } catch (e) {
+    selector.dispose();
+    thin(() => false);
+    throw e;
+  } finally {
+    selector.dispose();
+    opened.close();
+    $('preview').hidden = true;
+    setProgress(null);
+  }
+  const key = settingsKey();
+  for (const k of live) {
+    const { bitmap } = await bitmapOf(k.blob);
+    state.images.push({ name: `${name} @ ${k.t.toFixed(1)} s`, blob: k.blob, focalOriginal: focal, focal, bitmap, data: rgba(bitmap),
+                        camera, kp: { xy: k.kf.xy, desc: k.kf.desc }, feat: k.kf.feat, kpKey: key,
+                        tKp: k.kf.ms.keypoints, tDesc: k.kf.ms.describe });
+  }
+  return { name, frames: live.length, kept: keptCount, stats, focal, meta, width: w, height: h, seconds: (performance.now() - t0) / 1000 };
+}
+
+// entries: [{ name, blob }]. Each video gets an equal share of the images still free.
+async function addVideos(entries) {
+  if (state.busy || !entries.length || !M) return;
+  if (FEATURES[setting('features')].dense && !state.flexglue.ready) {
+    return setStatus('FlexGlue needs its weights first (Settings), or choose another matcher.', true);
+  }
+  if (state.images.length >= MAX_IMAGES) return setStatus(`At most ${MAX_IMAGES} images.`, true);
+  state.busy = true;
+  state.cancel = false;
+  setButtons();
+  $('stop').hidden = false;
+  stopPlaying();
+  const done = [];
+  let failed = null;
+  try {
+    await ensureModules();
+    for (const [v, entry] of entries.entries()) {
+      if (state.cancel) break;
+      const budget = Math.floor((MAX_IMAGES - state.images.length) / (entries.length - v));
+      if (budget < 1) break;
+      try {
+        done.push(await addVideo(entry, budget, ++state.cameras, entries.length > 1 ? `Video ${v + 1} of ${entries.length}, ` : ''));
+      } catch (e) {
+        if (e.message === 'stopped') break;
+        console.error(e);
+        failed = `${entry.name}: ${e.message}`;
+      }
+      renderThumbs();
+    }
+  } catch (e) {
+    console.error(e);
+    failed = e.message;
+  } finally {
+    state.busy = false;
+    $('stop').hidden = true;
+    setProgress(null);
+    setButtons();
+  }
+  invalidate();
+  renderThumbs();
+  const said = done.map(d => `${d.name}: ${d.frames} frames` + (d.kept > d.frames ? ` of ${d.kept} kept` : '') +
+                             (d.stats.breaks ? `, ${d.stats.breaks + 1} stretches` : '') +
+                             (d.stats.limit ? ', not looked at to its end' : '') +
+                             (Number.isFinite(d.focal) ? `, ${fmt(d.meta.mm35, 0)} mm from its metadata` : '')).join('; ');
+  if (failed) setStatus(`${said ? said + '. ' : ''}Could not use ${failed}`, true);
+  else setStatus(`${state.cancel ? 'Stopped. ' : ''}${said ? said + '. ' : ''}${state.images.length} images. Press Run.`);
+  return !failed;
+}
+
+// A video at a URL, fetched whole: the page seeks in it, which a plain static server's responses don't allow.
+async function fetchVideo(url) {
+  const r = await fetch(url).catch(() => null);
+  if (!r?.ok) throw new Error(`${url}${r ? `: ${r.status}` : ''}`);
+  return { name: decodeURIComponent(new URL(url, location.href).pathname.split('/').pop()), blob: await r.blob() };
 }
 
 async function loadSamples() {
@@ -168,8 +333,11 @@ function renderThumbs() {
     div.className = 'thumb';
     const reg = run?.registeredSet;
     if (reg && !reg.has(i)) div.classList.add('out');
+    if (im.camera) div.classList.add('video', `v${im.camera % 4}`);
+    const block = run?.image_block?.[i];
     div.title = `${i + 1}: ${im.name} (${im.bitmap.width} x ${im.bitmap.height})` +
                 (im.kp ? `, ${im.kp.xy.length / 2} keypoints` : '') +
+                (block != null && run.intrinsics?.length > 4 ? `, its camera's focal length ${fmt(run.intrinsics[4 * block], 0)} px` : '') +
                 (run?.image_error_px?.[i] != null ? `, ${fmt(run.image_error_px[i], 2)} px` : '');
     const c = document.createElement('canvas');
     c.width = 120;
@@ -293,12 +461,13 @@ const STAGES = {
 
 async function reconstruct(backend) {
   const ims = state.images, n = ims.length, pairs = state.matches.pairs;
-  const sizes = new Int32Array(2 * n), focal = new Float64Array(n), begin = new Int32Array(n + 1);
+  const sizes = new Int32Array(2 * n), focal = new Float64Array(n), camera = new Int32Array(n), begin = new Int32Array(n + 1);
   let K = 0;
   for (const [i, im] of ims.entries()) {
     sizes[2 * i] = im.bitmap.width;
     sizes[2 * i + 1] = im.bitmap.height;
     focal[i] = Number.isFinite(im.focal) ? im.focal : NaN;
+    camera[i] = im.camera ?? 0;  // a video's frames are one camera, with intrinsics of its own
     begin[i] = K;
     K += im.kp.xy.length / 2;
   }
@@ -325,7 +494,7 @@ async function reconstruct(backend) {
     M.HEAPU8.set(new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength), ptr);
     return ptr;
   };
-  const args = [n, put(sizes), put(focal), put(begin), put(xy), R, put(pimg), put(pbeg), put(mm), backend, backend];
+  const args = [n, put(sizes), put(focal), put(camera), put(begin), put(xy), R, put(pimg), put(pbeg), put(mm), backend, backend];
   const name = backend === 'cpu' ? 'CPU' : 'WebGPU';
   M.onProgress = json => {
     const p = JSON.parse(json);
@@ -340,7 +509,7 @@ async function reconstruct(backend) {
   let out;
   try {
     out = await M.ccall('demo_reconstruct', 'string',
-      ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'string', 'string'],
+      ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'string', 'string'],
       args, { async: true });
   } finally {
     for (const b of bufs) M._free(b);
@@ -438,8 +607,8 @@ function renderMatchTimes() {
   const rows = [
     ['Images', state.images.length],
     ['Keypoints per image, median', int(median(ims.map(im => im.kp.xy.length / 2)))],
-    [`${FEATURES[state.matcherFeatures]?.keypoints ?? 'Keypoints'} per image, median`, `${fmt(median(ims.map(im => im.tKp)), 0)} ms`],
-    [`${FEATURES[state.matcherFeatures]?.matcher ?? 'Matcher'} features per image, median`, `${fmt(median(ims.map(im => im.tDesc)), 0)} ms`],
+    [`${FEATURES[state.matcherFeatures]?.keypoints ?? 'Keypoints'} per image, median`, `${fmt(median(ims.map(im => im.tKp).filter(Number.isFinite)), 0)} ms`],
+    [`${FEATURES[state.matcherFeatures]?.matcher ?? 'Matcher'} features per image, median`, `${fmt(median(ims.map(im => im.tDesc).filter(Number.isFinite)), 0)} ms`],
     ['Pairs matched', `${int(m.nPairs)} in ${fmt(m.tMatch / 1000, 1)} s (${fmt(m.tMatch / m.nPairs, 0)} ms each)`],
     [`Pairs with ${MIN_MATCHES} matches or more`, `${int(m.pairs.length)}, ${int(nm)} matches`],
   ];
@@ -479,7 +648,7 @@ function renderCompare() {
     valRow('Points', r => int(r.points ?? 0)) +
     valRow('Observations', r => int(r.observations ?? 0)) +
     valRow('Mean reprojection error', r => `${fmt(r.mean_error_px, 3)} px`) +
-    valRow('Focal length found', r => (r.intrinsics?.length ? `${fmt(r.intrinsics[0], 0)} px` : '–')) +
+    valRow(runs.some(r => r.intrinsics?.length > 4) ? 'Focal length found, per camera' : 'Focal length found', focalsOf) +
     valRow('Pairs kept', r => `${r.pairs_kept ?? 0} / ${r.pairs ?? 0}`);
   // Bars: the reconstruction's time on each.
   if (cpu && gpu) {
@@ -493,6 +662,13 @@ function renderCompare() {
   $('compare-note').textContent = 'Times measured inside the reconstruction, keypoints and matching not included. ' +
     (cold ? 'This was the first WebGPU run on this page: it includes starting the device and compiling its kernels. ' +
             'Run again (keypoints and matches are reused) for warm times.' : '');
+}
+
+// The refined focal length of each intrinsics block (f, cx, cy, k each): a camera per video, and per photo size.
+function focalsOf(r) {
+  const f = [];
+  for (let b = 0; 4 * b < (r.intrinsics?.length ?? 0); b++) f.push(fmt(r.intrinsics[4 * b], 0));
+  return f.length ? `${f.slice(0, 4).join(' · ')}${f.length > 4 ? ' …' : ''} px` : '–';
 }
 
 function renderAll() {
@@ -692,20 +868,31 @@ $('clear').addEventListener('click', () => {
   setStatus('Add at least three images.');
 });
 const fromFiles = files => [...files].filter(f => f.type.startsWith('image/')).map(f => ({ name: f.name, blob: f, focal: NaN }));
-$('files').addEventListener('change', async e => {
+// Images first, then the videos among the files.
+async function addFiles(files) {
   if (state.busy) return;
-  await addImages(fromFiles(e.target.files));
-  e.target.value = '';
+  const videos = [...files].filter(isVideo).map(f => ({ name: f.name, blob: f }));
+  await addImages(fromFiles(files));
   setStatus(`${state.images.length} images. Press Run.`);
+  await addVideos(videos);
+}
+$('files').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  await addFiles(files);
+});
+$('add-videos').addEventListener('click', () => $('video-files').click());
+$('video-files').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  await addFiles(files);
 });
 const drop = $('drop');
 for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); });
 for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, () => drop.classList.remove('over'));
 drop.addEventListener('drop', async e => {
   e.preventDefault();
-  if (state.busy) return;
-  await addImages(fromFiles(e.dataTransfer.files));
-  setStatus(`${state.images.length} images. Press Run.`);
+  await addFiles(e.dataTransfer.files);
 });
 for (const inp of document.querySelectorAll('input[name=keypoints], input[name=features]')) inp.addEventListener('change', invalidate);
 for (const inp of document.querySelectorAll('input[name=features]')) inp.addEventListener('change', () => refreshFlexGlue(true));
@@ -717,6 +904,8 @@ function setButtons() {
   $('run').disabled = !state.started || state.busy || state.converting || (flex && !state.flexglue.ready);
   $('fg-pick').disabled = state.converting || state.busy || !$('fg-accept').checked;
   $('fg-remove').disabled = state.converting || state.busy;
+  for (const id of ['samples', 'add', 'add-videos', 'clear']) $(id).disabled = state.busy;
+  for (const i of document.querySelectorAll('input[name=keypoints], input[name=side]')) i.disabled = state.busy;
   for (const i of document.querySelectorAll('input[name=features]')) i.disabled = state.converting || state.busy;
 }
 
@@ -834,9 +1023,22 @@ async function start() {
     document.querySelector('input[name=backends][value=cpu]').checked = true;
     for (const v of ['both', 'webgpu']) document.querySelector(`input[name=backends][value=${v}]`).disabled = true;
   }
-  await loadSamples();
+  const videos = (params.get('video') ?? '').split(',').filter(Boolean);
+  if (!videos.length) await loadSamples();
   state.started = true;
   await refreshFlexGlue(true);
+  if (videos.length) {
+    // A video that can't be fetched or used is said so; the page stays usable (add images or videos, or the samples).
+    setStatus('Loading the videos…');
+    let entries;
+    try {
+      entries = await Promise.all(videos.map(fetchVideo));
+    } catch (e) {
+      return setStatus(`Could not load the video ${e.message}. Add images or videos, or load the sample set.`, true);
+    }
+    if (!(await addVideos(entries)) || state.cancel || state.images.length < 3) return;
+  }
   if (params.get('run') === '1') run();
 }
+if (params.get('debug') === '1') window.demo = state;
 start().catch(e => setStatus('Could not start the demo: ' + e.message, true));

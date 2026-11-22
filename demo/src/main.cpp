@@ -62,6 +62,7 @@ int usage() {
                "usage: jba_demo synth [--scene orbit|wall|grid|all] [--seed n] [--noise px] [--wrong f]\n"
                "                      [--false-pairs n] [--focal-error f] [--priors sigma] [--write dir]\n"
                "                      [--focal-jitter f] [--focal-bias f] [--groups] [options]\n"
+               "                      [--second-focal ratio] [--joint-focal-search]\n"
                "       jba_demo run capture.jbc [--intrinsics capture|reference] [--thresholds colmap|demo]\n"
                "                    [--two-view-tracks] [--tri-angle deg] [--json file] [--check] [--no-priors]\n"
                "                    [--min-pair-inliers n] [--min-pair-coverage share]\n"
@@ -266,6 +267,9 @@ int synth(const std::vector<std::string>& args) {
     else if (a == "--focal-jitter" && has_value) so.focal_jitter = std::atof(args[++i].c_str());
     else if (a == "--focal-bias" && has_value) focal_bias = std::atof(args[++i].c_str());
     else if (a == "--groups") groups = true;
+    // A second camera for the second half of the images, and the focal search before D168.
+    else if (a == "--second-focal" && has_value) so.second_focal = std::atof(args[++i].c_str());
+    else if (a == "--joint-focal-search") c.mapper.search_focal_per_block = false;
     else if (a == "--priors" && has_value) prior_sigma = std::atof(args[++i].c_str());
     else if (a == "--write" && has_value) write_dir = args[++i];
     else return usage();
@@ -294,6 +298,9 @@ int synth(const std::vector<std::string>& args) {
     for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
       for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_error;
     if (focal_error != 0.0) start.focal_unknown.assign(start.intrinsics.size() / np, 1);
+    // Two cameras of one guess: the second is given the first's focal lengths.
+    if (so.second_focal > 0.0 && so.focal_jitter <= 0.0 && focal_error != 0.0)
+      for (int k = 0; k < n_focal; ++k) start.intrinsics[np + static_cast<std::size_t>(k)] = start.intrinsics[static_cast<std::size_t>(k)];
     if (focal_bias != 0.0)
       for (std::size_t b = 0; b < start.intrinsics.size() / np; ++b)
         for (int k = 0; k < n_focal; ++k) start.intrinsics[np * b + k] *= 1.0 + focal_bias;
@@ -365,7 +372,17 @@ int synth(const std::vector<std::string>& args) {
                   100.0 * std::sqrt(sq_given / static_cast<double>(n * static_cast<std::size_t>(n_focal))), n,
                   groups ? ", grouped" : "");
     }
-    if (focal_error != 0.0)
+    if (focal_error != 0.0 && so.second_focal > 0.0 && so.focal_jitter <= 0.0) {
+      // Per camera. A block is refined once refine_min_images of its images are registered.
+      for (std::size_t b = 0; b < 2; ++b) {
+        const double truth = scene.capture.intrinsics[np * b];
+        const double refined = r.ok() && np * b < r.problem.intrinsics.size() ? r.problem.intrinsics[np * b] : 0.0;
+        std::printf("       focal, camera %zu: true %.1f px, given %.1f, searched x%.3f (%.1f), refined %.1f (%+.2f %%)\n", b + 1,
+                    truth, start.intrinsics[np * b], b < r.focal_factors.size() ? r.focal_factors[b] : 1.0,
+                    start.intrinsics[np * b] * (b < r.focal_factors.size() ? r.focal_factors[b] : 1.0), refined,
+                    100.0 * (refined / truth - 1.0));
+      }
+    } else if (focal_error != 0.0)
       std::printf("       focal: true %.1f px, given %.1f, searched x%.3f, refined %.1f\n",
                   demo::median_focal(scene.capture.model, scene.capture.intrinsics),
                   demo::median_focal(start.model, start.intrinsics), r.focal_factor,

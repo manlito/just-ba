@@ -4,7 +4,11 @@
 // block at -1 is the ungrouped run bit for bit; bad groups are refused; two groups, a
 // guessed focal length and blocks below refine_min_images work; camera.group
 // survives a capture file.
+//
+// Also the live demo's cameras (D167: a block per camera, image size and focal length)
+// and the focal search per block (D168: two cameras of one guess get a factor each).
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -163,6 +167,105 @@ int main() {
     const demo::CaptureFile back = demo::read_capture(path);
     std::filesystem::remove(path);
     check(back.capture.intrinsics_group == file.capture.intrinsics_group, "camera.group round-trips");
+    check(back.capture.block_camera.empty(), "no camera.id without cameras");
+    file.capture.block_camera.assign(blocks, 3);
+    file.capture.block_camera[0] = 1;
+    demo::write_capture(path, file);
+    check(demo::read_capture(path).capture.block_camera == file.capture.block_camera, "camera.id round-trips");
+    std::filesystem::remove(path);
+    demo::Capture bad = file.capture;
+    bad.block_camera.pop_back();
+    check(!demo::Mapper(options(0, so.noise_px)).run(bad).ok(), "a camera per block or the capture is refused");
+  }
+  // The live demo's blocks: two videos of one size and unknown focal length are two
+  // cameras; photos of one size and focal length share a block.
+  {
+    const std::int32_t size[] = {1280, 720, 1280, 720, 1280, 720, 1280, 720, 1600, 1200, 1280, 720};
+    const double nan = std::nan(""), focal[] = {nan, nan, nan, nan, 1500.0, 0.0};
+    const std::int32_t camera[] = {1, 1, 2, 2, 0, 1};
+    demo::Capture c;
+    demo::simple_radial_blocks(c, 6, size, focal, camera);
+    check(c.image_intrinsics == std::vector<std::int32_t>({0, 0, 1, 1, 2, 0}), "a block per camera");
+    check(c.focal_unknown == std::vector<std::uint8_t>({1, 1, 0}), "both videos' focal lengths are guesses");
+    check(c.intrinsics.size() == 12 && c.intrinsics[0] == 1.2 * 1280 && c.intrinsics[4] == 1.2 * 1280 &&
+              c.intrinsics[8] == 1500.0 && c.intrinsics[1] == 640.0 && c.intrinsics[2] == 360.0,
+          "the guess is 1.2 times the larger side, the principal point the centre");
+    check(c.image_size == std::vector<std::int32_t>({1280, 720, 1280, 720, 1600, 1200}), "sizes per block");
+    check(c.block_camera == std::vector<std::int32_t>({1, 2, 0}), "each block's camera");
+    demo::simple_radial_blocks(c, 6, size, focal, nullptr);
+    check(c.image_intrinsics == std::vector<std::int32_t>({0, 0, 0, 0, 1, 0}) && c.focal_unknown.size() == 2,
+          "without cameras, a block per size and focal length");
+  }
+
+  // Two cameras, the second's focal length half the first's, both given 1.5 times the
+  // first's and marked a guess: searched per block, each start lands within 5 % of its
+  // truth; with one factor for both, one of them can't.
+  for (const char* name : {"orbit", "wall", "grid"}) {
+    demo::SceneOptions so;
+    so.seed = 3;
+    so.second_focal = 0.5;
+    const demo::Scene scene = demo::make_scene(name, so);
+    const std::size_t np = static_cast<std::size_t>(jba::num_params(scene.capture.model));
+    demo::Capture c = scene.capture;
+    check(c.intrinsics.size() == 2 * np, "two blocks");
+    const std::size_t n_focal = c.model == jba::CameraModel::Pinhole ? 2 : 1;
+    const double truth[2] = {c.intrinsics[0], c.intrinsics[np]};
+    for (std::size_t k = 0; k < n_focal; ++k) {
+      c.intrinsics[k] *= 1.5;
+      c.intrinsics[np + k] = c.intrinsics[k];
+    }
+    c.focal_unknown.assign(2, 1);
+    demo::MapperOptions search = options(3, so.noise_px);
+    search.search_focal = true;
+    const demo::Reconstruction r = demo::Mapper(search).run(c);
+    check(r.ok() && r.focal_factors.size() == 2, std::string(name) + ": a factor per block");
+    if (r.ok() && r.focal_factors.size() == 2) {
+      for (std::size_t b = 0; b < 2; ++b)
+        check(std::abs(c.intrinsics[np * b] * r.focal_factors[b] / truth[b] - 1.0) < 0.05,
+              std::string(name) + ": camera " + std::to_string(b + 1) + "'s search lands on its focal length");
+      check(r.focal_factor == std::min(r.focal_factors[0], r.focal_factors[1]), "the scalar is the lower median");
+      check(focal_rms(scene, r) < 0.01, std::string(name) + ": both refined to their truth");
+      std::printf("%s, two cameras: searched x%.3f and x%.3f (truth x%.3f and x%.3f), refined rms %.4f %%\n", name,
+                  r.focal_factors[0], r.focal_factors[1], truth[0] / c.intrinsics[0], truth[1] / c.intrinsics[np],
+                  100.0 * focal_rms(scene, r));
+    }
+    search.search_focal_per_block = false;
+    const demo::Reconstruction joint = demo::Mapper(search).run(c);
+    check(joint.focal_factors.size() == 2 && joint.focal_factors[0] == joint.focal_factors[1] &&
+              joint.focal_factor == joint.focal_factors[0],
+          std::string(name) + ": one factor without the per-block search");
+    // The two blocks as one camera's (its photos of two sizes, say), or with no cameras
+    // named: one factor, the search before D168 bit for bit. A 3-pair block gets no
+    // factor of its own.
+    for (const std::vector<std::int32_t>& cameras : {std::vector<std::int32_t>{7, 7}, std::vector<std::int32_t>{}}) {
+      demo::Capture same = c;
+      same.block_camera = cameras;
+      search.search_focal_per_block = true;
+      const demo::Reconstruction r1 = demo::Mapper(search).run(same);
+      check(same_result(r1, joint) && r1.focal_factors == joint.focal_factors && r1.focal_factor == joint.focal_factor,
+            std::string(name) + ": blocks of one camera share a factor, as before");
+    }
+    // One guessed block beside a known one: from its own pairs too.
+    demo::Capture half = c;
+    for (std::size_t k = 0; k < n_focal; ++k) half.intrinsics[k] = scene.capture.intrinsics[k];
+    half.focal_unknown = {0, 1};
+    search.search_focal_per_block = true;
+    const demo::Reconstruction one = demo::Mapper(search).run(half);
+    check(one.ok() && one.focal_factors.size() == 2 && one.focal_factors[0] == 1.0 &&
+              std::abs(half.intrinsics[np] * one.focal_factors[1] / truth[1] - 1.0) < 0.05 && focal_rms(scene, one) < 0.01,
+          std::string(name) + ": one guessed block beside a known one is found");
+    // A capture of one block: the search before D168, bit for bit.
+    demo::SceneOptions plain;
+    plain.seed = 3;
+    const demo::Scene single = demo::make_scene(name, plain);
+    demo::Capture guess = single.capture;
+    for (std::size_t k = 0; k < n_focal; ++k) guess.intrinsics[k] *= 1.5;
+    guess.focal_unknown.assign(1, 1);
+    const demo::Reconstruction with = demo::Mapper(search).run(guess);
+    search.search_focal_per_block = false;
+    check(same_result(with, demo::Mapper(search).run(guess)) && with.focal_factors == std::vector<double>({with.focal_factor}),
+          std::string(name) + ": one block is searched as before");
+    std::printf("%s, one known: searched x%.3f, refined rms %.4f %%\n", name, one.focal_factors[1], 100.0 * focal_rms(scene, one));
   }
   if (failures == 0) std::printf("all passed\n");
   return failures == 0 ? 0 : 1;

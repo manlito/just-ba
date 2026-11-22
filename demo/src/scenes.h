@@ -21,6 +21,10 @@ struct SceneOptions {
   // > 0: a block per image, its focal length the scene's times 1 + focal_jitter times a
   // standard normal draw (autofocus, D166); the keypoints are of each image's own.
   double focal_jitter = 0.0;
+  // > 0 (without focal_jitter): the second half of the images are a second camera's, in
+  // a block of their own whose focal length is the scene's times this (a phone's
+  // other lens, D168).
+  double second_focal = 0.0;
 };
 
 struct Scene {

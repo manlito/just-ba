@@ -66,6 +66,15 @@ void observe(Scene& s, Rng& rng, const SceneOptions& o, const std::vector<double
       s.capture.image_intrinsics.push_back(static_cast<std::int32_t>(i));
     }
   }
+  else if (o.second_focal > 0.0) {
+    const std::vector<double> block = s.capture.intrinsics;
+    const int n_focal = s.capture.model == jba::CameraModel::Pinhole ? 2 : 1;
+    s.capture.intrinsics.insert(s.capture.intrinsics.end(), block.begin(), block.end());
+    for (int k = 0; k < n_focal; ++k) s.capture.intrinsics[block.size() + static_cast<std::size_t>(k)] *= o.second_focal;
+    s.capture.image_intrinsics.clear();
+    for (std::size_t i = 0; i < n_img; ++i) s.capture.image_intrinsics.push_back(i < n_img / 2 ? 0 : 1);
+    s.capture.block_camera = {0, 1};
+  }
   const std::size_t np = static_cast<std::size_t>(jba::num_params(s.capture.model));
   s.capture.keypoints.assign(n_img, {});
   s.kp_point.assign(n_img, {});

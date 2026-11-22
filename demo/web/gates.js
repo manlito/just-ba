@@ -61,6 +61,11 @@ export function floorOf(minMatches = 50, minCoverage = 0.05) {
 
 const under = (floor, s, k) => s.inliers < k * floor.inliers || s.coverage < k * floor.coverage;
 
+/** The frame's own gates, whatever it overlaps: 'too_few_keypoints', 'blurry' or null. */
+export function ownGate(s, f) {
+  return f.keypoints < s.minKeypoints ? 'too_few_keypoints' : s.rejectBlur && f.blurry ? 'blurry' : null;
+}
+
 /**
  * The rules. `f`: { shoot, hasMatcher, hasReference, keypoints (confident), blurry,
  * overlap (null without a reference), support: { inliers, coverage }, overlap2 (null) }.
@@ -75,7 +80,7 @@ export function decide(s, floor, f) {
   if (f.shoot) return v('kept', { kind: 'due', why: 'shoot' }, true);
   if (!s.auto) return v('paused', no, false);
   if (!f.hasMatcher) return v('no_matcher', no, false);
-  const own = f.keypoints < s.minKeypoints ? 'too_few_keypoints' : s.rejectBlur && f.blurry ? 'blurry' : null;
+  const own = ownGate(s, f);
   if (!f.hasReference) return own ? v(own, no, false) : v('kept', { kind: 'due', why: 'first' }, true);
   const o = f.overlap ?? 0;
   if (o < LOST_OVERLAP) return v('lost', { kind: 'overdue', why: 'lost' }, false);
@@ -154,11 +159,14 @@ export function slowDown(drop, blurry) {
   return drop > SLOW_DOWN_DROP || (blurry && drop > SLOW_DOWN_DROP / 2);
 }
 
-/** Blur against the session's sharp level, a slowly decaying maximum of the sharpness. */
+/**
+ * Blur against the session's sharp level, a slowly decaying maximum of the sharpness.
+ * `halfLife`: frames in which the level halves (a video's frames come at their own rate).
+ */
 export class Blur {
-  constructor() { this.level = 0; }
+  constructor(halfLife = BLUR_HALF_LIFE) { this.level = 0; this.halfLife = halfLife; }
   blurry(s) {
-    const decay = Math.pow(0.5, 1 / BLUR_HALF_LIFE);
+    const decay = Math.pow(0.5, 1 / this.halfLife);
     this.level = Math.max(this.level * decay, s);
     return s < BLUR_FRACTION * this.level;
   }

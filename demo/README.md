@@ -15,6 +15,7 @@ not, and a default build does not look for it.
 | `src/compare.h`, `src/compare.cpp`, `src/align.*` | A reconstruction against another of the same capture: COLMAP's, or the truth (document 05, level 3). |
 | `src/main.cpp` | `jba_demo`, the command line. |
 | `tests/test_cancel.cpp` | `demo_cancel`: the mapper's progress callback (below). |
+| `tests/test_groups.cpp` | `demo_groups`: the group prior (D166), the live demo's blocks (D167) and the focal search per block (D168). |
 | `tools/colmap_capture.py` | A COLMAP database, and its model, to a capture file. Standard library only. |
 | `tools/colmap_compare.sh` | One scene from its images: COLMAP, then the capture file, then `jba_demo run`. |
 | `tools/colmap_table.py` | The comparison over several capture files, as Markdown tables. |
@@ -24,7 +25,9 @@ not, and a default build does not look for it.
 | `tools/fetch_match_web.sh` | The live demo's keypoints and matcher modules, from just-keypoints' and just-matching's sites. |
 | `web/capture.html`, `web/capture.js`, `web/capture_worker.js`, `web/weights_worker.js` | The live capture (D157): the page, its camera loop, the mapper session in a worker (which matches LightGlue's and LighterGlue's map pairs too, D159), FlexGlue's weights from the visitor's checkpoint. |
 | `web/flexglue_weights.js` | FlexGlue's weights kept in the browser, shared by the live capture and the live demo (D160). |
-| `web/gates.js`, `web/gates.test.mjs` | The live capture's keep rules, ported from Like Recon, and their tests (`node --test demo/web/gates.test.mjs`). |
+| `web/gates.js`, `web/gates.test.mjs` | The live capture's keep rules, ported from Like Recon, and their tests (`node --test demo/web/*.test.mjs` runs these and the two below). |
+| `web/select.js`, `web/select.test.mjs` | The keep loop apart from its page (`FrameSelector`, D167): the live capture's camera frames and the live demo's video frames go through it. Its tests run it on a generated scene (`web/select_fakes.mjs`). |
+| `web/video_source.js`, `web/video_steps.test.mjs` | The live demo's videos (D167): seeking in a `<video>`, the `Stepper` that chooses the times to look at (Like Recon's video import mirrors it), a video's frame rate and 35 mm focal length from its boxes. |
 | `web/view.js` | The live capture's 3D view. |
 
 ## Build
@@ -51,7 +54,10 @@ refines them), `--focal-jitter f` (a block per image, its true focal length off 
 scene's by f times a normal draw, as autofocus leaves them; the mapper is given their
 mean), `--focal-bias f` (the focal lengths given that much too large, not marked as a
 guess), `--groups` (the blocks in one group of the intrinsics prior, D166; with the
-two above it prints the per-image focal error), `--group-sigma tie,target` (the group
+two above it prints the per-image focal error), `--second-focal r` (the second half of
+the images from a second camera of r times the focal length; with `--focal-error` both
+cameras are given the first's guess, and each camera is searched from its own pairs, D168),
+`--joint-focal-search` (one factor for every guessed block, the search before D168), `--group-sigma tie,target` (the group
 prior's focal sigmas as fractions at 1 px of noise, inf for none; default 0.01,inf),
 `--poses auto|cpu|metal|cuda|webgpu` (poselib-gpu's backend),
 `--ba cpu|metal|cuda|webgpu` (the solver's), `--refine none|focal|focal+distortion`
@@ -197,6 +203,7 @@ convention of the intrinsics (COLMAP's: the centre of the first pixel at 0.5, 0.
 | `camera.size` | i32 | [B, 2] | no | Width, height |
 | `camera.focal_unknown` | u8 | [B] | no | 1: the block's focal length is only a guess. Without the section, a focal length of exactly 1.2 times the larger side of `camera.size` (COLMAP's guess) counts as one |
 | `camera.group` | i32 | [B] | no | Group of each block for the hierarchical intrinsics prior (D165, D166), -1 for none: the refined blocks of a group are tied to their shared mean, the mean loosely to the group's given values. Absent: no groups |
+| `camera.id` | i32 | [B] | no | The camera each block's images come from, any numbers (a camera can have several blocks: two sizes, two focal values). The focal search treats each camera on its own (D168). Absent: one camera |
 | `image.intrinsics` | i32 | [N] | if B > 1 | Block of each image |
 | `image.names` | u8 | [bytes] | no | N names, separated by `\n` |
 | `image.prior_position` | f64 | [N, 3] | no | Position priors (D150): each image's measured camera centre in a metric frame whose third axis is up (east, north, up); NaN for an image without one |
@@ -228,6 +235,32 @@ keypoints and matches are kept, so reconstructing again costs only the reconstru
 URL parameters: `run=1` runs once the sample set is loaded, `n=k` keeps its first k
 images, `backends=cpu|webgpu|both`, `focal=guess` drops the samples' focal lengths (as
 for the visitor's own photos: searched for).
+
+Videos (D167): **Add videos…** (or a drop) takes video files, and the page chooses the
+frames. It seeks through each video, 6 frames a second of video (`rate=`), and gives each
+frame to the live capture's keep rules (`web/select.js`): a frame is kept when it still
+sees about half of the last one kept. Where the rules lose the last keyframe the page
+looks again at half the step; after a second of video still lost (a cut) it starts a
+new chain. The best frame since the last one kept is kept at the end of the video, and
+on Stop. Each video is a camera with intrinsics of its own, so a phone's main lens and
+its ultrawide, or two resolutions, go into one model; a 35 mm equivalent focal length in
+the file (iPhones write one) is used, otherwise the focal length is searched for per
+camera (D168). Every pair is still matched, so the 60 images are shared: each video gets
+an equal part of what is free, thinned evenly when more were kept. URL parameters:
+`video=<url>[,<url>]` starts with those videos instead of the sample set, `select=evenly`
+keeps the sharpest of a few frames per interval without matching.
+
+Tried in the Claude desktop app's browser (Chromium) on an M5 Pro, 2026-11-21, with
+house-04's 41 keyframes as a 13 s video (ffmpeg's motion interpolation, 24 frames a
+second, 1280 px) and the same video reversed, cropped by 1.5 and scaled to 960 px:
+30 frames from each (31 and 35 kept) in under a minute a video, ALIKED + LightGlue; two
+cameras, their focal lengths searched at 0.66 and 0.83 of the guess and refined to 987
+and 1,109 px on the CPU (44 of 60 registered, 4,021 points, 1.22 px) and 970 and 1,091 px
+on WebGPU (43 of 60): 1.12 apart, as the crop and the scaling make them (1.125). With
+the first video's focal length from its metadata (26 mm written into a copy of it:
+961 px) the second was searched alone, 990 and 1,109 px. The frames not registered are
+interpolated ones; a first run registered 51. The focal search is one per camera: 20 s
+of the CPU's 32 s here, 3 s on WebGPU.
 
 Emscripten 7.0.0 and emdawnwebgpu from Dawn's release (D122). Emscripten needs Python
 3.10 or later (`EMSDK_PYTHON` if the first `python3` on the path is older).
@@ -291,7 +324,10 @@ worker that ends afterwards, and kept in the origin's private file system
 (`flexglue-fp16.jmtw`, 284 MB). Phones default to LighterGlue (XFeat keypoints), 1,024 keypoints and a
 640 px working image. URL parameters: `matcher=flexglue|lightglue|lighterglue`, `keypoints=1024|2048`,
 `side=<px>`, `debug=1`, and for testing without a camera `video=<url>` (a recorded video
-instead, `rate=` its playback rate).
+instead, `rate=` its playback rate); **Use a video file…** in the Camera panel does the
+same with a file (**Use the camera** goes back). The video waits on its first frame and
+plays once the capture is ready. A video played this way is a camera: frames are taken
+as fast as the page checks them. The live demo's videos (above) are looked at frame by frame instead.
 
 Tried in Chrome 156 on an M5 Pro with house-04's 41 keyframes made into a video
 (ffmpeg's motion interpolation, 12 frames a second, played at half speed): FlexGlue kept
