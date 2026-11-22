@@ -38,7 +38,7 @@ API_GROUPS = [
       "write_result", "export_colmap"]),
     ("Refining a capture", "Keypoints, matches and pose priors in, a refined reconstruction out.",
      ["refine", "RefineOptions", "RefineResult", "initialize_poses", "PoseInitialization", "build_tracks", "Tracks",
-      "TrackOptions", "TrackStats", "ConflictPolicy", "TriangulationOptions"]),
+      "TrackOptions", "TrackStats", "ConflictPolicy", "GreedyConflict", "TriangulationOptions"]),
     ("Solving", "Levenberg-Marquardt on a problem that already has its points and observations.",
      ["solve", "SolverOptions", "SolverSummary", "IterationSummary", "Termination", "Loss", "LossType",
       "PriorDefaults", "GaugeMode", "Gauge", "choose_gauge", "store_losses", "with_problem_losses"]),
