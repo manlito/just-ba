@@ -205,6 +205,8 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
   if (!in.keypoint_sigma.empty() &&
       in.keypoint_sigma.size() != static_cast<std::size_t>(in.keypoints.begin.back()))
     throw std::invalid_argument("refine: keypoint_sigma must have one value per keypoint");
+  if (!in.match_score.empty() && in.match_score.size() * 4 != in.matches.size())
+    throw std::invalid_argument("refine: match_score must have one value per match");
   const auto n_kp = static_cast<std::size_t>(in.keypoints.begin.back());
   if (!in.keypoint_depth.empty() && in.keypoint_depth.size() != n_kp)
     throw std::invalid_argument("refine: keypoint_depth must have one value per keypoint");
@@ -304,7 +306,7 @@ RefineResult refine(const RefineInput& in, const RefineOptions& o) {
     if (in.tracks.size() > 0) {
       tracks = in.tracks;
     } else {
-      tracks = build_tracks(in.keypoints, in.matches, topt, &cams, &out.track_stats);
+      tracks = build_tracks(in.keypoints, in.matches, topt, &cams, &out.track_stats, &in.match_score);
     }
 
     // One point per track: observations on active images of the track's main

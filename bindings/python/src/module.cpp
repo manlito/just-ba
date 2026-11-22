@@ -268,9 +268,21 @@ NB_MODULE(_core, m) {
       .value("NO_CONVERGENCE", jba::Termination::NoConvergence)
       .value("FAILURE", jba::Termination::Failure)
       .value("CANCELLED", jba::Termination::Cancelled);
-  nb::enum_<jba::ConflictPolicy>(m, "ConflictPolicy", "A track with two keypoints in one image: DROP removes it; REPAIR splits it by triangulation from the poses.")
+  nb::enum_<jba::ConflictPolicy>(m, "ConflictPolicy",
+                                  "A component with two keypoints in one image: DROP removes it; REPAIR splits it by "
+                                  "triangulation from the poses; GREEDY never makes one: matches are applied best "
+                                  "score first, and two tracks are joined only if they share no image.")
       .value("DROP", jba::ConflictPolicy::Drop)
-      .value("REPAIR", jba::ConflictPolicy::Repair);
+      .value("REPAIR", jba::ConflictPolicy::Repair)
+      .value("GREEDY", jba::ConflictPolicy::Greedy);
+  nb::enum_<jba::GreedyConflict>(m, "GreedyConflict",
+                                 "GREEDY: a match whose two tracks already share an image. SPLIT skips it (the "
+                                 "tracks stay apart, breaking the loop); DROP_OBSERVATIONS joins them without that "
+                                 "image (both keypoints dropped, the image blocked for the track); DROP_TRACK drops "
+                                 "the joined track, and later matches to it are skipped.")
+      .value("SPLIT", jba::GreedyConflict::Split)
+      .value("DROP_OBSERVATIONS", jba::GreedyConflict::DropObservations)
+      .value("DROP_TRACK", jba::GreedyConflict::DropTrack);
 
   // --- Problem -------------------------------------------------------------
   nb::class_<jba::Problem> problem(
@@ -665,15 +677,41 @@ NB_MODULE(_core, m) {
       .def_rw("min_views", &jba::TrackOptions::min_views)
       .def_rw("max_views", &jba::TrackOptions::max_views)
       .def_rw("conflict_policy", &jba::TrackOptions::conflict_policy)
-      .def_rw("check_clean", &jba::TrackOptions::check_clean)
-      .def_rw("triangulation", &jba::TrackOptions::triangulation);
+      .def_rw("check_clean", &jba::TrackOptions::check_clean,
+              "With cameras, also run the geometric check (stage 2) on clean components.")
+      .def_rw("triangulation", &jba::TrackOptions::triangulation)
+      .def_rw("greedy_conflict", &jba::TrackOptions::greedy_conflict,
+              "GREEDY: what to do with a match that meets a conflict (GreedyConflict); default SPLIT.")
+      .def_rw("max_repair_observations", &jba::TrackOptions::max_repair_observations,
+              "REPAIR: a conflicted component with more observations is first split by the greedy merge over its "
+              "own matches; the pieces are then checked. 0: no cap.")
+      .def_rw("num_threads", &jba::TrackOptions::num_threads, "Threads of the geometric check; 0: all.");
   nb::class_<jba::TrackStats>(m, "TrackStats")
       .def_ro("rejected_matches", &jba::TrackStats::rejected_matches)
       .def_ro("components", &jba::TrackStats::components)
       .def_ro("clean", &jba::TrackStats::clean)
       .def_ro("conflicted", &jba::TrackStats::conflicted)
       .def_ro("tracks", &jba::TrackStats::tracks)
-      .def_ro("dropped_observations", &jba::TrackStats::dropped_observations);
+      .def_ro("dropped_observations", &jba::TrackStats::dropped_observations)
+      .def_ro("largest_component", &jba::TrackStats::largest_component, "Observations in the largest component.")
+      .def_ro("largest_component_images", &jba::TrackStats::largest_component_images, "Distinct images in it.")
+      .def_ro("split_components", &jba::TrackStats::split_components,
+              "REPAIR: components over max_repair_observations, split greedily first.")
+      .def_ro("conflicting_matches", &jba::TrackStats::conflicting_matches,
+              "GREEDY (and REPAIR's split): matches whose two tracks already shared an image.")
+      .def_ro("refused_matches", &jba::TrackStats::refused_matches,
+              "GREEDY (and REPAIR's split): matches not applied (a conflict under SPLIT, or a match touching a "
+              "dropped track or keypoint).")
+      .def("__repr__", [](const jba::TrackStats& t) {
+        return "TrackStats(tracks=" + std::to_string(t.tracks) + ", components=" + std::to_string(t.components) +
+               ", clean=" + std::to_string(t.clean) + ", conflicted=" + std::to_string(t.conflicted) +
+               ", largest_component=" + std::to_string(t.largest_component) + " in " +
+               std::to_string(t.largest_component_images) + " images, rejected_matches=" +
+               std::to_string(t.rejected_matches) + ", conflicting_matches=" + std::to_string(t.conflicting_matches) +
+               ", refused_matches=" + std::to_string(t.refused_matches) +
+               ", split_components=" + std::to_string(t.split_components) +
+               ", dropped_observations=" + std::to_string(t.dropped_observations) + ")";
+      });
   nb::class_<jba::Tracks>(m, "Tracks",
                           "Track t has observations begin[t]..begin[t+1]-1, each an (image, keypoint) pair.")
       .def(nb::init<>())
@@ -712,26 +750,37 @@ NB_MODULE(_core, m) {
   m.def(
       "build_tracks",
       [keypoints_of](nb::handle keypoints, nb::handle matches, const jba::TrackOptions& o,
-                     std::optional<const jba::Problem*> cameras) {
+                     std::optional<const jba::Problem*> cameras, nb::handle scores) {
         const auto k = keypoints_of(keypoints);
         const auto mv = from_numpy(as_array<std::int32_t>(matches, "matches"), {4}, "matches");
+        std::vector<double> sv;
+        if (!scores.is_none()) {
+          sv = from_numpy(as_array<double>(scores, "scores"), {}, "scores");
+          if (sv.size() * 4 != mv.size()) throw nb::value_error("build_tracks: scores must have shape (M,), one per match");
+        }
         jba::TrackStats st;
         jba::Tracks t;
         if (cameras && *cameras) {
           const jba::Problem& p = **cameras;
           jba::Cameras c{p.model, p.intrinsics, p.image_intrinsics, p.poses};
           nb::gil_scoped_release release;
-          t = jba::build_tracks(k, mv, o, &c, &st);
+          t = jba::build_tracks(k, mv, o, &c, &st, &sv);
         } else {
           nb::gil_scoped_release release;
-          t = jba::build_tracks(k, mv, o, nullptr, &st);
+          t = jba::build_tracks(k, mv, o, nullptr, &st, &sv);
         }
         return std::make_pair(t, st);
       },
       "keypoints"_a, "matches"_a, "options"_a.sig("TrackOptions()") = jba::TrackOptions{}, "cameras"_a = nb::none(),
-      "Tracks from pairwise matches (M, 4): image_a, keypoint_a, image_b, keypoint_b. With `cameras` (a Problem "
-      "giving the model, intrinsics and poses) conflicted components are repaired geometrically. Returns "
-      "(Tracks, TrackStats).");
+      "scores"_a = nb::none(),
+      "Tracks from pairwise matches.\n\n"
+      "keypoints: one (n_i, 2) array per image, pixels. matches: (M, 4) int, image_a, keypoint_a, image_b, "
+      "keypoint_b, keypoints local to their image. cameras: a Problem giving the model, intrinsics and poses; "
+      "with it (and REPAIR or GREEDY) every match is first checked against the poses, and REPAIR splits "
+      "conflicted components by triangulation. scores: optional (M,) float, higher is better (a matcher's "
+      "confidence); the order of GREEDY's merge and of REPAIR's split of oversized components. Without "
+      "scores that order is the epipolar error with cameras, else the order of the matches.\n\n"
+      "Returns (Tracks, TrackStats).");
 
   // --- Refine --------------------------------------------------------------
   nb::class_<jba::Covariance>(m, "Covariance", "Uncertainty of a solved problem.")
@@ -850,7 +899,20 @@ NB_MODULE(_core, m) {
         if (!image_size.is_none())
           o.image_size = from_numpy(as_array<std::int32_t>(image_size, "image_size"), {2}, "image_size");
         if (!images.is_none()) {
-          const auto v = from_numpy(as_array<std::uint8_t>(images, "images"), {}, "images");
+          // A mask, never indices: an int array would be cast silently (256 -> 0).
+          nb::object np = nb::module_::import_("numpy");
+          nb::object arr = np.attr("asarray")(images);
+          const auto kind = nb::cast<std::string>(arr.attr("dtype").attr("kind"));
+          const auto dt = nb::cast<std::string>(arr.attr("dtype").attr("name"));
+          if (kind != "b" && dt != "uint8")
+            throw nb::type_error(("export_colmap: images is a per-image mask of dtype bool (or uint8), got " + dt +
+                                  "; to export images by index, pass mask = np.zeros(N, bool); mask[idx] = True")
+                                     .c_str());
+          const auto v = from_numpy(as_array<std::uint8_t>(arr, "images"), {}, "images");
+          if (v.size() != p.num_images())
+            throw nb::value_error(("export_colmap: images must have shape (" + std::to_string(p.num_images()) +
+                                   ",), one flag per image, got " + std::to_string(v.size()))
+                                      .c_str());
           o.images.assign(v.begin(), v.end());
         }
         jba::Keypoints kp;
@@ -867,8 +929,14 @@ NB_MODULE(_core, m) {
       "problem"_a, "directory"_a, "image_names"_a = nb::none(), "image_size"_a = nb::none(), "images"_a = nb::none(),
       "keypoints"_a = nb::none(), "obs_keypoint"_a = nb::none(), "point_color"_a = nb::none(), "binary"_a = false,
       "Writes COLMAP's text model (cameras.txt, images.txt, points3D.txt) into an existing directory, or with "
-      "binary=True its binary model (cameras.bin, images.bin, points3D.bin). With keypoints (one array per "
-      "image) and obs_keypoint, POINTS2D lists every keypoint.");
+      "binary=True its binary model (cameras.bin, images.bin, points3D.bin).\n\n"
+      "image_names: one NAME per image (default image_000000, ...). image_size: (B, 2) int, width and height "
+      "per intrinsics block (default 2 cx by 2 cy). images: (N,) bool mask, one flag per image of the problem, "
+      "True to export (default: every image with an observation); not image indices: to export images idx, "
+      "pass mask = np.zeros(N, bool); mask[idx] = True. keypoints: one (n_i, 2) array per image, and "
+      "obs_keypoint: (num_observations,) int, the keypoint of each observation (RefineResult.obs_keypoint); "
+      "with both, POINTS2D lists every keypoint as COLMAP does. point_color: (num_points, 3) uint8 RGB "
+      "(default grey).");
   m.def(
       "write_result",
       [](const std::string& path, const jba::Problem& p, std::optional<const jba::Covariance*> cov,
@@ -884,7 +952,8 @@ NB_MODULE(_core, m) {
       "refine",
       [keypoints_of](const jba::Problem& scene, nb::handle keypoints, nb::handle matches,
                      std::optional<const jba::Tracks*> tracks, nb::handle keypoint_sigma,
-                     const jba::RefineOptions& o, nb::handle keypoint_depth, nb::handle keypoint_depth_sigma) {
+                     const jba::RefineOptions& o, nb::handle keypoint_depth, nb::handle keypoint_depth_sigma,
+                     nb::handle match_scores) {
         // Per keypoint, flat in image order, or one array per image.
         auto per_keypoint = [](nb::handle h, const char* name) {
           std::vector<double> out;
@@ -906,8 +975,24 @@ NB_MODULE(_core, m) {
         if (!matches.is_none()) in.matches = from_numpy(as_array<std::int32_t>(matches, "matches"), {4}, "matches");
         if (tracks && *tracks) in.tracks = **tracks;
         if (in.matches.empty() && in.tracks.size() == 0) throw nb::value_error("refine: give matches or tracks");
-        if (!keypoint_sigma.is_none())
-          in.keypoint_sigma = from_numpy(as_array<double>(keypoint_sigma, "keypoint_sigma"), {}, "keypoint_sigma");
+        if (!match_scores.is_none()) {
+          in.match_score = from_numpy(as_array<double>(match_scores, "match_scores"), {}, "match_scores");
+          if (in.matches.empty()) throw nb::value_error("refine: match_scores need matches");
+          if (in.match_score.size() * 4 != in.matches.size())
+            throw nb::value_error("refine: match_scores must have shape (M,), one per match");
+        }
+        if (!keypoint_sigma.is_none()) {
+          const auto n_kp = static_cast<std::size_t>(in.keypoints.begin.back());
+          const bool seq = nb::isinstance<nb::list>(keypoint_sigma) || nb::isinstance<nb::tuple>(keypoint_sigma);
+          if (!seq && nb::cast<int>(nb::module_::import_("numpy").attr("ndim")(keypoint_sigma)) == 0)
+            in.keypoint_sigma.assign(n_kp, nb::cast<double>(nb::module_::import_("numpy").attr("float64")(keypoint_sigma)));
+          else
+            in.keypoint_sigma = per_keypoint(keypoint_sigma, "keypoint_sigma");
+          if (in.keypoint_sigma.size() != n_kp)
+            throw nb::value_error(("refine: keypoint_sigma must be a scalar or hold one value per keypoint (" +
+                                   std::to_string(n_kp) + "), flat in image order or one array per image")
+                                      .c_str());
+        }
         if (!keypoint_depth.is_none()) in.keypoint_depth = per_keypoint(keypoint_depth, "keypoint_depth");
         if (!keypoint_depth_sigma.is_none())
           in.keypoint_depth_sigma = per_keypoint(keypoint_depth_sigma, "keypoint_depth_sigma");
@@ -916,7 +1001,16 @@ NB_MODULE(_core, m) {
       },
       "scene"_a, "keypoints"_a, "matches"_a = nb::none(), "tracks"_a = nb::none(), "keypoint_sigma"_a = nb::none(),
       "options"_a.sig("RefineOptions()") = jba::RefineOptions{}, "keypoint_depth"_a = nb::none(), "keypoint_depth_sigma"_a = nb::none(),
+      "match_scores"_a = nb::none(),
       "The main use case end to end: starting poses from the priors in `scene`, tracks from the matches, "
-      "triangulation, solve, outlier removal, repeated. keypoint_depth: a reading per keypoint (NaN for "
-      "none), flat or one array per image; scene.depth_* say what they are.");
+      "triangulation, solve, outlier removal, repeated.\n\n"
+      "scene: a Problem with the camera, pose priors and prior sets (points and observations are ignored). "
+      "keypoints: one (n_i, 2) array per image, pixels. matches: (M, 4) int, image_a, keypoint_a, image_b, "
+      "keypoint_b; or tracks: a Tracks, which takes precedence. keypoint_sigma: pixels, the standard "
+      "deviation of each keypoint's position: a scalar for all, or one value per keypoint, flat in image "
+      "order (sum of n_i) or one (n_i,) array per image; default 1. options: RefineOptions; options.tracks "
+      "sets the track building (ConflictPolicy). keypoint_depth: a reading per keypoint (NaN for none), flat "
+      "or one array per image; scene.depth_* say what they are. keypoint_depth_sigma: per keypoint, metres. "
+      "match_scores: optional (M,) float, higher is better (a matcher's confidence), the order of GREEDY's "
+      "merge and of REPAIR's split of oversized components.");
 }

@@ -18,7 +18,7 @@ from ._build_info import CUDA_VERSION, VARIANT, __version__
 if VARIANT.startswith("cu"):
     from . import _nvidia
 
-    _nvidia.preload()
+    _nvidia.preload(VARIANT)
     try:
         from . import _core
     except ImportError as e:
