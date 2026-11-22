@@ -45,9 +45,18 @@ enum class ConflictPolicy {
   Drop,    // a component with two keypoints in one image is removed (OpenMVG)
   Repair,  // it is split into tracks by triangulation from the poses (stage 2)
   // Conflict free by construction: matches are applied best first (by score, see
-  // build_tracks), and two tracks are joined only if they share no image. Needs no
-  // poses; O(M log M).
+  // build_tracks), and two tracks are joined only if they share no image (or as
+  // greedy_conflict says). Needs no poses. O(M log M) for the order, plus each join's
+  // merge of two tracks, bounded by the number of images.
   Greedy,
+};
+
+// ConflictPolicy::Greedy: what a match does when its two tracks already share an
+// image (joining them would put two keypoints of one image in one track).
+enum class GreedyConflict {
+  Split,             // the match is skipped: the tracks stay apart, which breaks the loop
+  DropObservations,  // the tracks are joined without that image: both keypoints are dropped
+  DropTrack,         // the joined track is dropped, and later matches to it are skipped
 };
 
 struct TrackOptions {
@@ -58,8 +67,12 @@ struct TrackOptions {
   // "optionally for every track"): removes wrong matches inside clean tracks.
   bool check_clean = true;
   TriangulationOptions triangulation;  // stage 2 thresholds
-  // Repair: a conflicted component with more observations than this is first split
-  // by the greedy merge over its own matches, and the pieces go through stage 2.
+  // Greedy: what to do with a match that meets a conflict. Repair's split of
+  // oversized components always splits.
+  GreedyConflict greedy_conflict = GreedyConflict::Split;
+  // Repair: a conflicted component with more observations than this (or than twice
+  // the number of images, whichever is larger) is first split by the greedy merge
+  // over its own matches, and the pieces go through stage 2.
   // Stage 2 grows faster than linearly with a component's size, and dense matches
   // over many pairs chain wrong matches into components of many thousands. 0: no cap.
   int max_repair_observations = 500;
@@ -70,7 +83,10 @@ struct TrackOptions {
 
 struct TrackStats {
   std::size_t rejected_matches = 0;  // failed the two-view check against the poses
-  std::size_t components = 0;  // connected components of the match graph
+  // Connected components of the match graph (Greedy: of the tracks it built, keypoints
+  // whose matches were all refused counted as one-observation components). clean and
+  // conflicted count them before Repair's split.
+  std::size_t components = 0;
   std::size_t clean = 0;       // with at most one keypoint per image
   std::size_t conflicted = 0;
   std::size_t tracks = 0;      // tracks produced
@@ -80,8 +96,10 @@ struct TrackStats {
   // Repair: conflicted components above max_repair_observations, split greedily
   // before stage 2.
   std::size_t split_components = 0;
-  // Greedy (and Repair's split): matches not applied because their two tracks
-  // already share an image.
+  // Greedy (and Repair's split): matches whose two tracks already shared an image,
+  // and matches not applied (a conflict under Split, or a match touching a dropped
+  // track or keypoint).
+  std::size_t conflicting_matches = 0;
   std::size_t refused_matches = 0;
 };
 

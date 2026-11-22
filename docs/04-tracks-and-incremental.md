@@ -77,7 +77,8 @@ well in all views). Not in the first version.
 | `min_views` | 2 with poses, 3 without | Shortest track kept |
 | `max_views` | 100 | Longer tracks are truncated or split |
 | `conflict_policy` | `repair` with poses, `drop` without | What to do with conflicted components; `greedy` builds conflict-free tracks best match first (D169) |
-| `max_repair_observations` | 500 | `repair` splits larger conflicted components greedily before stage 2 (D169) |
+| `greedy_conflict` | `split` | `greedy`: a match whose tracks share an image is skipped (`split`), joins them without that image (`drop_observations`), or drops the joined track (`drop_track`) (D169) |
+| `max_repair_observations` | 500 | `repair` splits larger conflicted components (at least twice the image count) greedily before stage 2 (D169) |
 | `max_angle_error_deg` | derived from prior noise | Stage 2 inlier threshold |
 | `min_tri_angle_deg` | 1.5 | Minimum triangulation angle |
 

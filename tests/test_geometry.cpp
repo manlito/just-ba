@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <random>
+#include <stdexcept>
 
 #include "check.h"
 #include "jba/camera_model.h"
@@ -198,38 +199,90 @@ int main() {
     // With cameras: the same, and the tracks are checked.
     t = jba::build_tracks(kp, matches, to, &cams, &st, &score);
     EXPECT(t.size() == 40 && all_pure(t));
-    // Repair with a cap of 1 observation: every conflicted component is split
-    // greedily first (by epipolar error), then checked. The conflict: a copy of a
-    // keypoint of image 4, matched to image 3, so it passes the epipolar check.
+    // Greedy, what a conflicting match does (without cameras; the wrong match last).
+    std::rotate(matches.begin(), matches.begin() + 4, matches.end());
+    std::rotate(score.begin(), score.begin() + 1, score.end());
+    to.greedy_conflict = jba::GreedyConflict::DropTrack;
+    t = jba::build_tracks(kp, matches, to, nullptr, &st);
+    std::printf("greedy, drop the track: %zu tracks, %zu conflicting, %zu dropped\n", t.size(), st.conflicting_matches,
+                st.dropped_observations);
+    EXPECT(t.size() == 38 && st.conflicting_matches == 1 && st.refused_matches == 0 && all_pure(t));
+    to.greedy_conflict = jba::GreedyConflict::DropObservations;
+    t = jba::build_tracks(kp, matches, to, nullptr, &st);
+    std::printf("greedy, drop the observations: %zu tracks, %zu dropped\n", t.size(), st.dropped_observations);
+    EXPECT(st.conflicting_matches == 1 && st.dropped_observations >= 2 && t.size() >= 38 && t.size() <= 39);
+    for (std::size_t q = 0; q < t.size(); ++q)
+      for (auto ob = t.begin[q] + 1; ob < t.begin[q + 1]; ++ob)
+        EXPECT(t.image[static_cast<std::size_t>(ob)] != t.image[static_cast<std::size_t>(ob - 1)]);
+    to.greedy_conflict = jba::GreedyConflict::Split;
+    // Scores must be finite.
+    score[3] = std::nan("");
+    bool threw = false;
+    try {
+      jba::build_tracks(kp, matches, to, nullptr, &st, &score);
+    } catch (const std::invalid_argument&) {
+      threw = true;
+    }
+    EXPECT(threw);
+
+    // Repair splits a conflicted component above the cap (at least twice the image
+    // count, 10 here) greedily first. The conflict: two copies of point j's keypoints
+    // in every image, chained like the originals and bridged to them, so every match
+    // passes the epipolar check; 15 observations.
     {
       int j = 0;
-      while (kp_of_point[3][static_cast<std::size_t>(j)] < 0 || kp_of_point[4][static_cast<std::size_t>(j)] < 0) ++j;
-      jba::Keypoints kp2 = kp;
-      const int k4 = kp_of_point[4][static_cast<std::size_t>(j)];
-      const double* xy = kp.at(4, k4);
-      kp2.xy.insert(kp2.xy.end(), {xy[0] + 0.1, xy[1]});
-      kp2.begin.back() += 1;
-      const auto dup = static_cast<std::int32_t>(kp2.begin[5] - kp2.begin[4] - 1);
+      for (bool all = false; !all; ++j) {
+        all = true;
+        for (int i = 0; i < 5; ++i) all = all && kp_of_point[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] >= 0;
+        if (all) break;
+      }
+      std::vector<std::vector<double>> per(5);
+      for (int i = 0; i < 5; ++i)
+        per[static_cast<std::size_t>(i)].assign(kp.xy.begin() + 2 * kp.begin[static_cast<std::size_t>(i)],
+                                                kp.xy.begin() + 2 * kp.begin[static_cast<std::size_t>(i) + 1]);
       auto m2 = matches;
-      m2.insert(m2.end(), {3, kp_of_point[3][static_cast<std::size_t>(j)], 4, dup});
+      int dup[3][5];
+      for (int c = 1; c <= 2; ++c)
+        for (int i = 0; i < 5; ++i) {
+          auto& v = per[static_cast<std::size_t>(i)];
+          const auto k = static_cast<std::size_t>(kp_of_point[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)]);
+          dup[c][i] = static_cast<int>(v.size() / 2);
+          const double x = v[2 * k] + 0.05 * c, y = v[2 * k + 1];
+          v.push_back(x);
+          v.push_back(y);
+        }
+      for (int c = 1; c <= 2; ++c) {
+        for (int i = 0; i < 4; ++i) m2.insert(m2.end(), {i, dup[c][i], i + 1, dup[c][i + 1]});
+        m2.insert(m2.end(), {3, kp_of_point[3][static_cast<std::size_t>(j)], 4, dup[c][4]});
+      }
+      jba::Keypoints kp2;
+      kp2.begin.assign(1, 0);
+      for (const auto& v : per) {
+        kp2.xy.insert(kp2.xy.end(), v.begin(), v.end());
+        kp2.begin.push_back(static_cast<std::int64_t>(kp2.xy.size() / 2));
+      }
       to.conflict_policy = jba::ConflictPolicy::Repair;
       to.max_repair_observations = 1;
-      t = jba::build_tracks(kp2, m2, to, &cams, &st);
-      std::printf("repair with the cap: %zu tracks, %zu conflicted, %zu split, %zu refused\n", t.size(), st.conflicted,
-                  st.split_components, st.refused_matches);
-      EXPECT(t.size() == 40 && st.conflicted == 1 && st.split_components == 1 && st.refused_matches == 1);
-      EXPECT(st.largest_component == st.largest_component_images + 1);
+      to.num_threads = 1;
+      const auto a = jba::build_tracks(kp2, m2, to, &cams, &st);
+      std::printf("repair with the cap: %zu tracks, %zu conflicted, largest %zu in %zu images, %zu split, %zu refused\n",
+                  a.size(), st.conflicted, st.largest_component, st.largest_component_images, st.split_components,
+                  st.refused_matches);
+      EXPECT(st.conflicted == 1 && st.split_components == 1 && st.refused_matches >= 1);
+      EXPECT(st.largest_component == 15 && st.largest_component_images == 5);
+      for (std::size_t q = 0; q < a.size(); ++q)
+        for (auto ob = a.begin[q] + 1; ob < a.begin[q + 1]; ++ob)
+          EXPECT(a.image[static_cast<std::size_t>(ob)] != a.image[static_cast<std::size_t>(ob - 1)]);
+      // Results do not depend on the thread count, the split included.
+      to.num_threads = 4;
+      const auto b = jba::build_tracks(kp2, m2, to, &cams, &st);
+      EXPECT(a.begin == b.begin && a.image == b.image && a.keypoint == b.keypoint);
+      // Under the cap: the full repair, no split.
       to.max_repair_observations = 500;
-      t = jba::build_tracks(kp2, m2, to, &cams, &st);
-      EXPECT(t.size() == 40 && st.conflicted == 1 && st.split_components == 0);
+      jba::build_tracks(kp2, m2, to, &cams, &st);
+      EXPECT(st.conflicted == 1 && st.split_components == 0);
+      to.num_threads = 0;
     }
-    // Results do not depend on the thread count.
-    to.max_repair_observations = 500;
-    to.num_threads = 1;
-    const auto one = jba::build_tracks(kp, matches, to, &cams, &st);
-    to.num_threads = 4;
-    const auto four = jba::build_tracks(kp, matches, to, &cams, &st);
-    EXPECT(one.begin == four.begin && one.image == four.image && one.keypoint == four.keypoint);
   }
 
   // Starting poses: exact relative priors reproduce the poses up to the root's

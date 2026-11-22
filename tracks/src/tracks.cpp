@@ -75,35 +75,68 @@ double epipolar_error(const Ray& ra, const Ray& rb) {
   return sa > 0 && tb > 0 ? err : kInf;
 }
 
-// Union-find whose sets carry their sorted images: join only when they share none.
+// Union-find whose sets carry their observations sorted by image: (image, keypoint
+// id), keypoint id -1 for an image blocked by GreedyConflict::DropObservations.
 struct GreedyMerge {
+  enum Result { Joined, Refused, Conflict };
   UnionFind uf;
-  std::vector<std::vector<std::int32_t>> images;  // per root
-  GreedyMerge(std::size_t n, const std::vector<std::int32_t>& image_of) : uf(n), images(n) {
-    for (std::size_t g = 0; g < n; ++g) images[g] = {image_of[g]};
+  std::vector<std::vector<std::pair<std::int32_t, std::int64_t>>> obs;  // per root
+  std::vector<char> dead;     // per root: its track was dropped (DropTrack)
+  std::vector<char> dropped;  // per keypoint (DropObservations)
+  std::size_t conflicts = 0;  // matches whose two tracks shared an image
+  GreedyMerge(std::size_t n, const std::vector<std::int32_t>& image_of) : uf(n), obs(n), dead(n, 0), dropped(n, 0) {
+    for (std::size_t g = 0; g < n; ++g) obs[g] = {{image_of[g], static_cast<std::int64_t>(g)}};
   }
-  // Returns false when the two sets share an image (the match is refused).
-  bool join(std::int64_t a, std::int64_t b) {
+  // Joined, or Refused (the match is not applied: a conflict under Split, or a
+  // match touching a dropped track or keypoint), or Conflict (applied with a drop).
+  Result join(std::int64_t a, std::int64_t b, GreedyConflict action) {
+    if (dropped[static_cast<std::size_t>(a)] || dropped[static_cast<std::size_t>(b)]) return Refused;
     a = uf.find(a);
     b = uf.find(b);
-    if (a == b) return true;
-    auto& ia = images[static_cast<std::size_t>(a)];
-    auto& ib = images[static_cast<std::size_t>(b)];
-    const auto& small = ia.size() < ib.size() ? ia : ib;
-    const auto& large = ia.size() < ib.size() ? ib : ia;
-    for (std::int32_t i : small)
-      if (std::binary_search(large.begin(), large.end(), i)) return false;
-    std::vector<std::int32_t> merged;
-    merged.reserve(ia.size() + ib.size());
-    std::merge(ia.begin(), ia.end(), ib.begin(), ib.end(), std::back_inserter(merged));
+    if (a == b) return Joined;
+    if (dead[static_cast<std::size_t>(a)] || dead[static_cast<std::size_t>(b)]) return Refused;
+    auto& oa = obs[static_cast<std::size_t>(a)];
+    auto& ob = obs[static_cast<std::size_t>(b)];
+    const auto& small = oa.size() < ob.size() ? oa : ob;
+    const auto& large = oa.size() < ob.size() ? ob : oa;
+    auto by_image = [](const std::pair<std::int32_t, std::int64_t>& x, std::int32_t i) { return x.first < i; };
+    bool shared = false;
+    for (const auto& x : small) {
+      const auto it = std::lower_bound(large.begin(), large.end(), x.first, by_image);
+      if (it != large.end() && it->first == x.first) {
+        shared = true;
+        break;
+      }
+    }
+    if (shared) {
+      ++conflicts;
+      if (action == GreedyConflict::Split) return Refused;
+    }
+    std::vector<std::pair<std::int32_t, std::int64_t>> merged;
+    merged.reserve(oa.size() + ob.size());
+    std::size_t p = 0, q = 0;
+    while (p < oa.size() || q < ob.size()) {
+      if (q == ob.size() || (p < oa.size() && oa[p].first < ob[q].first)) {
+        merged.push_back(oa[p++]);
+      } else if (p == oa.size() || ob[q].first < oa[p].first) {
+        merged.push_back(ob[q++]);
+      } else {  // the same image on both sides: both keypoints dropped, the image blocked
+        for (const auto k : {oa[p].second, ob[q].second})
+          if (k >= 0) dropped[static_cast<std::size_t>(k)] = 1;
+        merged.push_back({oa[p].first, -1});
+        ++p;
+        ++q;
+      }
+    }
     uf.join(a, b);
     const auto root = static_cast<std::size_t>(uf.find(a));
-    ia.clear();
-    ia.shrink_to_fit();
-    ib.clear();
-    ib.shrink_to_fit();
-    images[root] = std::move(merged);
-    return true;
+    oa.clear();
+    oa.shrink_to_fit();
+    ob.clear();
+    ob.shrink_to_fit();
+    obs[root] = std::move(merged);
+    if (shared && action == GreedyConflict::DropTrack) dead[root] = 1;
+    return shared ? Conflict : Joined;
   }
 };
 
@@ -125,11 +158,17 @@ void parallel_jobs(std::size_t n, int threads, const std::function<void(std::siz
       } catch (...) {
         std::lock_guard<std::mutex> lock(error_mutex);
         if (!error) error = std::current_exception();
+        next = n;  // the remaining jobs are not started
       }
     }
   };
   std::vector<std::thread> pool;
-  for (std::size_t t = 1; t < count; ++t) pool.emplace_back(work);
+  try {
+    for (std::size_t t = 1; t < count; ++t) pool.emplace_back(work);
+  } catch (...) {
+    // Fewer threads than asked for (a limit in a container): the started ones and
+    // this one do the work.
+  }
   work();
   for (auto& t : pool) t.join();
   if (error) std::rethrow_exception(error);
@@ -157,6 +196,9 @@ Tracks build_tracks(const Keypoints& kp, const std::vector<std::int32_t>& matche
   if (scores && !scores->empty() && scores->size() != n_match)
     throw std::invalid_argument("scores must hold one value per match");
   if (scores && scores->empty()) scores = nullptr;
+  if (scores)
+    for (double v : *scores)
+      if (!std::isfinite(v)) throw std::invalid_argument("scores must be finite");
   const std::size_t n_img = kp.num_images();
   const auto total = static_cast<std::size_t>(kp.begin.empty() ? 0 : kp.begin.back());
   auto id = [&](std::int32_t image, std::int32_t k) -> std::int64_t {
@@ -228,12 +270,20 @@ Tracks build_tracks(const Keypoints& kp, const std::vector<std::int32_t>& matche
     std::iota(idx.begin(), idx.end(), std::size_t(0));
     greedy_order(idx);
     GreedyMerge gm(total, image_of);
+    // Every keypoint of a passing match is counted: one whose matches were all
+    // refused becomes a one-observation component, dropped (as in Repair's split).
     for (std::size_t e : idx) {
-      if (!gm.join(edges[e].a, edges[e].b)) {
-        ++st.refused_matches;
-        continue;
-      }
       used[static_cast<std::size_t>(edges[e].a)] = used[static_cast<std::size_t>(edges[e].b)] = 1;
+      if (gm.join(edges[e].a, edges[e].b, o.greedy_conflict) == GreedyMerge::Refused) ++st.refused_matches;
+    }
+    st.conflicting_matches += gm.conflicts;
+    // Dropped keypoints and the keypoints of dropped tracks produce no track.
+    for (std::size_t g = 0; g < total; ++g) {
+      if (!used[g]) continue;
+      if (gm.dropped[g] || gm.dead[static_cast<std::size_t>(gm.uf.find(static_cast<std::int64_t>(g)))]) {
+        used[g] = 0;
+        ++st.dropped_observations;
+      }
     }
     uf = std::move(gm.uf);
   } else {
@@ -269,6 +319,9 @@ Tracks build_tracks(const Keypoints& kp, const std::vector<std::int32_t>& matche
   std::vector<Work> work;
   work.reserve(comps.size());
   std::vector<char> oversized(comps.size(), 0), comp_clean(comps.size(), 0);
+  // At least twice the image count, so a genuine track seen in every image with a
+  // few duplicates still gets the full repair.
+  const std::size_t cap = std::max(static_cast<std::size_t>(std::max(0, o.max_repair_observations)), 2 * n_img);
   bool any_oversized = false;
   for (std::size_t c = 0; c < comps.size(); ++c) {
     auto& comp = comps[c];
@@ -286,7 +339,7 @@ Tracks build_tracks(const Keypoints& kp, const std::vector<std::int32_t>& matche
     if (clean) ++st.clean;
     else ++st.conflicted;
     if (!clean && geometric && o.conflict_policy == ConflictPolicy::Repair && o.max_repair_observations > 0 &&
-        comp.size() > static_cast<std::size_t>(o.max_repair_observations)) {
+        comp.size() > cap) {
       oversized[c] = 1;
       any_oversized = true;
       ++st.split_components;
@@ -301,7 +354,8 @@ Tracks build_tracks(const Keypoints& kp, const std::vector<std::int32_t>& matche
     greedy_order(idx);
     GreedyMerge gm(total, image_of);
     for (std::size_t e : idx)
-      if (!gm.join(edges[e].a, edges[e].b)) ++st.refused_matches;
+      if (gm.join(edges[e].a, edges[e].b, GreedyConflict::Split) == GreedyMerge::Refused) ++st.refused_matches;
+    st.conflicting_matches += gm.conflicts;
     std::vector<std::int64_t> piece_of(total, -1);  // per greedy root
     for (std::size_t c = 0; c < comps.size(); ++c) {
       if (!oversized[c]) continue;
@@ -333,11 +387,11 @@ Tracks build_tracks(const Keypoints& kp, const std::vector<std::int32_t>& matche
   };
   std::vector<Result> results(work.size());
   auto stage2 = [&](std::size_t w) {
-    const Work& job = work[w];
+    Work& job = work[w];
     Result& res = results[w];
     const auto& comp = job.obs;
     if (job.clean && !job.split && !(geometric && o.check_clean)) {
-      if (static_cast<int>(comp.size()) >= o.min_views) res.tracks.push_back(comp);
+      if (static_cast<int>(comp.size()) >= o.min_views) res.tracks.push_back(std::move(job.obs));
       else res.dropped = comp.size();
       return;
     }

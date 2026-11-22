@@ -284,6 +284,23 @@ def test_build_tracks_greedy():
     assert wrong_obs <= 0.01 * len(img)
     with pytest.raises(ValueError, match="scores"):
         jba.build_tracks(sc["keypoints"], m, o, scores=scores[:-1])
+    bad = scores.copy()
+    bad[5] = np.nan
+    with pytest.raises(ValueError, match="finite"):
+        jba.build_tracks(sc["keypoints"], m, o, scores=bad)
+    # What a conflicting match does.
+    n_obs = {}
+    for mode in (jba.GreedyConflict.SPLIT, jba.GreedyConflict.DROP_OBSERVATIONS, jba.GreedyConflict.DROP_TRACK):
+        o.greedy_conflict = mode
+        tr, s2 = jba.build_tracks(sc["keypoints"], m, o, scores=scores)
+        assert s2.conflicted == 0 and s2.conflicting_matches > 0
+        for t in range(len(tr)):
+            ims = tr.image[tr.begin[t]:tr.begin[t + 1]]
+            assert len(set(ims.tolist())) == len(ims)
+        n_obs[mode] = len(tr.image)
+    assert n_obs[jba.GreedyConflict.SPLIT] > n_obs[jba.GreedyConflict.DROP_OBSERVATIONS]
+    assert n_obs[jba.GreedyConflict.SPLIT] > n_obs[jba.GreedyConflict.DROP_TRACK]
+    assert jba.TrackOptions().greedy_conflict == jba.GreedyConflict.SPLIT
 
 
 def test_refine_greedy_scores_and_sigma():
@@ -311,24 +328,37 @@ def test_refine_greedy_scores_and_sigma():
 
 
 def test_nvidia_search_ignores_regular_package(tmp_path, monkeypatch):
-    # A regular nvidia package (with __init__.py) in one site directory must not hide
-    # the libraries pip put under nvidia/ in another (the user site).
+    # A regular nvidia package (with __init__.py) first on sys.path must not hide the
+    # libraries pip put under nvidia/ in another site directory (the user site).
     from just_ba import _nvidia
     import site
 
-    system, user = tmp_path / "system", tmp_path / "user"
+    system, user = tmp_path / "system" / "site-packages", tmp_path / "user" / "site-packages"
     (system / "nvidia").mkdir(parents=True)
     (system / "nvidia" / "__init__.py").write_text("")
-    lib = user / "nvidia" / "cu12" / "lib"
-    lib.mkdir(parents=True)
-    (lib / "libcudss.so.0").write_bytes(b"")
-    (lib / "libcublas.so.13").write_bytes(b"")
-    (lib / "libcublas.so.12").write_bytes(b"")
+    for cuda in ("12", "13"):
+        lib = user / "nvidia" / f"cu{cuda}" / "lib"
+        lib.mkdir(parents=True)
+        (lib / "libcudss.so.0").write_bytes(b"")
+        (lib / f"libcublas.so.{cuda}").write_bytes(b"")
     monkeypatch.setattr(site, "getsitepackages", lambda: [str(system)])
     monkeypatch.setattr(site, "getusersitepackages", lambda: str(user))
+    monkeypatch.setattr(sys, "path", [str(system)])
+    monkeypatch.delitem(sys.modules, "nvidia", raising=False)
+    monkeypatch.setattr(_nvidia, "_distribution_files", lambda: [])
+    import nvidia
+
+    assert [str(p) for p in nvidia.__path__] == [str(system / "nvidia")]  # the regular package hides the rest
     files = _nvidia._candidates()
-    assert any(p.name == "libcudss.so.0" for p in files)
+    assert {p.parent.parent.name for p in files if p.name == "libcudss.so.0"} == {"cu12", "cu13"}
+    # This package's CUDA major wins, for cuBLAS by name and for cuDSS by directory.
+    assert _nvidia._find(files, "libcublas.so*", "13")[0].name == "libcublas.so.13"
     assert _nvidia._find(files, "libcublas.so*", "12")[0].name == "libcublas.so.12"
+    assert _nvidia._find(files, "libcudss.so*", "13")[0].parent.parent.name == "cu13"
+    assert _nvidia._find(files, "libcudss.so*", "12")[0].parent.parent.name == "cu12"
+    # A failing search never breaks the import.
+    monkeypatch.setattr(_nvidia, "_candidates", lambda: 1 / 0)
+    _nvidia.preload("cu12")
 
 
 def test_refine_end_to_end(tmp_path):

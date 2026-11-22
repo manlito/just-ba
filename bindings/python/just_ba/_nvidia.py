@@ -8,8 +8,9 @@ here by full path, so the dynamic loader finds them by name when ``_core`` is
 loaded (Linux), or their directories are added to the DLL search path (Windows).
 
 They are looked for in the files of the installed ``nvidia-*`` distributions, then
-under ``nvidia/`` of every site-packages directory (system and user) and every
-entry of ``sys.path``, then in ``nvidia.__path__``. ``import nvidia`` alone is not
+under ``nvidia/`` of every site-packages directory (system, user, and those on
+``sys.path``), then in ``nvidia.__path__``; for each library the copy of this
+package's CUDA major wins, then the first found. ``import nvidia`` alone is not
 enough: another package (PyTorch's NVIDIA wheels in some images) may install a
 regular ``nvidia/__init__.py``, which hides the copies in the other directories.
 
@@ -33,71 +34,86 @@ _WINDOWS = ("cublasLt64_*.dll", "cublas64_*.dll", "nvrtc64_*.dll", "cudss64_*.dl
 _handles: list = []  # keeps the loaded libraries and DLL directories alive
 
 
+def _is_library(name: str) -> bool:
+    return name.endswith((".dll", ".so")) or ".so." in name
+
+
 def _distribution_files() -> list[Path]:
-    """Library files of the installed nvidia-* distributions, from their metadata."""
+    """Library files of the installed nvidia-* distributions, from their RECORD."""
     from importlib import metadata
 
     found = []
-    try:
-        dists = list(metadata.distributions())
-    except Exception:
-        return found
-    for dist in dists:
+    for dist in metadata.distributions():
         try:
-            name = (dist.metadata["Name"] or "").lower()
-        except Exception:
-            continue
-        if not name.startswith("nvidia-"):
-            continue
-        for f in dist.files or []:
-            if f.name.endswith((".dll", ".so")) or ".so." in f.name:
-                try:
+            if not (dist.name or "").lower().startswith("nvidia-"):
+                continue
+            for f in dist.files or []:
+                if _is_library(f.name):
                     found.append(Path(dist.locate_file(f)))
-                except Exception:
-                    pass
+        except Exception:
+            continue  # a broken distribution's metadata is skipped
     return found
 
 
 def _nvidia_roots() -> list[Path]:
-    """Every ``nvidia`` directory a pip wheel may have installed into."""
+    """The ``nvidia`` directories of every site-packages directory, then nvidia.__path__."""
     import site
 
-    candidates = []
+    dirs = []
     try:
-        candidates += site.getsitepackages()
+        dirs += site.getsitepackages()
     except Exception:
         pass
     try:
-        candidates.append(site.getusersitepackages())
+        dirs.append(site.getusersitepackages())
     except Exception:
         pass
-    candidates += sys.path
-    roots = [Path(p) / "nvidia" for p in candidates if p]
+    # Only sys.path entries that are package directories, not the script's folder or
+    # the working directory, where a folder named nvidia may be anything.
+    dirs += [p for p in sys.path if p and Path(p).name in ("site-packages", "dist-packages")]
+    roots = [Path(p) / "nvidia" for p in dirs]
     try:
         import nvidia  # usually a namespace package; may be a regular one
 
         roots += [Path(p) for p in getattr(nvidia, "__path__", [])]
-    except ImportError:
+    except Exception:
         pass
     out, seen = [], set()
     for r in roots:
         try:
+            if not r.is_dir():
+                continue
             key = r.resolve()
         except OSError:
             continue
-        if key not in seen and r.is_dir():
+        if key not in seen:
             seen.add(key)
             out.append(r)
     return out
 
 
+# Where NVIDIA's wheels put their libraries under nvidia/: <pkg>/lib (Linux),
+# <pkg>/bin (Windows), one level deeper for some (bin/x86_64).
+_LAYOUT = ("*/lib/*", "*/bin/*", "*/lib/*/*", "*/bin/*/*")
+
+
 def _candidates() -> list[Path]:
-    files = [p for p in _distribution_files() if p.is_file()]
+    """Library files in search order: distribution files, then the nvidia directories."""
+    files = _distribution_files()
     for root in _nvidia_roots():
-        files.extend(p for p in root.rglob("*") if p.is_file() and (".so" in p.name or p.name.endswith(".dll")))
+        for pattern in _LAYOUT:
+            try:
+                files.extend(p for p in sorted(root.glob(pattern)) if _is_library(p.name))
+            except OSError:
+                pass
     out, seen = [], set()
     for p in files:
-        key = p.resolve()
+        try:
+            if not p.is_file():
+                continue
+            key = p.resolve()
+        except OSError:
+            continue
         if key not in seen:
             seen.add(key)
             out.append(p)
@@ -105,22 +121,34 @@ def _candidates() -> list[Path]:
 
 
 def _find(files: list[Path], pattern: str, cuda: str | None = None) -> list[Path]:
-    found = [p for p in files if fnmatch.fnmatch(p.name, pattern)]
-    # The CUDA major of this package first (libcublas.so.12 for cu12), then the
-    # shortest name: libcublas.so.13 before libcublas.so.13.1.0.3 (the same file).
-    def other_major(p: Path) -> bool:
-        if not cuda or "cudss" in p.name:
-            return False
-        return not (f".so.{cuda}" in p.name or f"64_{cuda}" in p.name)
+    """Files matching pattern: those of this package's CUDA major first (libcublas.so.12
+    or a cu12 directory for cu12), then the shortest name (libcublas.so.13 before
+    libcublas.so.13.1.0.3, the same file), then the search order."""
+    found = [(k, p) for k, p in enumerate(files) if fnmatch.fnmatch(p.name, pattern)]
 
-    return sorted(found, key=lambda p: (other_major(p), len(p.name), str(p)))
+    def other_major(p: Path) -> bool:
+        if not cuda:
+            return False
+        if f".so.{cuda}" in p.name or f"64_{cuda}" in p.name:
+            return False
+        # cuDSS's file names carry its own version: the CUDA major is in the path.
+        return f"cu{cuda}" not in {part.lower() for part in p.parts}
+
+    return [p for _, p in sorted(found, key=lambda kp: (other_major(kp[1]), len(kp[1].name), kp[0]))]
 
 
 def preload(variant: str = "") -> None:
-    cuda = variant[2:] if variant.startswith("cu") else None
+    """Never raises: what is not found here is left to the loader, and to the error at import."""
+    try:
+        _preload(variant[2:] if variant.startswith("cu") else None)
+    except Exception:
+        pass
+
+
+def _preload(cuda: str | None) -> None:
     files = _candidates()
     if sys.platform == "win32":
-        dirs = {str(p.parent) for pattern in _WINDOWS for p in _find(files, pattern, cuda)}
+        dirs = {str(p.parent) for pattern in _WINDOWS for p in _find(files, pattern, cuda)[:1]}
         dirs.update(d for d in os.environ.get("JUST_BA_DLL_PATH", "").split(";") if d)
         for d in sorted(dirs):
             if os.path.isdir(d):

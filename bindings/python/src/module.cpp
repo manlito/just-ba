@@ -275,6 +275,14 @@ NB_MODULE(_core, m) {
       .value("DROP", jba::ConflictPolicy::Drop)
       .value("REPAIR", jba::ConflictPolicy::Repair)
       .value("GREEDY", jba::ConflictPolicy::Greedy);
+  nb::enum_<jba::GreedyConflict>(m, "GreedyConflict",
+                                 "GREEDY: a match whose two tracks already share an image. SPLIT skips it (the "
+                                 "tracks stay apart, breaking the loop); DROP_OBSERVATIONS joins them without that "
+                                 "image (both keypoints dropped, the image blocked for the track); DROP_TRACK drops "
+                                 "the joined track, and later matches to it are skipped.")
+      .value("SPLIT", jba::GreedyConflict::Split)
+      .value("DROP_OBSERVATIONS", jba::GreedyConflict::DropObservations)
+      .value("DROP_TRACK", jba::GreedyConflict::DropTrack);
 
   // --- Problem -------------------------------------------------------------
   nb::class_<jba::Problem> problem(
@@ -672,6 +680,8 @@ NB_MODULE(_core, m) {
       .def_rw("check_clean", &jba::TrackOptions::check_clean,
               "With cameras, also run the geometric check (stage 2) on clean components.")
       .def_rw("triangulation", &jba::TrackOptions::triangulation)
+      .def_rw("greedy_conflict", &jba::TrackOptions::greedy_conflict,
+              "GREEDY: what to do with a match that meets a conflict (GreedyConflict); default SPLIT.")
       .def_rw("max_repair_observations", &jba::TrackOptions::max_repair_observations,
               "REPAIR: a conflicted component with more observations is first split by the greedy merge over its "
               "own matches; the pieces are then checked. 0: no cap.")
@@ -687,14 +697,18 @@ NB_MODULE(_core, m) {
       .def_ro("largest_component_images", &jba::TrackStats::largest_component_images, "Distinct images in it.")
       .def_ro("split_components", &jba::TrackStats::split_components,
               "REPAIR: components over max_repair_observations, split greedily first.")
+      .def_ro("conflicting_matches", &jba::TrackStats::conflicting_matches,
+              "GREEDY (and REPAIR's split): matches whose two tracks already shared an image.")
       .def_ro("refused_matches", &jba::TrackStats::refused_matches,
-              "GREEDY (and REPAIR's split): matches skipped because their tracks already share an image.")
+              "GREEDY (and REPAIR's split): matches not applied (a conflict under SPLIT, or a match touching a "
+              "dropped track or keypoint).")
       .def("__repr__", [](const jba::TrackStats& t) {
         return "TrackStats(tracks=" + std::to_string(t.tracks) + ", components=" + std::to_string(t.components) +
                ", clean=" + std::to_string(t.clean) + ", conflicted=" + std::to_string(t.conflicted) +
                ", largest_component=" + std::to_string(t.largest_component) + " in " +
                std::to_string(t.largest_component_images) + " images, rejected_matches=" +
-               std::to_string(t.rejected_matches) + ", refused_matches=" + std::to_string(t.refused_matches) +
+               std::to_string(t.rejected_matches) + ", conflicting_matches=" + std::to_string(t.conflicting_matches) +
+               ", refused_matches=" + std::to_string(t.refused_matches) +
                ", split_components=" + std::to_string(t.split_components) +
                ", dropped_observations=" + std::to_string(t.dropped_observations) + ")";
       });
@@ -963,6 +977,7 @@ NB_MODULE(_core, m) {
         if (in.matches.empty() && in.tracks.size() == 0) throw nb::value_error("refine: give matches or tracks");
         if (!match_scores.is_none()) {
           in.match_score = from_numpy(as_array<double>(match_scores, "match_scores"), {}, "match_scores");
+          if (in.matches.empty()) throw nb::value_error("refine: match_scores need matches");
           if (in.match_score.size() * 4 != in.matches.size())
             throw nb::value_error("refine: match_scores must have shape (M,), one per match");
         }
